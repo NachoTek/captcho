@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "dgSpecHash": "16q45s7c2eE=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\david.keymel\\Documents\\Projects\\respectacle\\.gsd\\worktrees\\M001-cb7uv2\\respectacle-ui\\respectacle-ui.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\david.keymel\\.nuget\\packages\\microsoft.web.webview2\\1.0.3719.77\\microsoft.web.webview2.1.0.3719.77.nupkg.sha512",
+    "C:\\Users\\david.keymel\\.nuget\\packages\\microsoft.win32.systemevents\\10.0.7\\microsoft.win32.systemevents.10.0.7.nupkg.sha512",
+    "C:\\Users\\david.keymel\\.nuget\\packages\\microsoft.windows.ai.machinelearning\\2.0.300\\microsoft.windows.ai.machinelearning.2.0.300.nupkg.sha512",
+    "C:\\Users\\david.keymel\\.nuget\\packages\\microsoft.windows.sdk.buildtools\\10.0.26100.4654\\microsoft.windows.sdk.buildtools.10.0.26100.4654.nupkg.sha512",
+    "C:\\Users\\david.keymel\\.nuget\\packages\\microsoft.windows.sdk.buildtools.msix\\1.7.251221100\\microsoft.windows.sdk.buildtools.msix.1.7.251221100.nupkg.sha512",
+    "C:\\Users\\david.keymel\\.nuget\\packages\\microsoft.windowsappsdk\\2.0.1\\microsoft.windowsappsdk.2.0.1.nupkg.sha512",
+    "C:\\Users\\david.keymel\\.nuget\\packages\\microsoft.windowsappsdk.ai\\2.0.185\\microsoft.windowsappsdk.ai.2.0.185.nupkg.sha512",
+    "C:\\Users\\david.keymel\\.nuget\\packages\\microsoft.windowsappsdk.base\\2.0.3\\microsoft.windowsappsdk.base.2.0.3.nupkg.sha512",
+    "C:\\Users\\david.keymel\\.nuget\\packages\\microsoft.windowsappsdk.dwrite\\2.0.26041403\\microsoft.windowsappsdk.dwrite.2.0.26041403.nupkg.sha512",
+    "C:\\Users\\david.keymel\\.nuget\\packages\\microsoft.windowsappsdk.foundation\\2.0.20\\microsoft.windowsappsdk.foundation.2.0.20.nupkg.sha512",
+    "C:\\Users\\david.keymel\\.nuget\\packages\\microsoft.windowsappsdk.interactiveexperiences\\2.0.12\\microsoft.windowsappsdk.interactiveexperiences.2.0.12.nupkg.sha512",
+    "C:\\Users\\david.keymel\\.nuget\\packages\\microsoft.windowsappsdk.ml\\2.0.300\\microsoft.windowsappsdk.ml.2.0.300.nupkg.sha512",
+    "C:\\Users\\david.keymel\\.nuget\\packages\\microsoft.windowsappsdk.runtime\\2.0.1\\microsoft.windowsappsdk.runtime.2.0.1.nupkg.sha512",
+    "C:\\Users\\david.keymel\\.nuget\\packages\\microsoft.windowsappsdk.widgets\\2.0.4\\microsoft.windowsappsdk.widgets.2.0.4.nupkg.sha512",
+    "C:\\Users\\david.keymel\\.nuget\\packages\\microsoft.windowsappsdk.winui\\2.0.12\\microsoft.windowsappsdk.winui.2.0.12.nupkg.sha512",
+    "C:\\Users\\david.keymel\\.nuget\\packages\\system.drawing.common\\10.0.7\\system.drawing.common.10.0.7.nupkg.sha512",
+    "C:\\Users\\david.keymel\\.nuget\\packages\\system.numerics.tensors\\9.0.0\\system.numerics.tensors.9.0.0.nupkg.sha512",
+    "C:\\Users\\david.keymel\\.nuget\\packages\\microsoft.windows.sdk.net.ref\\10.0.19041.56\\microsoft.windows.sdk.net.ref.10.0.19041.56.nupkg.sha512"
+  ],
+  "logs": []
+}

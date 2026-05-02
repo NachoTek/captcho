@@ -1,0 +1,67 @@
+# verify-s01-build.ps1 — Build verification for S01 Core Capture spike.
+#
+# Runs both toolchains (Rust and .NET) and fails fast on any error.
+# This script does NOT require an interactive desktop session — it only
+# validates that the code compiles and tests pass.
+#
+# Usage: powershell -ExecutionPolicy Bypass -File scripts/verify-s01-build.ps1
+#     or: pwsh -File scripts/verify-s01-build.ps1
+
+Set-StrictMode -Version 3.0
+
+$RootDir = Resolve-Path (Join-Path $PSScriptRoot "..")
+
+Write-Host "=== S01 Build Verification ===" -ForegroundColor Cyan
+Write-Host "Root: $RootDir"
+Write-Host ""
+
+# ── Step 1: Rust tests ────────────────────────────────────────────────────
+Write-Host "[1/4] Running Rust tests..." -ForegroundColor Yellow
+$output = cargo test --manifest-path (Join-Path $RootDir "rust-dll/Cargo.toml") 2>&1
+$exitCode = $LASTEXITCODE
+$output | ForEach-Object { Write-Host $_ }
+if ($exitCode -ne 0) {
+    Write-Host "FAIL: Rust tests exited with code $exitCode" -ForegroundColor Red
+    exit 1
+}
+Write-Host "PASS: Rust tests" -ForegroundColor Green
+Write-Host ""
+
+# ── Step 2: Rust release build ────────────────────────────────────────────
+Write-Host "[2/4] Building Rust DLL (release)..." -ForegroundColor Yellow
+$output = cargo build --manifest-path (Join-Path $RootDir "rust-dll/Cargo.toml") --release 2>&1
+$exitCode = $LASTEXITCODE
+$output | ForEach-Object { Write-Host $_ }
+if ($exitCode -ne 0) {
+    Write-Host "FAIL: Rust release build exited with code $exitCode" -ForegroundColor Red
+    exit 1
+}
+Write-Host "PASS: Rust release build" -ForegroundColor Green
+Write-Host ""
+
+# ── Step 3: .NET solution build ───────────────────────────────────────────
+Write-Host "[3/4] Building .NET solution..." -ForegroundColor Yellow
+$output = dotnet build (Join-Path $RootDir "Respectacle.sln") 2>&1
+$exitCode = $LASTEXITCODE
+$output | ForEach-Object { Write-Host $_ }
+if ($exitCode -ne 0) {
+    Write-Host "FAIL: .NET build exited with code $exitCode" -ForegroundColor Red
+    exit 1
+}
+Write-Host "PASS: .NET build" -ForegroundColor Green
+Write-Host ""
+
+# ── Step 4: .NET tests ────────────────────────────────────────────────────
+Write-Host "[4/4] Running .NET tests..." -ForegroundColor Yellow
+$output = dotnet test (Join-Path $RootDir "cs-tester.Tests/cs-tester.Tests.csproj") 2>&1
+$exitCode = $LASTEXITCODE
+$output | ForEach-Object { Write-Host $_ }
+if ($exitCode -ne 0) {
+    Write-Host "FAIL: .NET tests exited with code $exitCode" -ForegroundColor Red
+    exit 1
+}
+Write-Host "PASS: .NET tests" -ForegroundColor Green
+Write-Host ""
+
+Write-Host "=== All S01 build checks passed ===" -ForegroundColor Cyan
+exit 0

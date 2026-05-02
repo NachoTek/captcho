@@ -1,0 +1,28 @@
+[package]
+name = "respectacle-capture"
+version = "0.1.0"
+edition = "2021"
+description = "Respectacle screen capture engine (Windows Graphics Capture via Rust cdylib)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# Exposes synthetic frame helpers for integration tests and external test binaries.
+test-helpers = []
+
+[dependencies]
+log = "0.4"
+parking_lot = "0.12"
+
+[target.'cfg(windows)'.dependencies]
+windows-capture = "2"
+windows = { version = "0.62", features = [
+    "Win32_Graphics_Gdi",
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+respectacle-capture = { path = ".", features = ["test-helpers"] }

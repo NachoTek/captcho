@@ -1,0 +1,73 @@
+﻿<!-- RegionOverlayWindow.xaml — Full-desktop overlay for rectangular region selection.
+
+Layout (covers entire virtual desktop, semi-transparent background):
+  ┌──────────────────────────────────────────────────────┐
+  │  Semi-transparent dark scrim                         │
+  │                                                      │
+  │  ┌──────────────────────┐  ← Selection rectangle    │
+  │  │  Clear (no scrim)    │     with dashed border     │
+  │  └──────────────────────┘                            │
+  │                                                      │
+  │  [Instruction text at top]                           │
+  │  [Status/dimensions at bottom]                       │
+  └──────────────────────────────────────────────────────┘
+
+Input contract:
+  - Drag to draw a selection rectangle
+  - Enter or double-click to confirm
+  - Escape to cancel
+  - Arrow keys to nudge (10px), Shift+Arrow for fine nudge (1px)
+  - Alt+Arrow to resize from bottom-right anchor
+-->
+<Window
+    x:Class="Respectacle.UI.RegionOverlayWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Canvas x:ConnectionId='2' x:Name="RootCanvas"
+            Background="#1A000000">
+
+        <!-- Semi-transparent scrim covering the entire overlay -->
+        <Rectangle x:ConnectionId='3' x:Name="ScrimRect"
+                   Fill="#80000000"
+                   IsHitTestVisible="False"/>
+
+        <!-- Selection rectangle: clear interior, dashed blue border -->
+        <Rectangle x:ConnectionId='4' x:Name="SelectionRect"
+                   Fill="Transparent"
+                   Stroke="#4FC3F7"
+                   StrokeThickness="2"
+                   StrokeDashArray="6,3"
+                   Visibility="Collapsed"
+                   IsHitTestVisible="False"/>
+
+        <!-- Instruction text — top-center -->
+        <Border x:ConnectionId='5' x:Name="InstructionBorder"
+                Canvas.ZIndex="10"
+                Background="#CC000000"
+                CornerRadius="6"
+                Padding="16,8">
+            <TextBlock x:ConnectionId='8' x:Name="InstructionText"
+                       Text="Drag to select a region · Enter to confirm · Escape to cancel · Arrows to adjust"
+                       Foreground="White"
+                       FontSize="14"
+                       TextAlignment="Center"/>
+        </Border>
+
+        <!-- Status text — bottom-center -->
+        <Border x:ConnectionId='6' x:Name="StatusBorder"
+                Canvas.ZIndex="10"
+                Background="#CC000000"
+                CornerRadius="6"
+                Padding="16,8">
+            <TextBlock x:ConnectionId='7' x:Name="StatusText"
+                       Text="Ready"
+                       Foreground="#B0BEC5"
+                       FontSize="13"
+                       FontFamily="Consolas, Cascadia Mono, Courier New"
+                       TextAlignment="Center"/>
+        </Border>
+
+    </Canvas>
+</Window>
+

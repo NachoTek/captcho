@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Platforms>x64</Platforms>
+    <RootNamespace>Respectacle.Capture</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="respectacle-capture.Tests" />
+    <InternalsVisibleTo Include="cs-tester" />
+    <InternalsVisibleTo Include="cs-tester.Tests" />
+    <InternalsVisibleTo Include="respectacle-ui" />
+    <InternalsVisibleTo Include="respectacle-ui.Tests" />
+    <InternalsVisibleTo Include="respectacle-cli" />
+    <InternalsVisibleTo Include="respectacle-cli.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Drawing.Common" Version="10.0.7" />
+  </ItemGroup>
+</Project>

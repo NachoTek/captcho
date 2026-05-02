@@ -1,0 +1,201 @@
+<!-- MainWindow.xaml — Capture preview window with toolbar, scrollable image, and diagnostics bar.
+
+Layout:
+  ┌─────────────────────────────────────────┐
+  │  Toolbar: [Full Desktop] [Current Mon]  │
+  ├─────────────────────────────────────────┤
+  │                                         │
+  │         Scrollable Preview Image        │
+  │                                         │
+  ├─────────────────────────────────────────┤
+  │  Status  │  Timing (tabular-nums)       │
+  └─────────────────────────────────────────┘
+-->
+<Window
+    x:Class="Respectacle.UI.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Respectacle — Screen Capture Preview">
+
+    <Grid RowSpacing="0" Padding="0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar row -->
+        <Grid Grid.Row="0" Padding="12,10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+              BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <Button x:Name="FullDesktopButton"
+                    Grid.Column="0"
+                    Content="Full Desktop"
+                    MinWidth="140" MinHeight="40"
+                    Margin="0,0,8,0"
+                    Click="FullDesktop_Click"
+                    CornerRadius="6"/>
+
+            <Button x:Name="CurrentMonitorButton"
+                    Grid.Column="1"
+                    Content="Current Monitor"
+                    MinWidth="140" MinHeight="40"
+                    Margin="0,0,8,0"
+                    Click="CurrentMonitor_Click"
+                    CornerRadius="6"/>
+
+            <Button x:Name="ActiveWindowButton"
+                    Grid.Column="2"
+                    Content="Active Window"
+                    MinWidth="140" MinHeight="40"
+                    Margin="0,0,8,0"
+                    Click="ActiveWindow_Click"
+                    CornerRadius="6"/>
+
+            <Button x:Name="WindowUnderCursorButton"
+                    Grid.Column="3"
+                    Content="Window Under Cursor"
+                    MinWidth="140" MinHeight="40"
+                    Margin="0,0,8,0"
+                    Click="WindowUnderCursor_Click"
+                    CornerRadius="6"/>
+
+            <Button x:Name="RegionCaptureButton"
+                    Grid.Column="4"
+                    Content="Rectangular Region"
+                    MinWidth="140" MinHeight="40"
+                    Margin="0,0,8,0"
+                    HorizontalAlignment="Left"
+                    Click="RegionCapture_Click"
+                    CornerRadius="6"/>
+
+            <!-- Export separator -->
+            <Border x:Name="ExportSeparator"
+                    Grid.Column="5"
+                    Width="1" Margin="4,4"
+                    VerticalAlignment="Stretch"
+                    Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+            <!-- Export buttons: disabled until a capture succeeds -->
+            <Button x:Name="SaveButton"
+                    Grid.Column="6"
+                    Content="Save"
+                    MinWidth="80" MinHeight="40"
+                    Margin="0,0,6,0"
+                    IsEnabled="False"
+                    Click="Save_Click"
+                    CornerRadius="6"
+                    ToolTipService.ToolTip="Save to default location"/>
+
+            <Button x:Name="SaveAsButton"
+                    Grid.Column="7"
+                    Content="Save As…"
+                    MinWidth="90" MinHeight="40"
+                    Margin="0,0,6,0"
+                    IsEnabled="False"
+                    Click="SaveAs_Click"
+                    CornerRadius="6"
+                    ToolTipService.ToolTip="Choose location and filename"/>
+
+            <Button x:Name="CopyToClipboardButton"
+                    Grid.Column="8"
+                    Content="Copy"
+                    MinWidth="80" MinHeight="40"
+                    Margin="0,0,8,0"
+                    IsEnabled="False"
+                    Click="CopyToClipboard_Click"
+                    CornerRadius="6"
+                    ToolTipService.ToolTip="Copy screenshot to clipboard"/>
+
+            <!-- Delay input: compact NumberBox for 0–60 second countdown -->
+            <NumberBox x:Name="DelaySecondsInput"
+                       Grid.Column="9"
+                       Header="Delay (s)"
+                       Minimum="0" Maximum="60"
+                       SmallChange="1" LargeChange="5"
+                       Value="0" SpinButtonPlacementMode="Compact"
+                       MinWidth="100" MaxWidth="120"
+                       MinHeight="40"
+                       Margin="8,0,8,0"
+                       HorizontalAlignment="Right"
+                       CornerRadius="6"/>
+
+            <!-- Countdown progress: determinate bar hidden when idle -->
+            <ProgressBar x:Name="CountdownProgress"
+                         Grid.Column="10"
+                         Width="120" MinHeight="6"
+                         Margin="8,0,4,0"
+                         VerticalAlignment="Center"
+                         Visibility="Collapsed"
+                         Minimum="0" Maximum="100" Value="0"
+                         ShowError="False" ShowPaused="False"/>
+
+            <!-- Cancel countdown button: hidden when idle -->
+            <Button x:Name="CancelDelayButton"
+                    Grid.Column="11"
+                    Content="Cancel"
+                    MinWidth="70" MinHeight="40"
+                    Margin="4,0,0,0"
+                    Visibility="Collapsed"
+                    Click="CancelDelay_Click"
+                    CornerRadius="6"/>
+
+            <ProgressRing x:Name="CaptureProgress"
+                          Grid.Column="11"
+                          Width="28" Height="28"
+                          Margin="4,0,0,0"
+                          Visibility="Collapsed"
+                          IsActive="True"/>
+        </Grid>
+
+        <!-- Preview image row -->
+        <ScrollViewer Grid.Row="1"
+                      HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Auto"
+                      Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+                      Padding="8">
+            <Image x:Name="PreviewImage"
+                   Stretch="None"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center"/>
+        </ScrollViewer>
+
+        <!-- Status / diagnostics bar -->
+        <Grid Grid.Row="2" Padding="12,8" Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+              BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <TextBlock x:Name="StatusText"
+                       Grid.Column="0"
+                       Text="Ready — choose a capture mode."
+                       TextTrimming="CharacterEllipsis"
+                       VerticalAlignment="Center"
+                       FontSize="13"/>
+
+            <TextBlock x:Name="TimingText"
+                       Grid.Column="1"
+                       Text=""
+                       VerticalAlignment="Center"
+                       FontSize="13"
+                       FontFamily="Consolas, Cascadia Mono, Courier New"
+                       Margin="16,0,0,0"/>
+        </Grid>
+    </Grid>
+</Window>
