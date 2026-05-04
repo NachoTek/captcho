@@ -1,21 +1,11 @@
-<!-- RegionOverlayWindow.xaml — Full-desktop overlay for rectangular region selection.
+<!-- RegionOverlayWindow.xaml — No longer used for visual rendering.
 
-Layer stack (bottom to top):
-  1. Screenshot at full brightness
-  2. Dim scrim over everything (19% black)
-  3. Undimmed screenshot clipped to selection area (punches through scrim)
-  4. Selection border (dashed blue)
-  5. Instruction/status text overlays
+The overlay now uses a raw Win32 transparent window (WS_EX_LAYERED) to
+show the live desktop through it. This XAML file is kept for the Window
+subclass requirement but the visual tree is not rendered — all drawing
+happens via GDI on the Win32 layered window.
 
-This creates the same visual effect as Windows Snipping Tool:
-the desktop is dimmed, and the selected region appears at full brightness.
-
-Input contract:
-  - Drag to draw a selection rectangle
-  - Enter or double-click to confirm
-  - Escape to cancel
-  - Arrow keys to nudge (10px), Shift+Arrow for fine nudge (1px)
-  - Alt+Arrow to resize from bottom-right anchor
+The Window is invisible and never shown to the user.
 -->
 <Window
     x:Class="Respectacle.UI.RegionOverlayWindow"
@@ -23,61 +13,6 @@ Input contract:
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <Canvas x:Name="RootCanvas"
-            Background="Transparent">
+            Background="Transparent"/>
 
-        <!-- Layer 1: Pre-captured screenshot at full brightness (bottom) -->
-        <Image x:Name="BackgroundImage"
-               Stretch="Fill"
-               IsHitTestVisible="False"/>
-
-        <!-- Layer 2: Dim scrim over the entire screenshot.
-             #40000000 = 25% black — same dim level as Snipping Tool. -->
-        <Rectangle x:Name="ScrimRect"
-                   Fill="#40000000"
-                   IsHitTestVisible="False"/>
-
-        <!-- Layer 3: Undimmed screenshot clipped to selection area.
-             This sits on top of the scrim, creating a "bright window"
-             that shows the original screenshot at full brightness. -->
-        <Image x:Name="SelectionImage"
-               Stretch="Fill"
-               Visibility="Collapsed"
-               IsHitTestVisible="False"/>
-
-        <!-- Layer 4: Selection border (dashed blue outline) -->
-        <Rectangle x:Name="SelectionRect"
-                   Stroke="#4FC3F7"
-                   StrokeThickness="2"
-                   StrokeDashArray="6,3"
-                   Visibility="Collapsed"
-                   IsHitTestVisible="False"/>
-
-        <!-- Layer 5: Instruction text — top-center -->
-        <Border x:Name="InstructionBorder"
-                Canvas.ZIndex="10"
-                Background="#CC000000"
-                CornerRadius="6"
-                Padding="16,8">
-            <TextBlock x:Name="InstructionText"
-                       Text="Drag to select a region · Enter to confirm · Escape to cancel · Arrows to adjust"
-                       Foreground="White"
-                       FontSize="14"
-                       TextAlignment="Center"/>
-        </Border>
-
-        <!-- Layer 5: Status text — bottom-center -->
-        <Border x:Name="StatusBorder"
-                Canvas.ZIndex="10"
-                Background="#CC000000"
-                CornerRadius="6"
-                Padding="16,8">
-            <TextBlock x:Name="StatusText"
-                       Text="Ready"
-                       Foreground="#B0BEC5"
-                       FontSize="13"
-                       FontFamily="Consolas, Cascadia Mono, Courier New"
-                       TextAlignment="Center"/>
-        </Border>
-
-    </Canvas>
 </Window>

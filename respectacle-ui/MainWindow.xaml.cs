@@ -549,8 +549,9 @@ public sealed partial class MainWindow : Window
 
     /// <summary>
     /// Runs the region capture flow with optional delay countdown.
-    /// Captures the full desktop first (for the overlay background), then
-    /// crops the selected region from the pre-captured image — no second capture needed.
+    /// The overlay is a transparent Win32 window over the live desktop —
+    /// no pre-capture needed. After the user confirms, the overlay is removed
+    /// and the region is captured from the live desktop.
     /// </summary>
     private async Task RunDelayedRegionCaptureAsync()
     {
@@ -567,35 +568,22 @@ public sealed partial class MainWindow : Window
                 await RunCountdownPhaseAsync(delaySeconds, _activeCts.Token);
             }
 
-            // Pre-capture the full desktop for the overlay background.
-            // This also avoids a timing issue where re-capturing after selection
-            // would show the overlay itself in the result.
-            StatusText.Text = "Capturing desktop for region selection…";
+            // Show transparent overlay — user selects region on live desktop
+            StatusText.Text = "Select a region on screen…";
             CaptureProgress.Visibility = Visibility.Visible;
 
-            var (desktopBitmap, desktopError) = await _captureService.CaptureFullDesktopRawAsync();
-            if (desktopBitmap == null)
-            {
-                StatusText.Text = desktopError ?? "Failed to capture desktop for region selection.";
-                return;
-            }
-
-            // Show the overlay with the pre-captured screenshot
-            StatusText.Text = "Select a region on screen…";
-
-            var overlay = new RegionOverlayWindow(desktopBitmap);
+            using var overlay = new RegionOverlayWindow();
             var selection = await overlay.ShowAndWaitAsync();
 
             if (selection != null)
             {
-                // Use the pre-cropped bitmap from the overlay — no re-capture needed
+                // Overlay is already destroyed — build display result from the captured bitmap
                 var captureResult = await _captureService.BuildResultFromCroppedBitmapAsync(
                     selection.Bitmap, selection.Region);
                 ApplyCaptureResult(captureResult);
             }
             else
             {
-                // Cancelled / null selection
                 StatusText.Text = RegionSelectionStatusFormatter.FormatCancelled();
             }
         }

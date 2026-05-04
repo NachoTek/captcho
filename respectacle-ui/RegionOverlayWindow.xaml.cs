@@ -1,527 +1,505 @@
-// RegionOverlayWindow.xaml.cs — Full-desktop overlay for rectangular region selection.
+// RegionOverlayWindow.xaml.cs — Transparent overlay for rectangular region selection.
 //
-// Captures the desktop at the moment the user initiates region selection, displays
-// the screenshot with a light dim scrim, and lets the user drag-select a region.
-// This is the same approach used by Windows Snipping Tool, Greenshot, and ShareX.
+// Creates a raw Win32 layered window (WS_EX_LAYERED) that is truly transparent,
+// showing the live desktop behind it. The selection rectangle is drawn via GDI
+// on a per-pixel alpha bitmap composited by DWM via UpdateLayeredWindow.
 //
-// Accepts a pre-captured ContiguousBitmap of the full desktop. The screenshot is
-// displayed as the background, and cropping happens from this bitmap on confirm.
+// This is how Windows Snipping Tool, Greenshot, and ShareX implement region
+// selection — a thin transparent overlay over the live desktop.
 //
-// Exposes ShowAndWaitAsync() which returns a RegionSelectionResult:
-//   - Confirmed selection → ContiguousBitmap cropped from the pre-captured image
-//   - Cancelled or invalid → null
+// Flow:
+//   1. Create transparent Win32 window covering the virtual desktop
+//   2. Draw selection rectangle with GDI (clear interior, dim outside, dashed border)
+//   3. User draws/adjusts/moves selection, presses Enter to confirm
+//   4. Destroy the overlay window
+//   5. Call native capture_region to capture the live desktop at those coordinates
+//
+// Supports: drag to draw, arrow keys to nudge (10px), Shift+Arrow fine nudge (1px),
+// Alt+Arrow to resize from top-left anchor, Enter to confirm, Escape to cancel,
+// double-click to confirm.
 
 using System;
+using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
-using Microsoft.UI;
-using Microsoft.UI.Input;
-using Microsoft.UI.Windowing;
-using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Input;
-using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Foundation;
-using Windows.Graphics;
 using Respectacle.Capture;
 
 namespace Respectacle.UI;
 
 /// <summary>
-/// Result of a region selection: the cropped bitmap and its virtual-desktop coordinates.
+/// Result of a region selection: the captured bitmap and its virtual-desktop coordinates.
 /// </summary>
 public sealed class RegionSelectionResult
 {
-    /// <summary>Cropped bitmap in virtual-desktop coordinates.</summary>
+    /// <summary>Captured bitmap of the selected region.</summary>
     public ContiguousBitmap Bitmap { get; init; } = null!;
     /// <summary>The region rectangle in virtual-desktop pixels.</summary>
     public Rect Region { get; init; }
 }
 
 /// <summary>
-/// Full-desktop overlay window for rectangular region selection.
-/// Displays a pre-captured screenshot with a dim scrim, returns a cropped
-/// bitmap from the screenshot on confirm, or null on cancellation.
+/// Transparent overlay for rectangular region selection using a raw Win32 layered window.
+/// Shows the live desktop through the overlay. After the user confirms, the overlay is
+/// removed and the region is captured from the live desktop.
+///
+/// Supports drag-to-draw, arrow key nudge/move (10px coarse, 1px fine with Shift),
+/// Alt+Arrow resize, Enter/double-click confirm, Escape cancel.
 /// </summary>
-public sealed partial class RegionOverlayWindow : Window
+public sealed partial class RegionOverlayWindow : IDisposable
 {
-    #region Win32 P/Invoke for virtual-desktop bounds
+    #region Win32 P/Invoke
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RECT
-    {
-        public int left, top, right, bottom;
-    }
+    private const int WS_EX_LAYERED = unchecked((int)0x00080000);
+    private const int WS_EX_TOOLWINDOW = unchecked((int)0x00000080);
+    private const int WS_POPUP = unchecked((int)0x80000000);
+    private const int WS_VISIBLE = unchecked((int)0x10000000);
+    private const int WS_CLIPCHILDREN = unchecked((int)0x02000000);
+    private const int WS_CLIPSIBLINGS = unchecked((int)0x04000000);
 
-    private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, IntPtr lprcMonitor, IntPtr dwData);
+    private const int WM_KEYDOWN = 0x0100;
+    private const int WM_LBUTTONDOWN = 0x0201;
+    private const int WM_LBUTTONUP = 0x0202;
+    private const int WM_MOUSEMOVE = 0x0200;
+    private const int WM_LBUTTONDBLCLK = 0x0203;
+    private const int WM_DESTROY = 0x0002;
 
-    [DllImport("user32.dll")]
-    private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
-
-    [DllImport("user32.dll")]
-    private static extern int GetSystemMetrics(int nIndex);
+    private const int VK_ESCAPE = 0x1B;
+    private const int VK_RETURN = 0x0D;
+    private const int VK_LEFT = 0x25;
+    private const int VK_UP = 0x26;
+    private const int VK_RIGHT = 0x27;
+    private const int VK_DOWN = 0x28;
+    private const int VK_SHIFT = 0x10;
+    private const int VK_MENU = 0x12;
 
     private const int SM_XVIRTUALSCREEN = 76;
     private const int SM_YVIRTUALSCREEN = 77;
     private const int SM_CXVIRTUALSCREEN = 78;
     private const int SM_CYVIRTUALSCREEN = 79;
 
+    private const int ULW_ALPHA = 0x02;
+    private const int AC_SRC_OVER = 0x00;
+    private const int AC_SRC_ALPHA = 0x01;
+    private const int SW_SHOW = 5;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int X, Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SIZE { public int cx, cy; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MSG
+    {
+        public IntPtr hwnd;
+        public uint message;
+        public IntPtr wParam;
+        public IntPtr lParam;
+        public uint time;
+        public POINT pt;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 2)]
+    private struct BITMAPINFOHEADER
+    {
+        public uint biSize;
+        public int biWidth;
+        public int biHeight;
+        public ushort biPlanes;
+        public ushort biBitCount;
+        public uint biCompression;
+        public uint biSizeImage;
+        public int biXPelsPerMeter;
+        public int biYPelsPerMeter;
+        public uint biClrUsed;
+        public uint biClrImportant;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BLENDFUNCTION
+    {
+        public byte BlendOp;
+        public byte BlendFlags;
+        public byte SourceConstantAlpha;
+        public byte AlphaFormat;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WNDCLASS
+    {
+        public uint style;
+        public WndProc lpfnWndProc;
+        public int cbClsExtra;
+        public int cbWndExtra;
+        public IntPtr hInstance;
+        public IntPtr hIcon;
+        public IntPtr hCursor;
+        public IntPtr hbrBackground;
+        public string lpszMenuName;
+        public string lpszClassName;
+    }
+
+    private delegate IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")] private static extern int GetSystemMetrics(int nIndex);
+    [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int vKey);
+    [DllImport("user32.dll")] private static extern ushort RegisterClassW(ref WNDCLASS wc);
+    [DllImport("user32.dll")] private static extern IntPtr CreateWindowExW(int dwExStyle, string lpClassName, string lpWindowName, uint dwStyle, int x, int y, int nWidth, int nHeight, IntPtr hWndParent, IntPtr hMenu, IntPtr hInstance, IntPtr lpParam);
+    [DllImport("user32.dll")] private static extern bool DestroyWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] private static extern bool UpdateLayeredWindow(IntPtr hWnd, IntPtr hdcDst, POINT? pptDst, SIZE? psize, IntPtr hdcSrc, POINT pptSrc, int crKey, BLENDFUNCTION pblend, int dwFlags);
+    [DllImport("user32.dll")] private static extern bool GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
+    [DllImport("user32.dll")] private static extern bool TranslateMessage(ref MSG lpMsg);
+    [DllImport("user32.dll")] private static extern IntPtr DispatchMessage(ref MSG lpMsg);
+    [DllImport("user32.dll")] private static extern IntPtr DefWindowProcW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+    [DllImport("user32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr hDC);
+    [DllImport("user32.dll")] private static extern bool DeleteDC(IntPtr hDC);
+    [DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr hdc, IntPtr hgdiobj);
+    [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr ho);
+    [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(IntPtr lpModuleName);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFOHEADER pbmi, uint iUsage, out IntPtr ppvBits, IntPtr hSection, uint dwOffset);
+
     #endregion
 
-    // ── Completion contract ──────────────────────────────────────────
+    // ── Completion ───────────────────────────────────────────────────
     private readonly TaskCompletionSource<RegionSelectionResult?> _tcs = new();
 
-    // ── Pre-captured screenshot ──────────────────────────────────────
-    private readonly ContiguousBitmap _desktopCapture;
+    // ── Win32 window ─────────────────────────────────────────────────
+    private IntPtr _hwnd;
+    private WndProc? _wndProc; // prevent GC collection of delegate
+    private static readonly string _className = "RespectacleRegion_" + Guid.NewGuid().ToString("N");
+
+    // ── Overlay bitmap ───────────────────────────────────────────────
+    private IntPtr _hBitmap;
+    private IntPtr _bitmapDC;
 
     // ── Selection state ──────────────────────────────────────────────
     private RegionSelection? _currentSelection;
     private bool _isDragging;
-    private int _dragStartVirtualX;
-    private int _dragStartVirtualY;
+    private int _dragStartX, _dragStartY;
 
-    // ── Virtual desktop bounds in physical pixels ────────────────────
-    private int _virtualDesktopX;
-    private int _virtualDesktopY;
-    private int _virtualDesktopWidth;
-    private int _virtualDesktopHeight;
-
-    // ── DPI scale factor (physical pixels per DIP) ───────────────────
-    private double _dpiScale = 1.0;
+    // ── Virtual desktop bounds ───────────────────────────────────────
+    private int _vdx, _vdy, _vdw, _vdh;
 
     // ── Constants ────────────────────────────────────────────────────
     private const int CoarseNudge = 10;
     private const int FineNudge = 1;
 
-    /// <summary>
-    /// Creates the overlay with a pre-captured screenshot of the virtual desktop.
-    /// The screenshot is displayed as the background so the user can see what
-    /// they're selecting.
-    /// </summary>
-    /// <param name="desktopCapture">Full virtual desktop capture (all monitors stitched).</param>
-    public RegionOverlayWindow(ContiguousBitmap desktopCapture)
+    public RegionOverlayWindow()
     {
-        _desktopCapture = desktopCapture ?? throw new ArgumentNullException(nameof(desktopCapture));
         InitializeComponent();
     }
 
     /// <summary>
-    /// Shows the overlay covering the entire virtual desktop and waits
-    /// for the user to confirm or cancel a rectangular selection.
-    /// Returns a cropped bitmap from the pre-captured screenshot, or null.
+    /// Shows the transparent overlay and waits for the user to confirm or cancel.
+    /// Returns the captured region from the live desktop, or null.
     /// </summary>
     public Task<RegionSelectionResult?> ShowAndWaitAsync()
     {
-        InitializeOverlay();
+        _vdx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        _vdy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        _vdw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        _vdh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
+        if (_vdw <= 0 || _vdh <= 0)
+        {
+            _tcs.TrySetResult(null);
+            return _tcs.Task;
+        }
+
+        // Win32 windows need STA. Run the overlay on a background STA thread.
+        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+        {
+            System.Threading.Thread.CurrentThread.SetApartmentState(
+                System.Threading.ApartmentState.STA);
+            RunMessageLoop();
+        });
+
         return _tcs.Task;
     }
 
-    private void InitializeOverlay()
+    private void RunMessageLoop()
     {
-        // Compute virtual-desktop bounds via Win32
-        _virtualDesktopX = GetSystemMetrics(SM_XVIRTUALSCREEN);
-        _virtualDesktopY = GetSystemMetrics(SM_YVIRTUALSCREEN);
-        _virtualDesktopWidth = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-        _virtualDesktopHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-
-        if (_virtualDesktopWidth <= 0 || _virtualDesktopHeight <= 0)
+        try
         {
+            CreateOverlay();
+            ShowWindow(_hwnd, SW_SHOW);
+            Render();
+
+            while (GetMessage(out MSG msg, IntPtr.Zero, 0, 0))
+            {
+                TranslateMessage(ref msg);
+                DispatchMessage(ref msg);
+            }
+
+            Cleanup();
+        }
+        catch
+        {
+            Cleanup();
             _tcs.TrySetResult(null);
-            return;
         }
-
-        var appWindow = this.AppWindow;
-
-        // Borderless, always-on-top presenter
-        var presenter = appWindow.Presenter as OverlappedPresenter;
-        if (presenter != null)
-        {
-            presenter.SetBorderAndTitleBar(true, false);
-            presenter.IsAlwaysOnTop = true;
-            presenter.IsResizable = false;
-            presenter.IsMinimizable = false;
-            presenter.IsMaximizable = false;
-        }
-
-        // Position to cover the entire virtual desktop
-        appWindow.Move(new PointInt32(_virtualDesktopX, _virtualDesktopY));
-        appWindow.Resize(new SizeInt32(_virtualDesktopWidth, _virtualDesktopHeight));
-
-        _dpiScale = 1.0;
-
-        // Hook input events
-        RootCanvas.PointerPressed += OnPointerPressed;
-        RootCanvas.PointerMoved += OnPointerMoved;
-        RootCanvas.PointerReleased += OnPointerReleased;
-        RootCanvas.DoubleTapped += OnDoubleTapped;
-        RootCanvas.KeyDown += OnKeyDown;
-
-        RootCanvas.IsTabStop = true;
-        RootCanvas.AllowFocusOnInteraction = true;
-
-        this.AppWindow.Changed += OnAppWindowChanged;
-        RootCanvas.Loaded += OnRootLoaded;
-        this.Closed += OnClosed;
-
-        this.Activate();
     }
 
-    private async void OnRootLoaded(object sender, RoutedEventArgs e)
+    private void CreateOverlay()
     {
-        double canvasWidth = RootCanvas.ActualWidth;
-        if (canvasWidth > 0)
+        var wc = new WNDCLASS
         {
-            _dpiScale = _virtualDesktopWidth / canvasWidth;
-        }
+            lpfnWndProc = StaticWndProc,
+            hInstance = GetModuleHandle(IntPtr.Zero),
+            lpszClassName = _className,
+        };
+        RegisterClassW(ref wc);
 
-        double dipWidth = RootCanvas.ActualWidth > 0 ? RootCanvas.ActualWidth : _virtualDesktopWidth / _dpiScale;
-        double dipHeight = RootCanvas.ActualHeight > 0 ? RootCanvas.ActualHeight : _virtualDesktopHeight / _dpiScale;
+        int exStyle = WS_EX_LAYERED | WS_EX_TOOLWINDOW;
+        uint style = unchecked((uint)(WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS));
 
-        // Display the pre-captured screenshot as the overlay background.
-        // Both the dimmed background and the bright selection area use the same source.
-        var bitmapSource = await SoftwareBitmapConverter.ToWriteableBitmapAsync(_desktopCapture);
+        _hwnd = CreateWindowExW(exStyle, _className, "RespectacleRegion",
+            style, _vdx, _vdy, _vdw, _vdh,
+            IntPtr.Zero, IntPtr.Zero, GetModuleHandle(IntPtr.Zero), IntPtr.Zero);
 
-        BackgroundImage.Source = bitmapSource;
-        BackgroundImage.Width = dipWidth;
-        BackgroundImage.Height = dipHeight;
-
-        SelectionImage.Source = bitmapSource;
-        SelectionImage.Width = dipWidth;
-        SelectionImage.Height = dipHeight;
-
-        // Size the scrim to fill the canvas
-        ScrimRect.Width = dipWidth;
-        ScrimRect.Height = dipHeight;
-
-        PositionOverlayTexts();
-        RootCanvas.Focus(FocusState.Programmatic);
+        _wndProc = InstanceWndProc; // prevent GC
     }
 
-    private void OnAppWindowChanged(AppWindow sender, AppWindowChangedEventArgs args)
+    // ── WndProc dispatch ─────────────────────────────────────────────
+
+    [ThreadStatic]
+    private static RegionOverlayWindow? _current;
+
+    private static IntPtr StaticWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
-        if (args.DidVisibilityChange && sender.IsVisible)
+        return _current?.InstanceWndProc(hWnd, msg, wParam, lParam)
+            ?? DefWindowProcW(hWnd, msg, wParam, lParam);
+    }
+
+    private IntPtr InstanceWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+    {
+        _current = this;
+        switch (msg)
         {
-            PositionOverlayTexts();
-            sender.Changed -= OnAppWindowChanged;
+            case WM_LBUTTONDOWN: OnMouseDown(lParam); return IntPtr.Zero;
+            case WM_MOUSEMOVE: OnMouseMove(lParam); return IntPtr.Zero;
+            case WM_LBUTTONUP: OnMouseUp(); return IntPtr.Zero;
+            case WM_LBUTTONDBLCLK: Confirm(); return IntPtr.Zero;
+            case WM_KEYDOWN: OnKey(wParam); return IntPtr.Zero;
+            case WM_DESTROY: _current = null; return IntPtr.Zero;
         }
+        return DefWindowProcW(hWnd, msg, wParam, lParam);
     }
 
-    private void OnClosed(object sender, WindowEventArgs args)
+    // ── Mouse input ──────────────────────────────────────────────────
+
+    private void OnMouseDown(IntPtr lParam)
     {
-        _tcs.TrySetResult(null);
-        Cleanup();
+        int x = LoWord(lParam) + _vdx;
+        int y = HiWord(lParam) + _vdy;
+        _dragStartX = x;
+        _dragStartY = y;
+        _isDragging = true;
+        _currentSelection = null;
+        Render();
     }
 
-    // ── Pointer input ────────────────────────────────────────────────
-
-    private void OnPointerPressed(object sender, PointerRoutedEventArgs e)
-    {
-        if (e.GetCurrentPoint(RootCanvas).Properties.IsLeftButtonPressed)
-        {
-            var position = e.GetCurrentPoint(RootCanvas).Position;
-            var (px, py) = DipToPhysical(position.X, position.Y);
-            var (vx, vy) = CoordinateHelper.OverlayToVirtual(px, py, _virtualDesktopX, _virtualDesktopY);
-
-            _dragStartVirtualX = vx;
-            _dragStartVirtualY = vy;
-            _isDragging = true;
-            _currentSelection = null;
-
-            SelectionRect.Visibility = Visibility.Collapsed;
-            SelectionImage.Visibility = Visibility.Collapsed;
-
-            e.Handled = true;
-        }
-    }
-
-    private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
+    private void OnMouseMove(IntPtr lParam)
     {
         if (!_isDragging) return;
+        int vx = LoWord(lParam) + _vdx;
+        int vy = HiWord(lParam) + _vdy;
 
-        var position = e.GetCurrentPoint(RootCanvas).Position;
-        var (px, py) = DipToPhysical(position.X, position.Y);
-        var (vx, vy) = CoordinateHelper.OverlayToVirtual(px, py, _virtualDesktopX, _virtualDesktopY);
-
-        var raw = RegionSelection.FromDragPoints(_dragStartVirtualX, _dragStartVirtualY, vx, vy);
-        var clamped = raw.ClampToBounds(
-            _virtualDesktopX, _virtualDesktopY,
-            _virtualDesktopWidth, _virtualDesktopHeight);
-
-        if (clamped != null && clamped.MeetsMinimumSize)
-        {
-            _currentSelection = clamped;
-            UpdateSelectionVisual();
-        }
-        else
-        {
-            _currentSelection = null;
-            SelectionRect.Visibility = Visibility.Collapsed;
-            SelectionImage.Visibility = Visibility.Collapsed;
-        }
-
-        UpdateStatusText();
-        e.Handled = true;
+        var raw = RegionSelection.FromDragPoints(_dragStartX, _dragStartY, vx, vy);
+        var clamped = raw.ClampToBounds(_vdx, _vdy, _vdw, _vdh);
+        _currentSelection = (clamped != null && clamped.MeetsMinimumSize) ? clamped : null;
+        Render();
     }
 
-    private void OnPointerReleased(object sender, PointerRoutedEventArgs e)
-    {
-        if (!_isDragging) return;
-        _isDragging = false;
-
-        if (_currentSelection == null || !_currentSelection.MeetsMinimumSize)
-        {
-            SelectionRect.Visibility = Visibility.Collapsed;
-            SelectionImage.Visibility = Visibility.Collapsed;
-            UpdateStatusText("Selection too small — drag again or press Escape to cancel");
-        }
-
-        e.Handled = true;
-    }
-
-    private void OnDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
-    {
-        ConfirmSelection();
-    }
+    private void OnMouseUp() { _isDragging = false; }
 
     // ── Keyboard input ───────────────────────────────────────────────
 
-    private void OnKeyDown(object sender, KeyRoutedEventArgs e)
+    private void OnKey(IntPtr wParam)
     {
-        switch (e.Key)
+        int vk = wParam.ToInt32();
+        switch (vk)
         {
-            case Windows.System.VirtualKey.Escape:
-                CancelSelection();
-                e.Handled = true;
-                break;
-
-            case Windows.System.VirtualKey.Enter:
-                ConfirmSelection();
-                e.Handled = true;
-                break;
-
-            case Windows.System.VirtualKey.Left:
-            case Windows.System.VirtualKey.Right:
-            case Windows.System.VirtualKey.Up:
-            case Windows.System.VirtualKey.Down:
-                HandleArrowKey(e.Key,
-                    hasShift: InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift)
-                        .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down),
-                    hasAlt: InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Menu)
-                        .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down));
-                e.Handled = true;
-                break;
+            case VK_ESCAPE: Cancel(); break;
+            case VK_RETURN: Confirm(); break;
+            case VK_LEFT: case VK_RIGHT: case VK_UP: case VK_DOWN:
+                Nudge(vk); break;
         }
     }
 
-    private void HandleArrowKey(Windows.System.VirtualKey key, bool hasShift, bool hasAlt)
+    private void Nudge(int vk)
     {
         if (_currentSelection == null) return;
 
-        int delta = hasShift ? FineNudge : CoarseNudge;
-        int dx = 0, dy = 0;
-        if (key == Windows.System.VirtualKey.Left) dx = -delta;
-        if (key == Windows.System.VirtualKey.Right) dx = delta;
-        if (key == Windows.System.VirtualKey.Up) dy = -delta;
-        if (key == Windows.System.VirtualKey.Down) dy = delta;
+        bool shift = KeyDown(VK_SHIFT);
+        bool alt = KeyDown(VK_MENU);
+        int d = shift ? FineNudge : CoarseNudge;
 
-        if (hasAlt)
+        int dx = 0, dy = 0;
+        if (vk == VK_LEFT) dx = -d;
+        if (vk == VK_RIGHT) dx = d;
+        if (vk == VK_UP) dy = -d;
+        if (vk == VK_DOWN) dy = d;
+
+        var result = alt
+            ? _currentSelection.Resize(dx, dy, "tl", _vdx, _vdy, _vdw, _vdh)
+            : _currentSelection.Move(dx, dy, _vdx, _vdy, _vdw, _vdh);
+
+        if (result != null)
         {
-            var resized = _currentSelection.Resize(dx, dy, "tl",
-                _virtualDesktopX, _virtualDesktopY,
-                _virtualDesktopWidth, _virtualDesktopHeight);
-            if (resized != null)
-            {
-                _currentSelection = resized;
-                UpdateSelectionVisual();
-                UpdateStatusText();
-            }
-        }
-        else
-        {
-            var moved = _currentSelection.Move(dx, dy,
-                _virtualDesktopX, _virtualDesktopY,
-                _virtualDesktopWidth, _virtualDesktopHeight);
-            if (moved != null)
-            {
-                _currentSelection = moved;
-                UpdateSelectionVisual();
-                UpdateStatusText();
-            }
+            _currentSelection = result;
+            Render();
         }
     }
+
+    private static bool KeyDown(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
+    private static int LoWord(IntPtr p) => (short)(p.ToInt32() & 0xFFFF);
+    private static int HiWord(IntPtr p) => (short)((p.ToInt32() >> 16) & 0xFFFF);
 
     // ── Confirm / Cancel ─────────────────────────────────────────────
 
-    private void ConfirmSelection()
+    private void Confirm()
     {
-        if (_currentSelection == null || !_currentSelection.MeetsMinimumSize)
+        if (_currentSelection == null || !_currentSelection.MeetsMinimumSize) return;
+        var sel = _currentSelection;
+
+        // Destroy overlay FIRST — must be gone before capture
+        DestroyWindow(_hwnd);
+
+        // Capture the live desktop at the selected region
+        try
         {
-            UpdateStatusText("No valid selection — drag a region first, then press Enter");
-            return;
+            using var r = SafeCaptureResult.CaptureRegion(sel.X, sel.Y, (uint)sel.Width, (uint)sel.Height);
+            if (r.IsSuccess)
+            {
+                var bmp = BitmapBufferConverter.StripPadding(r.Pixels!, (int)r.Width, (int)r.Height, (int)r.Stride);
+                _tcs.TrySetResult(new RegionSelectionResult
+                {
+                    Bitmap = bmp,
+                    Region = new Rect(sel.X, sel.Y, sel.Width, sel.Height),
+                });
+            }
+            else { _tcs.TrySetResult(null); }
         }
-
-        // Crop from pre-captured bitmap
-        int cropX = _currentSelection.X - _virtualDesktopX;
-        int cropY = _currentSelection.Y - _virtualDesktopY;
-        int cropW = _currentSelection.Width;
-        int cropH = _currentSelection.Height;
-
-        cropX = Math.Max(0, Math.Min(cropX, _desktopCapture.Width - 1));
-        cropY = Math.Max(0, Math.Min(cropY, _desktopCapture.Height - 1));
-        cropW = Math.Min(cropW, _desktopCapture.Width - cropX);
-        cropH = Math.Min(cropH, _desktopCapture.Height - cropY);
-
-        if (cropW <= 0 || cropH <= 0)
-        {
-            _tcs.TrySetResult(null);
-            CloseOverlay();
-            return;
-        }
-
-        var croppedBitmap = CropBitmap(_desktopCapture, cropX, cropY, cropW, cropH);
-
-        var result = new RegionSelectionResult
-        {
-            Bitmap = croppedBitmap,
-            Region = new Rect(_currentSelection.X, _currentSelection.Y, cropW, cropH),
-        };
-
-        _tcs.TrySetResult(result);
-        CloseOverlay();
+        catch { _tcs.TrySetResult(null); }
     }
 
-    private void CancelSelection()
+    private void Cancel()
     {
+        DestroyWindow(_hwnd);
         _tcs.TrySetResult(null);
-        CloseOverlay();
     }
 
-    // ── Bitmap cropping ──────────────────────────────────────────────
+    // ── Rendering ────────────────────────────────────────────────────
 
-    private static ContiguousBitmap CropBitmap(ContiguousBitmap source, int x, int y, int width, int height)
+    private void Render()
     {
-        int srcStride = source.Stride;
-        int dstStride = width * 4;
-        byte[] croppedPixels = new byte[dstStride * height];
+        int w = _vdw, h = _vdh;
 
-        for (int row = 0; row < height; row++)
+        // Create bitmap DC if needed
+        if (_hBitmap == IntPtr.Zero)
         {
-            int srcOffset = (y + row) * srcStride + x * 4;
-            int dstOffset = row * dstStride;
-            Array.Copy(source.Pixels, srcOffset, croppedPixels, dstOffset, dstStride);
+            var bmi = new BITMAPINFOHEADER
+            {
+                biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(),
+                biWidth = w,
+                biHeight = -h, // top-down DIB
+                biPlanes = 1,
+                biBitCount = 32,
+            };
+
+            IntPtr screenDC = GetDC(IntPtr.Zero);
+            _bitmapDC = CreateCompatibleDC(screenDC);
+            _hBitmap = CreateDIBSection(_bitmapDC, ref bmi, 0, out _, IntPtr.Zero, 0);
+            SelectObject(_bitmapDC, _hBitmap);
+            ReleaseDC(IntPtr.Zero, screenDC);
         }
 
-        return new ContiguousBitmap(width, height, dstStride, croppedPixels);
-    }
+        // Draw using System.Drawing
+        using var bmp = System.Drawing.Image.FromHbitmap(_hBitmap);
+        using var g = System.Drawing.Graphics.FromImage(bmp);
 
-    // ── Visual updates ───────────────────────────────────────────────
+        // Entire overlay: 25% dim scrim (desktop shows through transparent pixels)
+        g.Clear(Color.Transparent);
+        g.FillRectangle(new SolidBrush(Color.FromArgb(64, 0, 0, 0)), 0, 0, w, h);
 
-    private void UpdateSelectionVisual()
-    {
-        if (_currentSelection == null)
-        {
-            SelectionRect.Visibility = Visibility.Collapsed;
-            SelectionImage.Visibility = Visibility.Collapsed;
-            return;
-        }
-
-        var (ox, oy) = CoordinateHelper.VirtualToOverlay(
-            _currentSelection.X, _currentSelection.Y,
-            _virtualDesktopX, _virtualDesktopY);
-
-        var (dipX, dipY) = PhysicalToDip(ox, oy);
-        var (dipW, dipH) = PhysicalToDip(_currentSelection.Width, _currentSelection.Height);
-
-        // Show the undimmed screenshot clipped to the selection area.
-        // Positioned at the same offset as the full background, but only
-        // visible within the selection rect — creating the "bright window" effect.
-        SelectionImage.Visibility = Visibility.Visible;
-        Canvas.SetLeft(SelectionImage, dipX);
-        Canvas.SetTop(SelectionImage, dipY);
-        SelectionImage.Width = dipW;
-        SelectionImage.Height = dipH;
-
-        // Selection border on top
-        SelectionRect.Visibility = Visibility.Visible;
-        Canvas.SetLeft(SelectionRect, dipX);
-        Canvas.SetTop(SelectionRect, dipY);
-        SelectionRect.Width = dipW;
-        SelectionRect.Height = dipH;
-    }
-
-    private void UpdateStatusText(string? overrideText = null)
-    {
         if (_currentSelection != null && _currentSelection.MeetsMinimumSize)
         {
-            StatusText.Text = $"{_currentSelection.Width}×{_currentSelection.Height} at ({_currentSelection.X}, {_currentSelection.Y})";
+            int sx = _currentSelection.X - _vdx;
+            int sy = _currentSelection.Y - _vdy;
+            int sw = _currentSelection.Width;
+            int sh = _currentSelection.Height;
+
+            // Clear the scrim inside selection — shows live desktop
+            g.CompositingMode = CompositingMode.SourceCopy;
+            g.FillRectangle(new SolidBrush(Color.Transparent), sx, sy, sw, sh);
+            g.CompositingMode = CompositingMode.SourceOver;
+
+            // Dashed blue border
+            using var pen = new Pen(Color.FromArgb(255, 79, 195, 247), 2)
+            {
+                DashStyle = DashStyle.Custom,
+                DashPattern = new float[] { 6, 3 }
+            };
+            g.DrawRectangle(pen, sx, sy, sw, sh);
+
+            // Dimension label below selection
+            string label = $"{sw}×{sh} at ({_currentSelection.X}, {_currentSelection.Y})";
+            using var font = new Font("Consolas", 11f);
+            using var brush = new SolidBrush(Color.FromArgb(220, 255, 255, 255));
+            var sz = g.MeasureString(label, font);
+            float lx = sx + (sw - sz.Width) / 2f;
+            float ly = sy + sh + 6;
+            if (ly + sz.Height > h) ly = sy - sz.Height - 6;
+            if (lx < 4) lx = 4;
+
+            g.FillRectangle(new SolidBrush(Color.FromArgb(180, 0, 0, 0)),
+                lx - 6, ly - 2, sz.Width + 12, sz.Height + 4);
+            g.DrawString(label, font, brush, lx, ly);
         }
-        else if (overrideText != null)
+        else if (!_isDragging)
         {
-            StatusText.Text = overrideText;
+            // No selection — show instruction text
+            string hint = "Drag to select · Enter confirm · Esc cancel · Arrows adjust";
+            using var font = new Font("Segoe UI", 13f);
+            using var brush = new SolidBrush(Color.FromArgb(220, 255, 255, 255));
+            var sz = g.MeasureString(hint, font);
+            float cx = (w - sz.Width) / 2f;
+            g.FillRectangle(new SolidBrush(Color.FromArgb(180, 0, 0, 0)),
+                cx - 12, 18, sz.Width + 24, sz.Height + 12);
+            g.DrawString(hint, font, brush, cx, 24);
         }
-        else
+
+        g.Dispose();
+        bmp.Dispose();
+
+        // Composite onto desktop
+        var blend = new BLENDFUNCTION
         {
-            StatusText.Text = "Ready";
-        }
-    }
-
-    private void PositionOverlayTexts()
-    {
-        double canvasWidth = RootCanvas.ActualWidth > 0
-            ? RootCanvas.ActualWidth
-            : _virtualDesktopWidth / _dpiScale;
-        double canvasHeight = RootCanvas.ActualHeight > 0
-            ? RootCanvas.ActualHeight
-            : _virtualDesktopHeight / _dpiScale;
-
-        double instructionWidth = InstructionBorder.ActualWidth > 0
-            ? InstructionBorder.ActualWidth
-            : 700;
-        Canvas.SetLeft(InstructionBorder, (canvasWidth - instructionWidth) / 2.0);
-        Canvas.SetTop(InstructionBorder, 20);
-
-        double statusWidth = StatusBorder.ActualWidth > 0
-            ? StatusBorder.ActualWidth
-            : 300;
-        double statusHeight = StatusBorder.ActualHeight > 0
-            ? StatusBorder.ActualHeight
-            : 30;
-        Canvas.SetLeft(StatusBorder, (canvasWidth - statusWidth) / 2.0);
-        Canvas.SetTop(StatusBorder, canvasHeight - statusHeight - 20);
-    }
-
-    // ── DPI coordinate helpers ───────────────────────────────────────
-
-    private (int X, int Y) DipToPhysical(double dipX, double dipY)
-    {
-        return (
-            (int)Math.Round(dipX * _dpiScale, MidpointRounding.AwayFromZero),
-            (int)Math.Round(dipY * _dpiScale, MidpointRounding.AwayFromZero)
-        );
-    }
-
-    private (double X, double Y) PhysicalToDip(int physX, int physY)
-    {
-        return (physX / _dpiScale, physY / _dpiScale);
+            BlendOp = AC_SRC_OVER,
+            SourceConstantAlpha = 255,
+            AlphaFormat = AC_SRC_ALPHA,
+        };
+        UpdateLayeredWindow(_hwnd, IntPtr.Zero,
+            new POINT { X = _vdx, Y = _vdy },
+            new SIZE { cx = w, cy = h },
+            _bitmapDC,
+            new POINT { X = 0, Y = 0 },
+            0, blend, ULW_ALPHA);
     }
 
     // ── Cleanup ──────────────────────────────────────────────────────
 
-    private void CloseOverlay()
-    {
-        Cleanup();
-        this.Close();
-    }
-
     private void Cleanup()
     {
-        RootCanvas.PointerPressed -= OnPointerPressed;
-        RootCanvas.PointerMoved -= OnPointerMoved;
-        RootCanvas.PointerReleased -= OnPointerReleased;
-        RootCanvas.DoubleTapped -= OnDoubleTapped;
-        RootCanvas.KeyDown -= OnKeyDown;
-        RootCanvas.Loaded -= OnRootLoaded;
-        this.AppWindow.Changed -= OnAppWindowChanged;
-        this.Closed -= OnClosed;
+        if (_hBitmap != IntPtr.Zero) { DeleteObject(_hBitmap); _hBitmap = IntPtr.Zero; }
+        if (_bitmapDC != IntPtr.Zero) { DeleteDC(_bitmapDC); _bitmapDC = IntPtr.Zero; }
     }
+
+    public void Dispose() => Cleanup();
 }
