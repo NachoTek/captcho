@@ -159,6 +159,10 @@ public sealed partial class RegionOverlayWindow : Window
         this.AppWindow.Changed += OnAppWindowChanged;
         RootCanvas.Loaded += OnRootLoaded;
         this.Closed += OnClosed;
+
+        // Show the overlay window. WinUI 3 windows are invisible until Activate()
+        // is called — without this the overlay never appears on screen.
+        this.Activate();
     }
 
     private void OnRootLoaded(object sender, RoutedEventArgs e)
