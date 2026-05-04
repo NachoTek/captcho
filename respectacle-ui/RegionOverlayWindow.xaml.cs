@@ -67,11 +67,18 @@ public sealed partial class RegionOverlayWindow : Window
     private int _dragStartVirtualX;
     private int _dragStartVirtualY;
 
-    // ── Virtual desktop bounds (set during initialization) ───────────
+    // ── Virtual desktop bounds in physical pixels (set during initialization) ──
     private int _virtualDesktopX;
     private int _virtualDesktopY;
     private int _virtualDesktopWidth;
     private int _virtualDesktopHeight;
+
+    // ── DPI scale factor (physical pixels per DIP) ───────────────────
+    // The overlay window is sized in physical pixels via AppWindow.Resize,
+    // but WinUI XAML layout and pointer events use DIPs. This factor bridges
+    // the two coordinate systems so that selection geometry is always computed
+    // in physical (virtual-desktop) pixels while visual placement uses DIPs.
+    private double _dpiScale = 1.0;
 
     // ── Constants ────────────────────────────────────────────────────
     private const int CoarseNudge = 10;
@@ -130,6 +137,13 @@ public sealed partial class RegionOverlayWindow : Window
         appWindow.Move(new PointInt32(_virtualDesktopX, _virtualDesktopY));
         appWindow.Resize(new SizeInt32(_virtualDesktopWidth, _virtualDesktopHeight));
 
+        // Compute DPI scale factor: AppWindow uses physical pixels, but XAML
+        // pointer events and layout use DIPs. On a 150% scaled monitor,
+        // _dpiScale = 1.5, meaning 1 DIP = 1.5 physical pixels.
+        // We derive this from the ratio of the physical window size to the
+        // XAML canvas size, which avoids per-monitor DPI API complexity.
+        _dpiScale = 1.0; // Will be updated in OnRootLoaded once canvas measures
+
         // Hook input events
         RootCanvas.PointerPressed += OnPointerPressed;
         RootCanvas.PointerMoved += OnPointerMoved;
@@ -149,6 +163,18 @@ public sealed partial class RegionOverlayWindow : Window
 
     private void OnRootLoaded(object sender, RoutedEventArgs e)
     {
+        // Compute DPI scale from physical window size vs DIP canvas size.
+        // AppWindow.Size is in physical pixels; RootCanvas.ActualWidth is in DIPs.
+        double canvasWidth = RootCanvas.ActualWidth;
+        if (canvasWidth > 0)
+        {
+            _dpiScale = _virtualDesktopWidth / canvasWidth;
+        }
+
+        // Size the scrim to fill the entire canvas in DIPs
+        ScrimRect.Width = RootCanvas.ActualWidth;
+        ScrimRect.Height = RootCanvas.ActualHeight;
+
         PositionOverlayTexts();
 
         // Activate and focus for keyboard input
@@ -179,7 +205,8 @@ public sealed partial class RegionOverlayWindow : Window
         if (e.GetCurrentPoint(RootCanvas).Properties.IsLeftButtonPressed)
         {
             var position = e.GetCurrentPoint(RootCanvas).Position;
-            var (px, py) = CoordinateHelper.RoundToPixel(position.X, position.Y);
+            // Convert DIPs to physical pixels before coordinate math
+            var (px, py) = DipToPhysical(position.X, position.Y);
             var (vx, vy) = CoordinateHelper.OverlayToVirtual(px, py, _virtualDesktopX, _virtualDesktopY);
 
             _dragStartVirtualX = vx;
@@ -199,7 +226,8 @@ public sealed partial class RegionOverlayWindow : Window
         if (!_isDragging) return;
 
         var position = e.GetCurrentPoint(RootCanvas).Position;
-        var (px, py) = CoordinateHelper.RoundToPixel(position.X, position.Y);
+        // Convert DIPs to physical pixels before coordinate math
+        var (px, py) = DipToPhysical(position.X, position.Y);
         var (vx, vy) = CoordinateHelper.OverlayToVirtual(px, py, _virtualDesktopX, _virtualDesktopY);
 
         // Use T01 helper to normalize drag points (handles reversed drags)
@@ -357,16 +385,20 @@ public sealed partial class RegionOverlayWindow : Window
             return;
         }
 
-        // Convert virtual-desktop coordinates to overlay-relative for rendering
+        // Convert virtual-desktop coordinates (physical pixels) to overlay-relative physical pixels
         var (ox, oy) = CoordinateHelper.VirtualToOverlay(
             _currentSelection.X, _currentSelection.Y,
             _virtualDesktopX, _virtualDesktopY);
 
+        // Convert physical pixels to DIPs for XAML Canvas layout
+        var (dipX, dipY) = PhysicalToDip(ox, oy);
+        var (dipW, dipH) = PhysicalToDip(_currentSelection.Width, _currentSelection.Height);
+
         SelectionRect.Visibility = Visibility.Visible;
-        Canvas.SetLeft(SelectionRect, ox);
-        Canvas.SetTop(SelectionRect, oy);
-        SelectionRect.Width = _currentSelection.Width;
-        SelectionRect.Height = _currentSelection.Height;
+        Canvas.SetLeft(SelectionRect, dipX);
+        Canvas.SetTop(SelectionRect, dipY);
+        SelectionRect.Width = dipW;
+        SelectionRect.Height = dipH;
     }
 
     private void UpdateStatusText(string? overrideText = null)
@@ -387,11 +419,19 @@ public sealed partial class RegionOverlayWindow : Window
 
     private void PositionOverlayTexts()
     {
+        // Use DIP dimensions for positioning XAML elements
+        double canvasWidth = RootCanvas.ActualWidth > 0
+            ? RootCanvas.ActualWidth
+            : _virtualDesktopWidth / _dpiScale;
+        double canvasHeight = RootCanvas.ActualHeight > 0
+            ? RootCanvas.ActualHeight
+            : _virtualDesktopHeight / _dpiScale;
+
         // Center instruction text at the top
         double instructionWidth = InstructionBorder.ActualWidth > 0
             ? InstructionBorder.ActualWidth
             : 700;
-        Canvas.SetLeft(InstructionBorder, (_virtualDesktopWidth - instructionWidth) / 2.0);
+        Canvas.SetLeft(InstructionBorder, (canvasWidth - instructionWidth) / 2.0);
         Canvas.SetTop(InstructionBorder, 20);
 
         // Center status text at the bottom
@@ -401,8 +441,32 @@ public sealed partial class RegionOverlayWindow : Window
         double statusHeight = StatusBorder.ActualHeight > 0
             ? StatusBorder.ActualHeight
             : 30;
-        Canvas.SetLeft(StatusBorder, (_virtualDesktopWidth - statusWidth) / 2.0);
-        Canvas.SetTop(StatusBorder, _virtualDesktopHeight - statusHeight - 20);
+        Canvas.SetLeft(StatusBorder, (canvasWidth - statusWidth) / 2.0);
+        Canvas.SetTop(StatusBorder, canvasHeight - statusHeight - 20);
+    }
+
+    // ── DPI coordinate helpers ───────────────────────────────────────
+
+    /// <summary>
+    /// Converts DIP (device-independent pixel) coordinates to physical pixels.
+    /// Pointer events report positions in DIPs; virtual-desktop coordinates
+    /// and RegionSelection math use physical pixels.
+    /// </summary>
+    private (int X, int Y) DipToPhysical(double dipX, double dipY)
+    {
+        return (
+            (int)Math.Round(dipX * _dpiScale, MidpointRounding.AwayFromZero),
+            (int)Math.Round(dipY * _dpiScale, MidpointRounding.AwayFromZero)
+        );
+    }
+
+    /// <summary>
+    /// Converts physical pixel dimensions to DIPs for XAML layout.
+    /// Canvas.SetLeft/SetTop and Width/Height use DIPs.
+    /// </summary>
+    private (double X, double Y) PhysicalToDip(int physX, int physY)
+    {
+        return (physX / _dpiScale, physY / _dpiScale);
     }
 
     // ── Cleanup ──────────────────────────────────────────────────────
