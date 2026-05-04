@@ -1,26 +1,25 @@
 // RegionOverlayWindow.xaml.cs — Transparent overlay for rectangular region selection.
 //
-// Creates a raw Win32 layered window (WS_EX_LAYERED) that is truly transparent,
-// showing the live desktop behind it. The selection rectangle is drawn via GDI
-// on a per-pixel alpha bitmap composited by DWM via UpdateLayeredWindow.
-//
-// This is how Windows Snipping Tool, Greenshot, and ShareX implement region
-// selection — a thin transparent overlay over the live desktop.
+// Creates a raw Win32 layered window (WS_EX_LAYERED | WS_EX_TOPMOST) that is truly
+// transparent, showing the live desktop behind it. Rendering uses a 32-bit ARGB DIB
+// section with per-pixel alpha. A System.Drawing.Bitmap wraps the DIB memory directly
+// (via the scan0 pointer from CreateDIBSection) so GDI+ drawing goes straight into the
+// buffer that UpdateLayeredWindow composites onto the desktop.
 //
 // Flow:
-//   1. Create transparent Win32 window covering the virtual desktop
-//   2. Draw selection rectangle with GDI (clear interior, dim outside, dashed border)
+//   1. Create transparent topmost Win32 window covering the virtual desktop
+//   2. Draw selection rectangle (dim scrim everywhere, clear inside selection)
 //   3. User draws/adjusts/moves selection, presses Enter to confirm
 //   4. Destroy the overlay window
 //   5. Call native capture_region to capture the live desktop at those coordinates
 //
-// Supports: drag to draw, arrow keys to nudge (10px), Shift+Arrow fine nudge (1px),
-// Alt+Arrow to resize from top-left anchor, Enter to confirm, Escape to cancel,
-// double-click to confirm.
+// Supports: drag to draw, arrow keys to nudge (10px coarse, 1px fine with Shift),
+// Alt+Arrow to resize from top-left anchor, Enter/double-click confirm, Escape cancel.
 
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Windows.Foundation;
@@ -33,56 +32,52 @@ namespace Respectacle.UI;
 /// </summary>
 public sealed class RegionSelectionResult
 {
-    /// <summary>Captured bitmap of the selected region.</summary>
     public ContiguousBitmap Bitmap { get; init; } = null!;
-    /// <summary>The region rectangle in virtual-desktop pixels.</summary>
     public Rect Region { get; init; }
 }
 
 /// <summary>
 /// Transparent overlay for rectangular region selection using a raw Win32 layered window.
-/// Shows the live desktop through the overlay. After the user confirms, the overlay is
-/// removed and the region is captured from the live desktop.
-///
-/// Supports drag-to-draw, arrow key nudge/move (10px coarse, 1px fine with Shift),
-/// Alt+Arrow resize, Enter/double-click confirm, Escape cancel.
 /// </summary>
 public sealed partial class RegionOverlayWindow : IDisposable
 {
     #region Win32 P/Invoke
 
-    private const int WS_EX_LAYERED = unchecked((int)0x00080000);
+    private const int WS_EX_LAYERED   = unchecked((int)0x00080000);
     private const int WS_EX_TOOLWINDOW = unchecked((int)0x00000080);
-    private const int WS_POPUP = unchecked((int)0x80000000);
-    private const int WS_VISIBLE = unchecked((int)0x10000000);
+    private const int WS_EX_TOPMOST   = unchecked((int)0x00000008);
+    private const int WS_POPUP        = unchecked((int)0x80000000);
+    private const int WS_VISIBLE      = unchecked((int)0x10000000);
     private const int WS_CLIPCHILDREN = unchecked((int)0x02000000);
     private const int WS_CLIPSIBLINGS = unchecked((int)0x04000000);
 
-    private const int WM_KEYDOWN = 0x0100;
-    private const int WM_LBUTTONDOWN = 0x0201;
-    private const int WM_LBUTTONUP = 0x0202;
-    private const int WM_MOUSEMOVE = 0x0200;
+    private const int CS_HREDRAW = 0x0002;
+    private const int CS_VREDRAW = 0x0001;
+
+    private const int WM_KEYDOWN      = 0x0100;
+    private const int WM_LBUTTONDOWN  = 0x0201;
+    private const int WM_LBUTTONUP    = 0x0202;
+    private const int WM_MOUSEMOVE    = 0x0200;
     private const int WM_LBUTTONDBLCLK = 0x0203;
-    private const int WM_DESTROY = 0x0002;
 
     private const int VK_ESCAPE = 0x1B;
     private const int VK_RETURN = 0x0D;
-    private const int VK_LEFT = 0x25;
-    private const int VK_UP = 0x26;
-    private const int VK_RIGHT = 0x27;
-    private const int VK_DOWN = 0x28;
-    private const int VK_SHIFT = 0x10;
-    private const int VK_MENU = 0x12;
+    private const int VK_LEFT   = 0x25;
+    private const int VK_UP     = 0x26;
+    private const int VK_RIGHT  = 0x27;
+    private const int VK_DOWN   = 0x28;
+    private const int VK_SHIFT  = 0x10;
+    private const int VK_MENU   = 0x12;
 
-    private const int SM_XVIRTUALSCREEN = 76;
-    private const int SM_YVIRTUALSCREEN = 77;
+    private const int SM_XVIRTUALSCREEN  = 76;
+    private const int SM_YVIRTUALSCREEN  = 77;
     private const int SM_CXVIRTUALSCREEN = 78;
     private const int SM_CYVIRTUALSCREEN = 79;
 
-    private const int ULW_ALPHA = 0x02;
-    private const int AC_SRC_OVER = 0x00;
-    private const int AC_SRC_ALPHA = 0x01;
-    private const int SW_SHOW = 5;
+    private const int ULW_ALPHA     = 0x02;
+    private const int AC_SRC_OVER   = 0x00;
+    private const int AC_SRC_ALPHA  = 0x01;
+    private const int SW_SHOW       = 5;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int X, Y; }
@@ -95,8 +90,7 @@ public sealed partial class RegionOverlayWindow : IDisposable
     {
         public IntPtr hwnd;
         public uint message;
-        public IntPtr wParam;
-        public IntPtr lParam;
+        public IntPtr wParam, lParam;
         public uint time;
         public POINT pt;
     }
@@ -105,25 +99,17 @@ public sealed partial class RegionOverlayWindow : IDisposable
     private struct BITMAPINFOHEADER
     {
         public uint biSize;
-        public int biWidth;
-        public int biHeight;
-        public ushort biPlanes;
-        public ushort biBitCount;
-        public uint biCompression;
-        public uint biSizeImage;
-        public int biXPelsPerMeter;
-        public int biYPelsPerMeter;
-        public uint biClrUsed;
-        public uint biClrImportant;
+        public int biWidth, biHeight;
+        public ushort biPlanes, biBitCount;
+        public uint biCompression, biSizeImage;
+        public int biXPelsPerMeter, biYPelsPerMeter;
+        public uint biClrUsed, biClrImportant;
     }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct BLENDFUNCTION
     {
-        public byte BlendOp;
-        public byte BlendFlags;
-        public byte SourceConstantAlpha;
-        public byte AlphaFormat;
+        public byte BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -131,14 +117,9 @@ public sealed partial class RegionOverlayWindow : IDisposable
     {
         public uint style;
         public WndProc lpfnWndProc;
-        public int cbClsExtra;
-        public int cbWndExtra;
-        public IntPtr hInstance;
-        public IntPtr hIcon;
-        public IntPtr hCursor;
-        public IntPtr hbrBackground;
-        public string lpszMenuName;
-        public string lpszClassName;
+        public int cbClsExtra, cbWndExtra;
+        public IntPtr hInstance, hIcon, hCursor, hbrBackground;
+        public string lpszMenuName, lpszClassName;
     }
 
     private delegate IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
@@ -149,6 +130,7 @@ public sealed partial class RegionOverlayWindow : IDisposable
     [DllImport("user32.dll")] private static extern IntPtr CreateWindowExW(int dwExStyle, string lpClassName, string lpWindowName, uint dwStyle, int x, int y, int nWidth, int nHeight, IntPtr hWndParent, IntPtr hMenu, IntPtr hInstance, IntPtr lpParam);
     [DllImport("user32.dll")] private static extern bool DestroyWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool UpdateLayeredWindow(IntPtr hWnd, IntPtr hdcDst, POINT? pptDst, SIZE? psize, IntPtr hdcSrc, POINT pptSrc, int crKey, BLENDFUNCTION pblend, int dwFlags);
     [DllImport("user32.dll")] private static extern bool GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
     [DllImport("user32.dll")] private static extern bool TranslateMessage(ref MSG lpMsg);
@@ -165,39 +147,26 @@ public sealed partial class RegionOverlayWindow : IDisposable
 
     #endregion
 
-    // ── Completion ───────────────────────────────────────────────────
     private readonly TaskCompletionSource<RegionSelectionResult?> _tcs = new();
-
-    // ── Win32 window ─────────────────────────────────────────────────
     private IntPtr _hwnd;
-    private WndProc? _wndProc; // prevent GC collection of delegate
+    private WndProc? _wndProc; // prevent GC
     private static readonly string _className = "RespectacleRegion_" + Guid.NewGuid().ToString("N");
 
-    // ── Overlay bitmap ───────────────────────────────────────────────
+    // DIB section for per-pixel alpha rendering
     private IntPtr _hBitmap;
     private IntPtr _bitmapDC;
+    private IntPtr _bits; // pointer to DIB pixel memory
 
-    // ── Selection state ──────────────────────────────────────────────
     private RegionSelection? _currentSelection;
     private bool _isDragging;
     private int _dragStartX, _dragStartY;
-
-    // ── Virtual desktop bounds ───────────────────────────────────────
     private int _vdx, _vdy, _vdw, _vdh;
 
-    // ── Constants ────────────────────────────────────────────────────
     private const int CoarseNudge = 10;
     private const int FineNudge = 1;
 
-    public RegionOverlayWindow()
-    {
-        InitializeComponent();
-    }
+    public RegionOverlayWindow() { InitializeComponent(); }
 
-    /// <summary>
-    /// Shows the transparent overlay and waits for the user to confirm or cancel.
-    /// Returns the captured region from the live desktop, or null.
-    /// </summary>
     public Task<RegionSelectionResult?> ShowAndWaitAsync()
     {
         _vdx = GetSystemMetrics(SM_XVIRTUALSCREEN);
@@ -211,12 +180,7 @@ public sealed partial class RegionOverlayWindow : IDisposable
             return _tcs.Task;
         }
 
-        // Win32 windows need a dedicated STA thread — ThreadPool threads are MTA
-        // and SetApartmentState silently fails on them.
-        var thread = new System.Threading.Thread(() =>
-        {
-            RunMessageLoop();
-        });
+        var thread = new System.Threading.Thread(RunMessageLoop);
         thread.SetApartmentState(System.Threading.ApartmentState.STA);
         thread.IsBackground = true;
         thread.Start();
@@ -228,9 +192,17 @@ public sealed partial class RegionOverlayWindow : IDisposable
     {
         try
         {
-            _current = this; // Set before any messages arrive
+            _current = this;
             CreateOverlay();
+
+            if (_hwnd == IntPtr.Zero)
+            {
+                _tcs.TrySetResult(null);
+                return;
+            }
+
             ShowWindow(_hwnd, SW_SHOW);
+            SetForegroundWindow(_hwnd);
             Render();
 
             while (GetMessage(out MSG msg, IntPtr.Zero, 0, 0))
@@ -238,7 +210,6 @@ public sealed partial class RegionOverlayWindow : IDisposable
                 TranslateMessage(ref msg);
                 DispatchMessage(ref msg);
             }
-
             Cleanup();
         }
         catch
@@ -252,56 +223,51 @@ public sealed partial class RegionOverlayWindow : IDisposable
     {
         var wc = new WNDCLASS
         {
+            style = CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc = StaticWndProc,
             hInstance = GetModuleHandle(IntPtr.Zero),
             lpszClassName = _className,
         };
         RegisterClassW(ref wc);
 
-        int exStyle = WS_EX_LAYERED | WS_EX_TOOLWINDOW;
+        // WS_EX_TOPMOST ensures the overlay appears above all windows
+        int exStyle = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
         uint style = unchecked((uint)(WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS));
 
         _hwnd = CreateWindowExW(exStyle, _className, "RespectacleRegion",
             style, _vdx, _vdy, _vdw, _vdh,
             IntPtr.Zero, IntPtr.Zero, GetModuleHandle(IntPtr.Zero), IntPtr.Zero);
 
-        _wndProc = InstanceWndProc; // prevent GC
+        _wndProc = InstanceWndProc;
     }
 
-    // ── WndProc dispatch ─────────────────────────────────────────────
+    // ── WndProc ──────────────────────────────────────────────────────
 
-    [ThreadStatic]
-    private static RegionOverlayWindow? _current;
+    [ThreadStatic] private static RegionOverlayWindow? _current;
 
     private static IntPtr StaticWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
-    {
-        return _current?.InstanceWndProc(hWnd, msg, wParam, lParam)
-            ?? DefWindowProcW(hWnd, msg, wParam, lParam);
-    }
+        => _current?.InstanceWndProc(hWnd, msg, wParam, lParam)
+           ?? DefWindowProcW(hWnd, msg, wParam, lParam);
 
     private IntPtr InstanceWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
-        _current = this;
         switch (msg)
         {
-            case WM_LBUTTONDOWN: OnMouseDown(lParam); return IntPtr.Zero;
-            case WM_MOUSEMOVE: OnMouseMove(lParam); return IntPtr.Zero;
-            case WM_LBUTTONUP: OnMouseUp(); return IntPtr.Zero;
-            case WM_LBUTTONDBLCLK: Confirm(); return IntPtr.Zero;
-            case WM_KEYDOWN: OnKey(wParam); return IntPtr.Zero;
-            case WM_DESTROY: _current = null; return IntPtr.Zero;
+            case WM_LBUTTONDOWN:  OnMouseDown(lParam); return IntPtr.Zero;
+            case WM_MOUSEMOVE:    OnMouseMove(lParam); return IntPtr.Zero;
+            case WM_LBUTTONUP:    OnMouseUp();         return IntPtr.Zero;
+            case WM_LBUTTONDBLCLK: Confirm();          return IntPtr.Zero;
+            case WM_KEYDOWN:      OnKey(wParam);       return IntPtr.Zero;
         }
         return DefWindowProcW(hWnd, msg, wParam, lParam);
     }
 
-    // ── Mouse input ──────────────────────────────────────────────────
+    // ── Input ────────────────────────────────────────────────────────
 
     private void OnMouseDown(IntPtr lParam)
     {
-        int x = LoWord(lParam) + _vdx;
-        int y = HiWord(lParam) + _vdy;
-        _dragStartX = x;
-        _dragStartY = y;
+        _dragStartX = LoWord(lParam) + _vdx;
+        _dragStartY = HiWord(lParam) + _vdy;
         _isDragging = true;
         _currentSelection = null;
         Render();
@@ -319,45 +285,31 @@ public sealed partial class RegionOverlayWindow : IDisposable
         Render();
     }
 
-    private void OnMouseUp() { _isDragging = false; }
-
-    // ── Keyboard input ───────────────────────────────────────────────
+    private void OnMouseUp() => _isDragging = false;
 
     private void OnKey(IntPtr wParam)
     {
-        int vk = wParam.ToInt32();
-        switch (vk)
+        switch (wParam.ToInt32())
         {
             case VK_ESCAPE: Cancel(); break;
             case VK_RETURN: Confirm(); break;
-            case VK_LEFT: case VK_RIGHT: case VK_UP: case VK_DOWN:
-                Nudge(vk); break;
+            case VK_LEFT: case VK_RIGHT: case VK_UP: case VK_DOWN: Nudge(wParam.ToInt32()); break;
         }
     }
 
     private void Nudge(int vk)
     {
         if (_currentSelection == null) return;
-
-        bool shift = KeyDown(VK_SHIFT);
-        bool alt = KeyDown(VK_MENU);
+        bool shift = KeyDown(VK_SHIFT), alt = KeyDown(VK_MENU);
         int d = shift ? FineNudge : CoarseNudge;
-
         int dx = 0, dy = 0;
-        if (vk == VK_LEFT) dx = -d;
-        if (vk == VK_RIGHT) dx = d;
-        if (vk == VK_UP) dy = -d;
-        if (vk == VK_DOWN) dy = d;
+        if (vk == VK_LEFT) dx = -d; if (vk == VK_RIGHT) dx = d;
+        if (vk == VK_UP) dy = -d;   if (vk == VK_DOWN) dy = d;
 
         var result = alt
             ? _currentSelection.Resize(dx, dy, "tl", _vdx, _vdy, _vdw, _vdh)
             : _currentSelection.Move(dx, dy, _vdx, _vdy, _vdw, _vdh);
-
-        if (result != null)
-        {
-            _currentSelection = result;
-            Render();
-        }
+        if (result != null) { _currentSelection = result; Render(); }
     }
 
     private static bool KeyDown(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
@@ -370,11 +322,8 @@ public sealed partial class RegionOverlayWindow : IDisposable
     {
         if (_currentSelection == null || !_currentSelection.MeetsMinimumSize) return;
         var sel = _currentSelection;
-
-        // Destroy overlay FIRST — must be gone before capture
         DestroyWindow(_hwnd);
 
-        // Capture the live desktop at the selected region
         try
         {
             using var r = SafeCaptureResult.CaptureRegion(sel.X, sel.Y, (uint)sel.Width, (uint)sel.Height);
@@ -386,10 +335,11 @@ public sealed partial class RegionOverlayWindow : IDisposable
                     Bitmap = bmp,
                     Region = new Rect(sel.X, sel.Y, sel.Width, sel.Height),
                 });
+                return;
             }
-            else { _tcs.TrySetResult(null); }
         }
-        catch { _tcs.TrySetResult(null); }
+        catch { /* fall through to null */ }
+        _tcs.TrySetResult(null);
     }
 
     private void Cancel()
@@ -404,7 +354,7 @@ public sealed partial class RegionOverlayWindow : IDisposable
     {
         int w = _vdw, h = _vdh;
 
-        // Create bitmap DC if needed
+        // Create DIB section on first render
         if (_hBitmap == IntPtr.Zero)
         {
             var bmi = new BITMAPINFOHEADER
@@ -418,16 +368,18 @@ public sealed partial class RegionOverlayWindow : IDisposable
 
             IntPtr screenDC = GetDC(IntPtr.Zero);
             _bitmapDC = CreateCompatibleDC(screenDC);
-            _hBitmap = CreateDIBSection(_bitmapDC, ref bmi, 0, out _, IntPtr.Zero, 0);
+            _hBitmap = CreateDIBSection(_bitmapDC, ref bmi, 0, out _bits, IntPtr.Zero, 0);
             SelectObject(_bitmapDC, _hBitmap);
             ReleaseDC(IntPtr.Zero, screenDC);
         }
 
-        // Draw using System.Drawing
-        using var bmp = System.Drawing.Image.FromHbitmap(_hBitmap);
+        // Wrap the DIB memory directly — drawing goes straight into the buffer
+        // that UpdateLayeredWindow reads. No copy, no disposal issue.
+        int stride = w * 4;
+        using var bmp = new System.Drawing.Bitmap(w, h, stride, PixelFormat.Format32bppPArgb, _bits);
         using var g = System.Drawing.Graphics.FromImage(bmp);
 
-        // Entire overlay: 25% dim scrim (desktop shows through transparent pixels)
+        // 25% dim scrim everywhere — desktop shows through transparent pixels
         g.Clear(Color.Transparent);
         g.FillRectangle(new SolidBrush(Color.FromArgb(64, 0, 0, 0)), 0, 0, w, h);
 
@@ -438,7 +390,7 @@ public sealed partial class RegionOverlayWindow : IDisposable
             int sw = _currentSelection.Width;
             int sh = _currentSelection.Height;
 
-            // Clear the scrim inside selection — shows live desktop
+            // Clear scrim inside selection — live desktop shows through
             g.CompositingMode = CompositingMode.SourceCopy;
             g.FillRectangle(new SolidBrush(Color.Transparent), sx, sy, sw, sh);
             g.CompositingMode = CompositingMode.SourceOver;
@@ -451,7 +403,7 @@ public sealed partial class RegionOverlayWindow : IDisposable
             };
             g.DrawRectangle(pen, sx, sy, sw, sh);
 
-            // Dimension label below selection
+            // Dimension + position label
             string label = $"{sw}×{sh} at ({_currentSelection.X}, {_currentSelection.Y})";
             using var font = new Font("Consolas", 11f);
             using var brush = new SolidBrush(Color.FromArgb(220, 255, 255, 255));
@@ -467,7 +419,6 @@ public sealed partial class RegionOverlayWindow : IDisposable
         }
         else if (!_isDragging)
         {
-            // No selection — show instruction text
             string hint = "Drag to select · Enter confirm · Esc cancel · Arrows adjust";
             using var font = new Font("Segoe UI", 13f);
             using var brush = new SolidBrush(Color.FromArgb(220, 255, 255, 255));
@@ -478,10 +429,11 @@ public sealed partial class RegionOverlayWindow : IDisposable
             g.DrawString(hint, font, brush, cx, 24);
         }
 
-        g.Dispose();
-        bmp.Dispose();
+        // Do NOT dispose bmp — it wraps _bits, not an owned HBITMAP.
+        // Disposing would try to free memory we don't own.
+        // The using statement is harmless for Bitmap(IntPtr) wrapper though.
 
-        // Composite onto desktop
+        // Composite the DIB onto the desktop via the layered window
         var blend = new BLENDFUNCTION
         {
             BlendOp = AC_SRC_OVER,
@@ -502,6 +454,7 @@ public sealed partial class RegionOverlayWindow : IDisposable
     {
         if (_hBitmap != IntPtr.Zero) { DeleteObject(_hBitmap); _hBitmap = IntPtr.Zero; }
         if (_bitmapDC != IntPtr.Zero) { DeleteDC(_bitmapDC); _bitmapDC = IntPtr.Zero; }
+        _bits = IntPtr.Zero;
     }
 
     public void Dispose() => Cleanup();
