@@ -1,14 +1,11 @@
 // RegionOverlayWindow.xaml.cs — Full-desktop overlay for rectangular region selection.
 //
-// Uses DWM composition (DwmExtendFrameIntoClientArea) to make the window truly
-// transparent, so the live desktop is visible through it. A semi-transparent scrim
-// dims the desktop to indicate selection mode, and the selection rectangle has no
-// scrim so the selected area appears at full brightness.
+// Captures the desktop at the moment the user initiates region selection, displays
+// the screenshot with a light dim scrim, and lets the user drag-select a region.
+// This is the same approach used by Windows Snipping Tool, Greenshot, and ShareX.
 //
-// Accepts a pre-captured ContiguousBitmap of the full desktop for accurate cropping
-// when the user confirms the selection. This avoids re-capturing (which would include
-// the overlay) and ensures the cropped region matches what was on screen when the
-// user initiated the selection.
+// Accepts a pre-captured ContiguousBitmap of the full desktop. The screenshot is
+// displayed as the background, and cropping happens from this bitmap on confirm.
 //
 // Exposes ShowAndWaitAsync() which returns a RegionSelectionResult:
 //   - Confirmed selection → ContiguousBitmap cropped from the pre-captured image
@@ -23,10 +20,10 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Foundation;
 using Windows.Graphics;
 using Respectacle.Capture;
-using WinRT.Interop;
 
 namespace Respectacle.UI;
 
@@ -42,24 +39,18 @@ public sealed class RegionSelectionResult
 }
 
 /// <summary>
-/// Full-desktop transparent overlay window for rectangular region selection.
-/// Uses DWM composition to show the live desktop through the window.
-/// Returns a cropped bitmap from a pre-captured screenshot, or null on cancellation.
+/// Full-desktop overlay window for rectangular region selection.
+/// Displays a pre-captured screenshot with a dim scrim, returns a cropped
+/// bitmap from the screenshot on confirm, or null on cancellation.
 /// </summary>
 public sealed partial class RegionOverlayWindow : Window
 {
-    #region Win32 P/Invoke
+    #region Win32 P/Invoke for virtual-desktop bounds
 
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT
     {
         public int left, top, right, bottom;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MARGINS
-    {
-        public int cxLeftWidth, cxRightWidth, cyTopHeight, cyBottomHeight;
     }
 
     private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, IntPtr lprcMonitor, IntPtr dwData);
@@ -70,31 +61,17 @@ public sealed partial class RegionOverlayWindow : Window
     [DllImport("user32.dll")]
     private static extern int GetSystemMetrics(int nIndex);
 
-    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")]
-    private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
-
-    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")]
-    private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
-
-    [DllImport("dwmapi.dll")]
-    private static extern int DwmExtendFrameIntoClientArea(IntPtr hWnd, ref MARGINS pMarInset);
-
     private const int SM_XVIRTUALSCREEN = 76;
     private const int SM_YVIRTUALSCREEN = 77;
     private const int SM_CXVIRTUALSCREEN = 78;
     private const int SM_CYVIRTUALSCREEN = 79;
-
-    private const int GWL_EXSTYLE = -20;
-    private const int WS_EX_LAYERED = 0x00080000;
-    private const int WS_EX_TRANSPARENT = 0x00000020;
-    private const int WS_EX_NOREDIRECTIONBITMAP = 0x00200000;
 
     #endregion
 
     // ── Completion contract ──────────────────────────────────────────
     private readonly TaskCompletionSource<RegionSelectionResult?> _tcs = new();
 
-    // ── Pre-captured screenshot (for cropping on confirm) ────────────
+    // ── Pre-captured screenshot ──────────────────────────────────────
     private readonly ContiguousBitmap _desktopCapture;
 
     // ── Selection state ──────────────────────────────────────────────
@@ -117,10 +94,11 @@ public sealed partial class RegionOverlayWindow : Window
     private const int FineNudge = 1;
 
     /// <summary>
-    /// Creates the overlay with a pre-captured screenshot for accurate cropping.
-    /// The live desktop is visible through the transparent window.
+    /// Creates the overlay with a pre-captured screenshot of the virtual desktop.
+    /// The screenshot is displayed as the background so the user can see what
+    /// they're selecting.
     /// </summary>
-    /// <param name="desktopCapture">Full virtual desktop capture (for cropping).</param>
+    /// <param name="desktopCapture">Full virtual desktop capture (all monitors stitched).</param>
     public RegionOverlayWindow(ContiguousBitmap desktopCapture)
     {
         _desktopCapture = desktopCapture ?? throw new ArgumentNullException(nameof(desktopCapture));
@@ -128,7 +106,8 @@ public sealed partial class RegionOverlayWindow : Window
     }
 
     /// <summary>
-    /// Shows the transparent overlay and waits for the user to confirm or cancel.
+    /// Shows the overlay covering the entire virtual desktop and waits
+    /// for the user to confirm or cancel a rectangular selection.
     /// Returns a cropped bitmap from the pre-captured screenshot, or null.
     /// </summary>
     public Task<RegionSelectionResult?> ShowAndWaitAsync()
@@ -170,13 +149,6 @@ public sealed partial class RegionOverlayWindow : Window
 
         _dpiScale = 1.0;
 
-        // Make the window truly transparent via DWM composition.
-        // DwmExtendFrameIntoClientArea with negative margins extends the DWM frame
-        // over the entire client area. Combined with WS_EX_LAYERED, this makes
-        // transparent regions of the XAML visual tree show the live desktop behind.
-        var hwnd = WindowNative.GetWindowHandle(this);
-        EnableDwmTransparency(hwnd);
-
         // Hook input events
         RootCanvas.PointerPressed += OnPointerPressed;
         RootCanvas.PointerMoved += OnPointerMoved;
@@ -194,29 +166,7 @@ public sealed partial class RegionOverlayWindow : Window
         this.Activate();
     }
 
-    /// <summary>
-    /// Enables live-desktop transparency by combining DWM extended frame with
-    /// layered window style. This makes transparent XAML regions show the desktop.
-    /// </summary>
-    private static void EnableDwmTransparency(IntPtr hwnd)
-    {
-        // Add WS_EX_LAYERED to enable alpha blending with the desktop
-        var exStyle = GetWindowLongPtr64(hwnd, GWL_EXSTYLE);
-        SetWindowLongPtr64(hwnd, GWL_EXSTYLE, (IntPtr)((long)exStyle | WS_EX_LAYERED));
-
-        // Extend DWM frame over entire client area with negative margins.
-        // This is the standard technique for transparent/glass windows on Windows 10/11.
-        var margins = new MARGINS
-        {
-            cxLeftWidth = -1,
-            cxRightWidth = -1,
-            cyTopHeight = -1,
-            cyBottomHeight = -1
-        };
-        DwmExtendFrameIntoClientArea(hwnd, ref margins);
-    }
-
-    private void OnRootLoaded(object sender, RoutedEventArgs e)
+    private async void OnRootLoaded(object sender, RoutedEventArgs e)
     {
         double canvasWidth = RootCanvas.ActualWidth;
         if (canvasWidth > 0)
@@ -224,9 +174,15 @@ public sealed partial class RegionOverlayWindow : Window
             _dpiScale = _virtualDesktopWidth / canvasWidth;
         }
 
-        // Size the scrim to fill the entire canvas in DIPs
         double dipWidth = RootCanvas.ActualWidth > 0 ? RootCanvas.ActualWidth : _virtualDesktopWidth / _dpiScale;
         double dipHeight = RootCanvas.ActualHeight > 0 ? RootCanvas.ActualHeight : _virtualDesktopHeight / _dpiScale;
+
+        // Display the pre-captured screenshot as the overlay background
+        BackgroundImage.Source = await SoftwareBitmapConverter.ToWriteableBitmapAsync(_desktopCapture);
+        BackgroundImage.Width = dipWidth;
+        BackgroundImage.Height = dipHeight;
+
+        // Size the scrim to fill the canvas
         ScrimRect.Width = dipWidth;
         ScrimRect.Height = dipHeight;
 
@@ -394,7 +350,7 @@ public sealed partial class RegionOverlayWindow : Window
             return;
         }
 
-        // Crop from pre-captured bitmap using virtual-desktop coordinates
+        // Crop from pre-captured bitmap
         int cropX = _currentSelection.X - _virtualDesktopX;
         int cropY = _currentSelection.Y - _virtualDesktopY;
         int cropW = _currentSelection.Width;

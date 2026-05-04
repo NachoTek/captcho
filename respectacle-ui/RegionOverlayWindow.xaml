@@ -1,8 +1,8 @@
 <!-- RegionOverlayWindow.xaml — Full-desktop overlay for rectangular region selection.
 
-Layout (transparent window over live desktop):
+Layout (screenshot background with dim scrim):
   ┌──────────────────────────────────────────────────────┐
-  │  Transparent window + dim scrim (live desktop below) │
+  │  Screenshot + dim scrim                              │
   │                                                      │
   │  ┌──────────────────────┐  ← Selection rectangle    │
   │  │  Clear (no scrim)    │     with blue border       │
@@ -12,9 +12,10 @@ Layout (transparent window over live desktop):
   │  [Status/dimensions at bottom]                       │
   └──────────────────────────────────────────────────────┘
 
-The window is made transparent via DWM composition so the live desktop
-is visible. A semi-transparent scrim dims the desktop to indicate
-selection mode. The selected area punches through the scrim.
+The overlay captures the screen at the moment the user clicks the region
+button, displays that screenshot with a light dim scrim, and lets the user
+drag-select a region. This is the same approach used by Snipping Tool,
+Greenshot, and ShareX.
 
 Input contract:
   - Drag to draw a selection rectangle
@@ -31,14 +32,21 @@ Input contract:
     <Canvas x:Name="RootCanvas"
             Background="Transparent">
 
-        <!-- Dim scrim over the transparent window to indicate selection mode.
-             #40000000 = 25% black — the live desktop is visible through both
-             the DWM-transparent window and this semi-transparent scrim. -->
+        <!-- Pre-captured screenshot of the virtual desktop displayed as background.
+             The user sees exactly what was on screen when they clicked the region
+             button — same behavior as Windows Snipping Tool and Greenshot. -->
+        <Image x:Name="BackgroundImage"
+               Stretch="Fill"
+               IsHitTestVisible="False"/>
+
+        <!-- Dim scrim over the screenshot to indicate selection mode.
+             #30000000 = 19% black — light enough to read content clearly. -->
         <Rectangle x:Name="ScrimRect"
-                   Fill="#40000000"
+                   Fill="#30000000"
                    IsHitTestVisible="False"/>
 
-        <!-- Selection rectangle border: dashed blue outline for clear boundary. -->
+        <!-- Selection rectangle: dashed blue border, clear interior shows
+             the undimmed screenshot underneath. -->
         <Rectangle x:Name="SelectionRect"
                    Stroke="#4FC3F7"
                    StrokeThickness="2"
