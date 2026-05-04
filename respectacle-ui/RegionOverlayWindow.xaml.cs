@@ -77,6 +77,11 @@ public sealed partial class RegionOverlayWindow : Window
     private const int CoarseNudge = 10;
     private const int FineNudge = 1;
 
+    public RegionOverlayWindow()
+    {
+        InitializeComponent();
+    }
+
     /// <summary>
     /// Shows the overlay covering the entire virtual desktop and waits
     /// for the user to confirm or cancel a rectangular selection.

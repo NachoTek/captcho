@@ -1,3 +1,17 @@
+# ── Convenience batch files ──
+*.bat
+
+# ── .NET build outputs ──
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+
+# ── Rust build outputs ──
+rust-dll/target/
+
+# ── Misc scripts (root level only) ──
+/*.ps1
 
 # ── GSD baseline (auto-generated) ──
 .gsd

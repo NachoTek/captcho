@@ -268,7 +268,7 @@ public class Program
 
         totalSw.Stop();
         Console.WriteLine($"Captured: OK {safe.Width}x{safe.Height} stride={safe.Stride} data_len={safe.DataLen}");
-        if (bitmap != null) Console.WriteLine($"ContiguousBitmap: {safe.Width}x{safe.Height} stride={bitmap.Stride}");
+        if (bitmap != null) Console.WriteLine($"CapturedBitmap: {safe.Width}x{safe.Height} format=BGRA");
         Console.WriteLine($"RoundTripMs: {totalSw.Elapsed.TotalMilliseconds:F1}");
         Console.WriteLine($"VerifyResult: {(failures == 0 ? "PASS" : $"FAIL ({failures} failures)")}");
 

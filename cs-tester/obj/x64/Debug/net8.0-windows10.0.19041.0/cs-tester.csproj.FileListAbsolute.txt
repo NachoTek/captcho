@@ -1,1 +1,0 @@
-C:\Users\david.keymel\.gsd\projects\7c5637286af0\worktrees\M001-cb7uv2\cs-tester\obj\x64\Debug\net8.0-windows10.0.19041.0\cs-tester.csproj.AssemblyReference.cache
