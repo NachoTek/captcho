@@ -215,6 +215,46 @@ public sealed class CapturePreviewService
     }
 
     /// <summary>
+    /// Captures the full virtual desktop and returns the raw ContiguousBitmap.
+    /// Used by the region selection overlay to pre-capture the desktop before the user selects.
+    /// Returns null with an error message if capture fails.
+    /// </summary>
+    /// <returns>Tuple with the ContiguousBitmap (or null) and an error message (or null).</returns>
+    public async Task<(ContiguousBitmap? Bitmap, string? Error)> CaptureFullDesktopRawAsync()
+    {
+        var raw = await Task.Run(() => CaptureRaw("Full Desktop", SafeCaptureResult.CaptureAllMonitors));
+        return (raw.Bitmap, raw.Error);
+    }
+
+    /// <summary>
+    /// Converts an already-cropped bitmap into a displayable CapturePreviewResult.
+    /// Used after region selection to avoid re-capturing the screen.
+    /// Caches the cropped bitmap for export workflows.
+    /// </summary>
+    /// <param name="croppedBitmap">Pre-cropped region bitmap.</param>
+    /// <param name="region">The selected region rectangle for mode/dimension labels.</param>
+    /// <returns>A CapturePreviewResult ready for display.</returns>
+    public async Task<CapturePreviewResult> BuildResultFromCroppedBitmapAsync(
+        ContiguousBitmap croppedBitmap, Windows.Foundation.Rect region)
+    {
+        int x = (int)Math.Round(region.X);
+        int y = (int)Math.Round(region.Y);
+        string mode = $"Rectangular Region (X={x}, Y={y}, {croppedBitmap.Width}×{croppedBitmap.Height})";
+        string dimensions = $"{croppedBitmap.Width}×{croppedBitmap.Height}";
+
+        var raw = new RawCaptureResult
+        {
+            Mode = mode,
+            Dimensions = dimensions,
+            CaptureMs = 0,
+            Bitmap = croppedBitmap,
+            Error = null,
+        };
+
+        return await BuildDisplayResultAsync(raw);
+    }
+
+    /// <summary>
     /// Intermediate result from the native capture phase (runs on background thread).
     /// Contains either raw pixel data ready for display conversion, or an error.
     /// </summary>

@@ -1,16 +1,21 @@
 <!-- RegionOverlayWindow.xaml — Full-desktop overlay for rectangular region selection.
 
-Layout (covers entire virtual desktop, semi-transparent background):
+Layout (covers entire virtual desktop with pre-captured screenshot):
   ┌──────────────────────────────────────────────────────┐
-  │  Semi-transparent dark scrim                         │
+  │  Screenshot + dim scrim                              │
   │                                                      │
   │  ┌──────────────────────┐  ← Selection rectangle    │
-  │  │  Clear (no scrim)    │     with dashed border     │
+  │  │  Bright (no scrim)   │     with blue border       │
   │  └──────────────────────┘                            │
   │                                                      │
   │  [Instruction text at top]                           │
   │  [Status/dimensions at bottom]                       │
   └──────────────────────────────────────────────────────┘
+
+The overlay displays a pre-captured screenshot of the virtual desktop,
+dims it with a semi-transparent scrim, and lets the user drag a selection
+rectangle. The selected area is shown without the dim overlay so the user
+can see exactly what they're capturing.
 
 Input contract:
   - Drag to draw a selection rectangle
@@ -26,19 +31,29 @@ Input contract:
 
     <Canvas x:Name="RootCanvas">
 
-        <!-- Light tint over the entire desktop — transparent enough to see
-             content underneath while clearly indicating selection mode.
-             #30000000 = ~19% black opacity -->
+        <!-- Pre-captured screenshot of the virtual desktop.
+             Sized in code to fill the canvas in DIPs. -->
+        <Image x:Name="BackgroundImage"
+               Stretch="Fill"
+               IsHitTestVisible="False"/>
+
+        <!-- Dim scrim over the entire screenshot to indicate selection mode.
+             #40000000 = 25% black — dark enough to notice, light enough to
+             read content underneath. -->
         <Rectangle x:Name="ScrimRect"
-                   Fill="#30000000"
+                   Fill="#40000000"
                    IsHitTestVisible="False"/>
 
-        <!-- Selection rectangle: bright interior highlights the selected area,
-             dashed blue border provides clear boundary.
-             #18FFFFFF = subtle white tint so the selected area is visibly
-             brighter than the dimmed surroundings. -->
+        <!-- Clear window inside the selection — punches through the scrim
+             so the selected area shows the undimmed screenshot at full brightness. -->
+        <Rectangle x:Name="SelectionClearRect"
+                   Fill="White"
+                   Opacity="0"
+                   Visibility="Collapsed"
+                   IsHitTestVisible="False"/>
+
+        <!-- Selection rectangle border: dashed blue outline for clear boundary. -->
         <Rectangle x:Name="SelectionRect"
-                   Fill="#18FFFFFF"
                    Stroke="#4FC3F7"
                    StrokeThickness="2"
                    StrokeDashArray="6,3"

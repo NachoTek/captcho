@@ -1,8 +1,11 @@
 // RegionOverlayWindow.xaml.cs — Full-desktop overlay for rectangular region selection.
 //
-// Implements the spike overlay using geometry helpers from T01 (RegionSelection, CoordinateHelper).
-// Exposes ShowAndWaitAsync() which returns a nullable Rect:
-//   - Confirmed selection → Rect with virtual-desktop coordinates
+// Displays a pre-captured screenshot of the virtual desktop, dims it with a scrim,
+// and lets the user drag-select a region. The selected area is shown undimmed so the
+// user can see exactly what they're capturing.
+//
+// Exposes ShowAndWaitAsync() which returns a RegionSelectionResult:
+//   - Confirmed selection → ContiguousBitmap cropped from the pre-captured image
 //   - Cancelled or invalid → null
 //
 // Input contract:
@@ -11,9 +14,6 @@
 //   - Escape to cancel (always available)
 //   - Arrow keys: nudge selection 10px (1px with Shift held)
 //   - Alt+Arrow: resize selection from bottom-right anchor
-//
-// The overlay positions itself to cover the entire virtual desktop,
-// handling negative virtual origins (multi-monitor left/above primary).
 
 using System;
 using System.Runtime.InteropServices;
@@ -24,14 +24,27 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Foundation;
 using Windows.Graphics;
+using Respectacle.Capture;
 
 namespace Respectacle.UI;
 
 /// <summary>
+/// Result of a region selection: the cropped bitmap and its virtual-desktop coordinates.
+/// </summary>
+public sealed class RegionSelectionResult
+{
+    /// <summary>Cropped bitmap in virtual-desktop coordinates.</summary>
+    public ContiguousBitmap Bitmap { get; init; } = null!;
+    /// <summary>The region rectangle in virtual-desktop pixels.</summary>
+    public Rect Region { get; init; }
+}
+
+/// <summary>
 /// Full-desktop overlay window for rectangular region selection.
-/// Returns sanitized virtual-desktop coordinates or null on cancellation.
+/// Returns a cropped bitmap from a pre-captured screenshot, or null on cancellation.
 /// </summary>
 public sealed partial class RegionOverlayWindow : Window
 {
@@ -59,7 +72,10 @@ public sealed partial class RegionOverlayWindow : Window
     #endregion
 
     // ── Completion contract ──────────────────────────────────────────
-    private readonly TaskCompletionSource<Rect?> _tcs = new();
+    private readonly TaskCompletionSource<RegionSelectionResult?> _tcs = new();
+
+    // ── Pre-captured screenshot ──────────────────────────────────────
+    private readonly ContiguousBitmap _desktopCapture;
 
     // ── Selection state ──────────────────────────────────────────────
     private RegionSelection? _currentSelection;
@@ -84,17 +100,24 @@ public sealed partial class RegionOverlayWindow : Window
     private const int CoarseNudge = 10;
     private const int FineNudge = 1;
 
-    public RegionOverlayWindow()
+    /// <summary>
+    /// Creates the overlay with a pre-captured screenshot of the virtual desktop.
+    /// The screenshot is displayed as the background so the user can see what
+    /// they're selecting.
+    /// </summary>
+    /// <param name="desktopCapture">Full virtual desktop capture (all monitors stitched).</param>
+    public RegionOverlayWindow(ContiguousBitmap desktopCapture)
     {
+        _desktopCapture = desktopCapture ?? throw new ArgumentNullException(nameof(desktopCapture));
         InitializeComponent();
     }
 
     /// <summary>
     /// Shows the overlay covering the entire virtual desktop and waits
     /// for the user to confirm or cancel a rectangular selection.
-    /// Returns the selected region in virtual-desktop coordinates, or null.
+    /// Returns a cropped bitmap from the pre-captured screenshot, or null.
     /// </summary>
-    public Task<Rect?> ShowAndWaitAsync()
+    public Task<RegionSelectionResult?> ShowAndWaitAsync()
     {
         InitializeOverlay();
         return _tcs.Task;
@@ -165,7 +188,7 @@ public sealed partial class RegionOverlayWindow : Window
         this.Activate();
     }
 
-    private void OnRootLoaded(object sender, RoutedEventArgs e)
+    private async void OnRootLoaded(object sender, RoutedEventArgs e)
     {
         // Compute DPI scale from physical window size vs DIP canvas size.
         // AppWindow.Size is in physical pixels; RootCanvas.ActualWidth is in DIPs.
@@ -175,13 +198,22 @@ public sealed partial class RegionOverlayWindow : Window
             _dpiScale = _virtualDesktopWidth / canvasWidth;
         }
 
+        // Display the pre-captured screenshot as the background.
+        // Convert physical-pixel bitmap to DIP dimensions for the Image element.
+        double dipWidth = RootCanvas.ActualWidth > 0 ? RootCanvas.ActualWidth : _virtualDesktopWidth / _dpiScale;
+        double dipHeight = RootCanvas.ActualHeight > 0 ? RootCanvas.ActualHeight : _virtualDesktopHeight / _dpiScale;
+
+        BackgroundImage.Source = await SoftwareBitmapConverter.ToWriteableBitmapAsync(_desktopCapture);
+        BackgroundImage.Width = dipWidth;
+        BackgroundImage.Height = dipHeight;
+
         // Size the scrim to fill the entire canvas in DIPs
-        ScrimRect.Width = RootCanvas.ActualWidth;
-        ScrimRect.Height = RootCanvas.ActualHeight;
+        ScrimRect.Width = dipWidth;
+        ScrimRect.Height = dipHeight;
 
         PositionOverlayTexts();
 
-        // Activate and focus for keyboard input
+        // Focus for keyboard input
         RootCanvas.Focus(FocusState.Programmatic);
     }
 
@@ -220,6 +252,7 @@ public sealed partial class RegionOverlayWindow : Window
 
             // Hide the selection rect until we have a minimum-size region
             SelectionRect.Visibility = Visibility.Collapsed;
+            SelectionClearRect.Visibility = Visibility.Collapsed;
 
             e.Handled = true;
         }
@@ -252,6 +285,7 @@ public sealed partial class RegionOverlayWindow : Window
         {
             _currentSelection = null;
             SelectionRect.Visibility = Visibility.Collapsed;
+            SelectionClearRect.Visibility = Visibility.Collapsed;
         }
 
         UpdateStatusText();
@@ -268,6 +302,7 @@ public sealed partial class RegionOverlayWindow : Window
         if (_currentSelection == null || !_currentSelection.MeetsMinimumSize)
         {
             SelectionRect.Visibility = Visibility.Collapsed;
+            SelectionClearRect.Visibility = Visibility.Collapsed;
             UpdateStatusText("Selection too small — drag again or press Escape to cancel");
         }
 
@@ -363,11 +398,35 @@ public sealed partial class RegionOverlayWindow : Window
             return;
         }
 
-        var result = new Rect(
-            _currentSelection.X,
-            _currentSelection.Y,
-            _currentSelection.Width,
-            _currentSelection.Height);
+        // Crop from the pre-captured bitmap using virtual-desktop coordinates.
+        // The desktop capture covers the entire virtual desktop, so we offset
+        // from virtual-desktop origin to bitmap-local coordinates.
+        int cropX = _currentSelection.X - _virtualDesktopX;
+        int cropY = _currentSelection.Y - _virtualDesktopY;
+        int cropW = _currentSelection.Width;
+        int cropH = _currentSelection.Height;
+
+        // Bounds-check against the pre-captured bitmap dimensions
+        cropX = Math.Max(0, Math.Min(cropX, _desktopCapture.Width - 1));
+        cropY = Math.Max(0, Math.Min(cropY, _desktopCapture.Height - 1));
+        cropW = Math.Min(cropW, _desktopCapture.Width - cropX);
+        cropH = Math.Min(cropH, _desktopCapture.Height - cropY);
+
+        if (cropW <= 0 || cropH <= 0)
+        {
+            _tcs.TrySetResult(null);
+            CloseOverlay();
+            return;
+        }
+
+        // Extract the cropped region from the contiguous BGRA data
+        var croppedBitmap = CropBitmap(_desktopCapture, cropX, cropY, cropW, cropH);
+
+        var result = new RegionSelectionResult
+        {
+            Bitmap = croppedBitmap,
+            Region = new Rect(_currentSelection.X, _currentSelection.Y, cropW, cropH),
+        };
 
         _tcs.TrySetResult(result);
         CloseOverlay();
@@ -379,6 +438,28 @@ public sealed partial class RegionOverlayWindow : Window
         CloseOverlay();
     }
 
+    // ── Bitmap cropping ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Crops a rectangular region from a contiguous BGRA bitmap.
+    /// Returns a new ContiguousBitmap containing only the cropped pixels.
+    /// </summary>
+    private static ContiguousBitmap CropBitmap(ContiguousBitmap source, int x, int y, int width, int height)
+    {
+        int srcStride = source.Stride; // width * 4
+        int dstStride = width * 4;
+        byte[] croppedPixels = new byte[dstStride * height];
+
+        for (int row = 0; row < height; row++)
+        {
+            int srcOffset = (y + row) * srcStride + x * 4;
+            int dstOffset = row * dstStride;
+            Array.Copy(source.Pixels, srcOffset, croppedPixels, dstOffset, dstStride);
+        }
+
+        return new ContiguousBitmap(width, height, dstStride, croppedPixels);
+    }
+
     // ── Visual updates ───────────────────────────────────────────────
 
     private void UpdateSelectionVisual()
@@ -386,6 +467,7 @@ public sealed partial class RegionOverlayWindow : Window
         if (_currentSelection == null)
         {
             SelectionRect.Visibility = Visibility.Collapsed;
+            SelectionClearRect.Visibility = Visibility.Collapsed;
             return;
         }
 
@@ -398,6 +480,15 @@ public sealed partial class RegionOverlayWindow : Window
         var (dipX, dipY) = PhysicalToDip(ox, oy);
         var (dipW, dipH) = PhysicalToDip(_currentSelection.Width, _currentSelection.Height);
 
+        // Clear rect: punches through the scrim to show the undimmed screenshot.
+        // Positioned between the scrim and the border rect in the visual tree.
+        SelectionClearRect.Visibility = Visibility.Visible;
+        Canvas.SetLeft(SelectionClearRect, dipX);
+        Canvas.SetTop(SelectionClearRect, dipY);
+        SelectionClearRect.Width = dipW;
+        SelectionClearRect.Height = dipH;
+
+        // Border rect: dashed blue outline for the selection boundary.
         SelectionRect.Visibility = Visibility.Visible;
         Canvas.SetLeft(SelectionRect, dipX);
         Canvas.SetTop(SelectionRect, dipY);
