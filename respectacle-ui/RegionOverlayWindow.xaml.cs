@@ -1,19 +1,18 @@
 // RegionOverlayWindow.xaml.cs — Full-desktop overlay for rectangular region selection.
 //
-// Displays a pre-captured screenshot of the virtual desktop, dims it with a scrim,
-// and lets the user drag-select a region. The selected area is shown undimmed so the
-// user can see exactly what they're capturing.
+// Uses DWM composition (DwmExtendFrameIntoClientArea) to make the window truly
+// transparent, so the live desktop is visible through it. A semi-transparent scrim
+// dims the desktop to indicate selection mode, and the selection rectangle has no
+// scrim so the selected area appears at full brightness.
+//
+// Accepts a pre-captured ContiguousBitmap of the full desktop for accurate cropping
+// when the user confirms the selection. This avoids re-capturing (which would include
+// the overlay) and ensures the cropped region matches what was on screen when the
+// user initiated the selection.
 //
 // Exposes ShowAndWaitAsync() which returns a RegionSelectionResult:
 //   - Confirmed selection → ContiguousBitmap cropped from the pre-captured image
 //   - Cancelled or invalid → null
-//
-// Input contract:
-//   - Pointer drag to draw selection rectangle
-//   - Enter or double-click to confirm
-//   - Escape to cancel (always available)
-//   - Arrow keys: nudge selection 10px (1px with Shift held)
-//   - Alt+Arrow: resize selection from bottom-right anchor
 
 using System;
 using System.Runtime.InteropServices;
@@ -24,10 +23,10 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
-using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Foundation;
 using Windows.Graphics;
 using Respectacle.Capture;
+using WinRT.Interop;
 
 namespace Respectacle.UI;
 
@@ -43,17 +42,24 @@ public sealed class RegionSelectionResult
 }
 
 /// <summary>
-/// Full-desktop overlay window for rectangular region selection.
+/// Full-desktop transparent overlay window for rectangular region selection.
+/// Uses DWM composition to show the live desktop through the window.
 /// Returns a cropped bitmap from a pre-captured screenshot, or null on cancellation.
 /// </summary>
 public sealed partial class RegionOverlayWindow : Window
 {
-    #region Win32 P/Invoke for virtual-desktop bounds
+    #region Win32 P/Invoke
 
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT
     {
         public int left, top, right, bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MARGINS
+    {
+        public int cxLeftWidth, cxRightWidth, cyTopHeight, cyBottomHeight;
     }
 
     private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, IntPtr lprcMonitor, IntPtr dwData);
@@ -64,17 +70,31 @@ public sealed partial class RegionOverlayWindow : Window
     [DllImport("user32.dll")]
     private static extern int GetSystemMetrics(int nIndex);
 
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")]
+    private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")]
+    private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmExtendFrameIntoClientArea(IntPtr hWnd, ref MARGINS pMarInset);
+
     private const int SM_XVIRTUALSCREEN = 76;
     private const int SM_YVIRTUALSCREEN = 77;
     private const int SM_CXVIRTUALSCREEN = 78;
     private const int SM_CYVIRTUALSCREEN = 79;
+
+    private const int GWL_EXSTYLE = -20;
+    private const int WS_EX_LAYERED = 0x00080000;
+    private const int WS_EX_TRANSPARENT = 0x00000020;
+    private const int WS_EX_NOREDIRECTIONBITMAP = 0x00200000;
 
     #endregion
 
     // ── Completion contract ──────────────────────────────────────────
     private readonly TaskCompletionSource<RegionSelectionResult?> _tcs = new();
 
-    // ── Pre-captured screenshot ──────────────────────────────────────
+    // ── Pre-captured screenshot (for cropping on confirm) ────────────
     private readonly ContiguousBitmap _desktopCapture;
 
     // ── Selection state ──────────────────────────────────────────────
@@ -83,17 +103,13 @@ public sealed partial class RegionOverlayWindow : Window
     private int _dragStartVirtualX;
     private int _dragStartVirtualY;
 
-    // ── Virtual desktop bounds in physical pixels (set during initialization) ──
+    // ── Virtual desktop bounds in physical pixels ────────────────────
     private int _virtualDesktopX;
     private int _virtualDesktopY;
     private int _virtualDesktopWidth;
     private int _virtualDesktopHeight;
 
     // ── DPI scale factor (physical pixels per DIP) ───────────────────
-    // The overlay window is sized in physical pixels via AppWindow.Resize,
-    // but WinUI XAML layout and pointer events use DIPs. This factor bridges
-    // the two coordinate systems so that selection geometry is always computed
-    // in physical (virtual-desktop) pixels while visual placement uses DIPs.
     private double _dpiScale = 1.0;
 
     // ── Constants ────────────────────────────────────────────────────
@@ -101,11 +117,10 @@ public sealed partial class RegionOverlayWindow : Window
     private const int FineNudge = 1;
 
     /// <summary>
-    /// Creates the overlay with a pre-captured screenshot of the virtual desktop.
-    /// The screenshot is displayed as the background so the user can see what
-    /// they're selecting.
+    /// Creates the overlay with a pre-captured screenshot for accurate cropping.
+    /// The live desktop is visible through the transparent window.
     /// </summary>
-    /// <param name="desktopCapture">Full virtual desktop capture (all monitors stitched).</param>
+    /// <param name="desktopCapture">Full virtual desktop capture (for cropping).</param>
     public RegionOverlayWindow(ContiguousBitmap desktopCapture)
     {
         _desktopCapture = desktopCapture ?? throw new ArgumentNullException(nameof(desktopCapture));
@@ -113,8 +128,7 @@ public sealed partial class RegionOverlayWindow : Window
     }
 
     /// <summary>
-    /// Shows the overlay covering the entire virtual desktop and waits
-    /// for the user to confirm or cancel a rectangular selection.
+    /// Shows the transparent overlay and waits for the user to confirm or cancel.
     /// Returns a cropped bitmap from the pre-captured screenshot, or null.
     /// </summary>
     public Task<RegionSelectionResult?> ShowAndWaitAsync()
@@ -123,10 +137,6 @@ public sealed partial class RegionOverlayWindow : Window
         return _tcs.Task;
     }
 
-    /// <summary>
-    /// Sets up the overlay window: computes virtual-desktop bounds,
-    /// positions and styles the window, hooks input events.
-    /// </summary>
     private void InitializeOverlay()
     {
         // Compute virtual-desktop bounds via Win32
@@ -135,17 +145,15 @@ public sealed partial class RegionOverlayWindow : Window
         _virtualDesktopWidth = GetSystemMetrics(SM_CXVIRTUALSCREEN);
         _virtualDesktopHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
 
-        // Safety: if we can't get valid bounds, cancel immediately
         if (_virtualDesktopWidth <= 0 || _virtualDesktopHeight <= 0)
         {
             _tcs.TrySetResult(null);
             return;
         }
 
-        // Position the window to cover the entire virtual desktop
         var appWindow = this.AppWindow;
 
-        // Use Presenter to go borderless, always-on-top, no taskbar
+        // Borderless, always-on-top presenter
         var presenter = appWindow.Presenter as OverlappedPresenter;
         if (presenter != null)
         {
@@ -156,16 +164,18 @@ public sealed partial class RegionOverlayWindow : Window
             presenter.IsMaximizable = false;
         }
 
-        // Position using virtual-desktop coordinates (handles negative origins)
+        // Position to cover the entire virtual desktop
         appWindow.Move(new PointInt32(_virtualDesktopX, _virtualDesktopY));
         appWindow.Resize(new SizeInt32(_virtualDesktopWidth, _virtualDesktopHeight));
 
-        // Compute DPI scale factor: AppWindow uses physical pixels, but XAML
-        // pointer events and layout use DIPs. On a 150% scaled monitor,
-        // _dpiScale = 1.5, meaning 1 DIP = 1.5 physical pixels.
-        // We derive this from the ratio of the physical window size to the
-        // XAML canvas size, which avoids per-monitor DPI API complexity.
-        _dpiScale = 1.0; // Will be updated in OnRootLoaded once canvas measures
+        _dpiScale = 1.0;
+
+        // Make the window truly transparent via DWM composition.
+        // DwmExtendFrameIntoClientArea with negative margins extends the DWM frame
+        // over the entire client area. Combined with WS_EX_LAYERED, this makes
+        // transparent regions of the XAML visual tree show the live desktop behind.
+        var hwnd = WindowNative.GetWindowHandle(this);
+        EnableDwmTransparency(hwnd);
 
         // Hook input events
         RootCanvas.PointerPressed += OnPointerPressed;
@@ -174,52 +184,58 @@ public sealed partial class RegionOverlayWindow : Window
         RootCanvas.DoubleTapped += OnDoubleTapped;
         RootCanvas.KeyDown += OnKeyDown;
 
-        // Ensure the canvas can receive keyboard focus
         RootCanvas.IsTabStop = true;
         RootCanvas.AllowFocusOnInteraction = true;
 
-        // Position instruction and status text when the XAML tree loads
         this.AppWindow.Changed += OnAppWindowChanged;
         RootCanvas.Loaded += OnRootLoaded;
         this.Closed += OnClosed;
 
-        // Show the overlay window. WinUI 3 windows are invisible until Activate()
-        // is called — without this the overlay never appears on screen.
         this.Activate();
     }
 
-    private async void OnRootLoaded(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Enables live-desktop transparency by combining DWM extended frame with
+    /// layered window style. This makes transparent XAML regions show the desktop.
+    /// </summary>
+    private static void EnableDwmTransparency(IntPtr hwnd)
     {
-        // Compute DPI scale from physical window size vs DIP canvas size.
-        // AppWindow.Size is in physical pixels; RootCanvas.ActualWidth is in DIPs.
+        // Add WS_EX_LAYERED to enable alpha blending with the desktop
+        var exStyle = GetWindowLongPtr64(hwnd, GWL_EXSTYLE);
+        SetWindowLongPtr64(hwnd, GWL_EXSTYLE, (IntPtr)((long)exStyle | WS_EX_LAYERED));
+
+        // Extend DWM frame over entire client area with negative margins.
+        // This is the standard technique for transparent/glass windows on Windows 10/11.
+        var margins = new MARGINS
+        {
+            cxLeftWidth = -1,
+            cxRightWidth = -1,
+            cyTopHeight = -1,
+            cyBottomHeight = -1
+        };
+        DwmExtendFrameIntoClientArea(hwnd, ref margins);
+    }
+
+    private void OnRootLoaded(object sender, RoutedEventArgs e)
+    {
         double canvasWidth = RootCanvas.ActualWidth;
         if (canvasWidth > 0)
         {
             _dpiScale = _virtualDesktopWidth / canvasWidth;
         }
 
-        // Display the pre-captured screenshot as the background.
-        // Convert physical-pixel bitmap to DIP dimensions for the Image element.
+        // Size the scrim to fill the entire canvas in DIPs
         double dipWidth = RootCanvas.ActualWidth > 0 ? RootCanvas.ActualWidth : _virtualDesktopWidth / _dpiScale;
         double dipHeight = RootCanvas.ActualHeight > 0 ? RootCanvas.ActualHeight : _virtualDesktopHeight / _dpiScale;
-
-        BackgroundImage.Source = await SoftwareBitmapConverter.ToWriteableBitmapAsync(_desktopCapture);
-        BackgroundImage.Width = dipWidth;
-        BackgroundImage.Height = dipHeight;
-
-        // Size the scrim to fill the entire canvas in DIPs
         ScrimRect.Width = dipWidth;
         ScrimRect.Height = dipHeight;
 
         PositionOverlayTexts();
-
-        // Focus for keyboard input
         RootCanvas.Focus(FocusState.Programmatic);
     }
 
     private void OnAppWindowChanged(AppWindow sender, AppWindowChangedEventArgs args)
     {
-        // Position texts once the window is visible
         if (args.DidVisibilityChange && sender.IsVisible)
         {
             PositionOverlayTexts();
@@ -229,7 +245,6 @@ public sealed partial class RegionOverlayWindow : Window
 
     private void OnClosed(object sender, WindowEventArgs args)
     {
-        // Ensure the TCS is resolved if the window closes unexpectedly
         _tcs.TrySetResult(null);
         Cleanup();
     }
@@ -241,7 +256,6 @@ public sealed partial class RegionOverlayWindow : Window
         if (e.GetCurrentPoint(RootCanvas).Properties.IsLeftButtonPressed)
         {
             var position = e.GetCurrentPoint(RootCanvas).Position;
-            // Convert DIPs to physical pixels before coordinate math
             var (px, py) = DipToPhysical(position.X, position.Y);
             var (vx, vy) = CoordinateHelper.OverlayToVirtual(px, py, _virtualDesktopX, _virtualDesktopY);
 
@@ -250,9 +264,7 @@ public sealed partial class RegionOverlayWindow : Window
             _isDragging = true;
             _currentSelection = null;
 
-            // Hide the selection rect until we have a minimum-size region
             SelectionRect.Visibility = Visibility.Collapsed;
-            SelectionClearRect.Visibility = Visibility.Collapsed;
 
             e.Handled = true;
         }
@@ -263,15 +275,10 @@ public sealed partial class RegionOverlayWindow : Window
         if (!_isDragging) return;
 
         var position = e.GetCurrentPoint(RootCanvas).Position;
-        // Convert DIPs to physical pixels before coordinate math
         var (px, py) = DipToPhysical(position.X, position.Y);
         var (vx, vy) = CoordinateHelper.OverlayToVirtual(px, py, _virtualDesktopX, _virtualDesktopY);
 
-        // Use T01 helper to normalize drag points (handles reversed drags)
-        var raw = RegionSelection.FromDragPoints(
-            _dragStartVirtualX, _dragStartVirtualY, vx, vy);
-
-        // Clamp to virtual-desktop bounds
+        var raw = RegionSelection.FromDragPoints(_dragStartVirtualX, _dragStartVirtualY, vx, vy);
         var clamped = raw.ClampToBounds(
             _virtualDesktopX, _virtualDesktopY,
             _virtualDesktopWidth, _virtualDesktopHeight);
@@ -285,7 +292,6 @@ public sealed partial class RegionOverlayWindow : Window
         {
             _currentSelection = null;
             SelectionRect.Visibility = Visibility.Collapsed;
-            SelectionClearRect.Visibility = Visibility.Collapsed;
         }
 
         UpdateStatusText();
@@ -295,14 +301,11 @@ public sealed partial class RegionOverlayWindow : Window
     private void OnPointerReleased(object sender, PointerRoutedEventArgs e)
     {
         if (!_isDragging) return;
-
         _isDragging = false;
 
-        // Keep current selection visible if valid; otherwise hide
         if (_currentSelection == null || !_currentSelection.MeetsMinimumSize)
         {
             SelectionRect.Visibility = Visibility.Collapsed;
-            SelectionClearRect.Visibility = Visibility.Collapsed;
             UpdateStatusText("Selection too small — drag again or press Escape to cancel");
         }
 
@@ -349,8 +352,6 @@ public sealed partial class RegionOverlayWindow : Window
         if (_currentSelection == null) return;
 
         int delta = hasShift ? FineNudge : CoarseNudge;
-
-        // Compute direction deltas
         int dx = 0, dy = 0;
         if (key == Windows.System.VirtualKey.Left) dx = -delta;
         if (key == Windows.System.VirtualKey.Right) dx = delta;
@@ -359,11 +360,9 @@ public sealed partial class RegionOverlayWindow : Window
 
         if (hasAlt)
         {
-            // Alt+Arrow: resize from bottom-right anchor
             var resized = _currentSelection.Resize(dx, dy, "tl",
                 _virtualDesktopX, _virtualDesktopY,
                 _virtualDesktopWidth, _virtualDesktopHeight);
-
             if (resized != null)
             {
                 _currentSelection = resized;
@@ -373,11 +372,9 @@ public sealed partial class RegionOverlayWindow : Window
         }
         else
         {
-            // Arrow/Shift+Arrow: move selection
             var moved = _currentSelection.Move(dx, dy,
                 _virtualDesktopX, _virtualDesktopY,
                 _virtualDesktopWidth, _virtualDesktopHeight);
-
             if (moved != null)
             {
                 _currentSelection = moved;
@@ -393,20 +390,16 @@ public sealed partial class RegionOverlayWindow : Window
     {
         if (_currentSelection == null || !_currentSelection.MeetsMinimumSize)
         {
-            // No valid selection — don't close, just update status
             UpdateStatusText("No valid selection — drag a region first, then press Enter");
             return;
         }
 
-        // Crop from the pre-captured bitmap using virtual-desktop coordinates.
-        // The desktop capture covers the entire virtual desktop, so we offset
-        // from virtual-desktop origin to bitmap-local coordinates.
+        // Crop from pre-captured bitmap using virtual-desktop coordinates
         int cropX = _currentSelection.X - _virtualDesktopX;
         int cropY = _currentSelection.Y - _virtualDesktopY;
         int cropW = _currentSelection.Width;
         int cropH = _currentSelection.Height;
 
-        // Bounds-check against the pre-captured bitmap dimensions
         cropX = Math.Max(0, Math.Min(cropX, _desktopCapture.Width - 1));
         cropY = Math.Max(0, Math.Min(cropY, _desktopCapture.Height - 1));
         cropW = Math.Min(cropW, _desktopCapture.Width - cropX);
@@ -419,7 +412,6 @@ public sealed partial class RegionOverlayWindow : Window
             return;
         }
 
-        // Extract the cropped region from the contiguous BGRA data
         var croppedBitmap = CropBitmap(_desktopCapture, cropX, cropY, cropW, cropH);
 
         var result = new RegionSelectionResult
@@ -440,13 +432,9 @@ public sealed partial class RegionOverlayWindow : Window
 
     // ── Bitmap cropping ──────────────────────────────────────────────
 
-    /// <summary>
-    /// Crops a rectangular region from a contiguous BGRA bitmap.
-    /// Returns a new ContiguousBitmap containing only the cropped pixels.
-    /// </summary>
     private static ContiguousBitmap CropBitmap(ContiguousBitmap source, int x, int y, int width, int height)
     {
-        int srcStride = source.Stride; // width * 4
+        int srcStride = source.Stride;
         int dstStride = width * 4;
         byte[] croppedPixels = new byte[dstStride * height];
 
@@ -467,28 +455,16 @@ public sealed partial class RegionOverlayWindow : Window
         if (_currentSelection == null)
         {
             SelectionRect.Visibility = Visibility.Collapsed;
-            SelectionClearRect.Visibility = Visibility.Collapsed;
             return;
         }
 
-        // Convert virtual-desktop coordinates (physical pixels) to overlay-relative physical pixels
         var (ox, oy) = CoordinateHelper.VirtualToOverlay(
             _currentSelection.X, _currentSelection.Y,
             _virtualDesktopX, _virtualDesktopY);
 
-        // Convert physical pixels to DIPs for XAML Canvas layout
         var (dipX, dipY) = PhysicalToDip(ox, oy);
         var (dipW, dipH) = PhysicalToDip(_currentSelection.Width, _currentSelection.Height);
 
-        // Clear rect: punches through the scrim to show the undimmed screenshot.
-        // Positioned between the scrim and the border rect in the visual tree.
-        SelectionClearRect.Visibility = Visibility.Visible;
-        Canvas.SetLeft(SelectionClearRect, dipX);
-        Canvas.SetTop(SelectionClearRect, dipY);
-        SelectionClearRect.Width = dipW;
-        SelectionClearRect.Height = dipH;
-
-        // Border rect: dashed blue outline for the selection boundary.
         SelectionRect.Visibility = Visibility.Visible;
         Canvas.SetLeft(SelectionRect, dipX);
         Canvas.SetTop(SelectionRect, dipY);
@@ -514,7 +490,6 @@ public sealed partial class RegionOverlayWindow : Window
 
     private void PositionOverlayTexts()
     {
-        // Use DIP dimensions for positioning XAML elements
         double canvasWidth = RootCanvas.ActualWidth > 0
             ? RootCanvas.ActualWidth
             : _virtualDesktopWidth / _dpiScale;
@@ -522,14 +497,12 @@ public sealed partial class RegionOverlayWindow : Window
             ? RootCanvas.ActualHeight
             : _virtualDesktopHeight / _dpiScale;
 
-        // Center instruction text at the top
         double instructionWidth = InstructionBorder.ActualWidth > 0
             ? InstructionBorder.ActualWidth
             : 700;
         Canvas.SetLeft(InstructionBorder, (canvasWidth - instructionWidth) / 2.0);
         Canvas.SetTop(InstructionBorder, 20);
 
-        // Center status text at the bottom
         double statusWidth = StatusBorder.ActualWidth > 0
             ? StatusBorder.ActualWidth
             : 300;
@@ -542,11 +515,6 @@ public sealed partial class RegionOverlayWindow : Window
 
     // ── DPI coordinate helpers ───────────────────────────────────────
 
-    /// <summary>
-    /// Converts DIP (device-independent pixel) coordinates to physical pixels.
-    /// Pointer events report positions in DIPs; virtual-desktop coordinates
-    /// and RegionSelection math use physical pixels.
-    /// </summary>
     private (int X, int Y) DipToPhysical(double dipX, double dipY)
     {
         return (
@@ -555,10 +523,6 @@ public sealed partial class RegionOverlayWindow : Window
         );
     }
 
-    /// <summary>
-    /// Converts physical pixel dimensions to DIPs for XAML layout.
-    /// Canvas.SetLeft/SetTop and Width/Height use DIPs.
-    /// </summary>
     private (double X, double Y) PhysicalToDip(int physX, int physY)
     {
         return (physX / _dpiScale, physY / _dpiScale);

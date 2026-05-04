@@ -1,21 +1,20 @@
 <!-- RegionOverlayWindow.xaml — Full-desktop overlay for rectangular region selection.
 
-Layout (covers entire virtual desktop with pre-captured screenshot):
+Layout (transparent window over live desktop):
   ┌──────────────────────────────────────────────────────┐
-  │  Screenshot + dim scrim                              │
+  │  Transparent window + dim scrim (live desktop below) │
   │                                                      │
   │  ┌──────────────────────┐  ← Selection rectangle    │
-  │  │  Bright (no scrim)   │     with blue border       │
+  │  │  Clear (no scrim)    │     with blue border       │
   │  └──────────────────────┘                            │
   │                                                      │
   │  [Instruction text at top]                           │
   │  [Status/dimensions at bottom]                       │
   └──────────────────────────────────────────────────────┘
 
-The overlay displays a pre-captured screenshot of the virtual desktop,
-dims it with a semi-transparent scrim, and lets the user drag a selection
-rectangle. The selected area is shown without the dim overlay so the user
-can see exactly what they're capturing.
+The window is made transparent via DWM composition so the live desktop
+is visible. A semi-transparent scrim dims the desktop to indicate
+selection mode. The selected area punches through the scrim.
 
 Input contract:
   - Drag to draw a selection rectangle
@@ -32,25 +31,11 @@ Input contract:
     <Canvas x:Name="RootCanvas"
             Background="Transparent">
 
-        <!-- Pre-captured screenshot of the virtual desktop.
-             Sized in code to fill the canvas in DIPs. -->
-        <Image x:Name="BackgroundImage"
-               Stretch="Fill"
-               IsHitTestVisible="False"/>
-
-        <!-- Dim scrim over the entire screenshot to indicate selection mode.
-             #40000000 = 25% black — dark enough to notice, light enough to
-             read content underneath. -->
+        <!-- Dim scrim over the transparent window to indicate selection mode.
+             #40000000 = 25% black — the live desktop is visible through both
+             the DWM-transparent window and this semi-transparent scrim. -->
         <Rectangle x:Name="ScrimRect"
                    Fill="#40000000"
-                   IsHitTestVisible="False"/>
-
-        <!-- Clear window inside the selection — punches through the scrim
-             so the selected area shows the undimmed screenshot at full brightness. -->
-        <Rectangle x:Name="SelectionClearRect"
-                   Fill="White"
-                   Opacity="0"
-                   Visibility="Collapsed"
                    IsHitTestVisible="False"/>
 
         <!-- Selection rectangle border: dashed blue outline for clear boundary. -->
