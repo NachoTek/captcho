@@ -211,13 +211,15 @@ public sealed partial class RegionOverlayWindow : IDisposable
             return _tcs.Task;
         }
 
-        // Win32 windows need STA. Run the overlay on a background STA thread.
-        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+        // Win32 windows need a dedicated STA thread — ThreadPool threads are MTA
+        // and SetApartmentState silently fails on them.
+        var thread = new System.Threading.Thread(() =>
         {
-            System.Threading.Thread.CurrentThread.SetApartmentState(
-                System.Threading.ApartmentState.STA);
             RunMessageLoop();
         });
+        thread.SetApartmentState(System.Threading.ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
 
         return _tcs.Task;
     }
@@ -226,6 +228,7 @@ public sealed partial class RegionOverlayWindow : IDisposable
     {
         try
         {
+            _current = this; // Set before any messages arrive
             CreateOverlay();
             ShowWindow(_hwnd, SW_SHOW);
             Render();
