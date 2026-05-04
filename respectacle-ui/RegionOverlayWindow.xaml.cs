@@ -177,10 +177,17 @@ public sealed partial class RegionOverlayWindow : Window
         double dipWidth = RootCanvas.ActualWidth > 0 ? RootCanvas.ActualWidth : _virtualDesktopWidth / _dpiScale;
         double dipHeight = RootCanvas.ActualHeight > 0 ? RootCanvas.ActualHeight : _virtualDesktopHeight / _dpiScale;
 
-        // Display the pre-captured screenshot as the overlay background
-        BackgroundImage.Source = await SoftwareBitmapConverter.ToWriteableBitmapAsync(_desktopCapture);
+        // Display the pre-captured screenshot as the overlay background.
+        // Both the dimmed background and the bright selection area use the same source.
+        var bitmapSource = await SoftwareBitmapConverter.ToWriteableBitmapAsync(_desktopCapture);
+
+        BackgroundImage.Source = bitmapSource;
         BackgroundImage.Width = dipWidth;
         BackgroundImage.Height = dipHeight;
+
+        SelectionImage.Source = bitmapSource;
+        SelectionImage.Width = dipWidth;
+        SelectionImage.Height = dipHeight;
 
         // Size the scrim to fill the canvas
         ScrimRect.Width = dipWidth;
@@ -221,6 +228,7 @@ public sealed partial class RegionOverlayWindow : Window
             _currentSelection = null;
 
             SelectionRect.Visibility = Visibility.Collapsed;
+            SelectionImage.Visibility = Visibility.Collapsed;
 
             e.Handled = true;
         }
@@ -248,6 +256,7 @@ public sealed partial class RegionOverlayWindow : Window
         {
             _currentSelection = null;
             SelectionRect.Visibility = Visibility.Collapsed;
+            SelectionImage.Visibility = Visibility.Collapsed;
         }
 
         UpdateStatusText();
@@ -262,6 +271,7 @@ public sealed partial class RegionOverlayWindow : Window
         if (_currentSelection == null || !_currentSelection.MeetsMinimumSize)
         {
             SelectionRect.Visibility = Visibility.Collapsed;
+            SelectionImage.Visibility = Visibility.Collapsed;
             UpdateStatusText("Selection too small — drag again or press Escape to cancel");
         }
 
@@ -411,6 +421,7 @@ public sealed partial class RegionOverlayWindow : Window
         if (_currentSelection == null)
         {
             SelectionRect.Visibility = Visibility.Collapsed;
+            SelectionImage.Visibility = Visibility.Collapsed;
             return;
         }
 
@@ -421,6 +432,16 @@ public sealed partial class RegionOverlayWindow : Window
         var (dipX, dipY) = PhysicalToDip(ox, oy);
         var (dipW, dipH) = PhysicalToDip(_currentSelection.Width, _currentSelection.Height);
 
+        // Show the undimmed screenshot clipped to the selection area.
+        // Positioned at the same offset as the full background, but only
+        // visible within the selection rect — creating the "bright window" effect.
+        SelectionImage.Visibility = Visibility.Visible;
+        Canvas.SetLeft(SelectionImage, dipX);
+        Canvas.SetTop(SelectionImage, dipY);
+        SelectionImage.Width = dipW;
+        SelectionImage.Height = dipH;
+
+        // Selection border on top
         SelectionRect.Visibility = Visibility.Visible;
         Canvas.SetLeft(SelectionRect, dipX);
         Canvas.SetTop(SelectionRect, dipY);

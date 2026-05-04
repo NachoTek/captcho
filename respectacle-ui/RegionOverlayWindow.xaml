@@ -1,21 +1,14 @@
 <!-- RegionOverlayWindow.xaml — Full-desktop overlay for rectangular region selection.
 
-Layout (screenshot background with dim scrim):
-  ┌──────────────────────────────────────────────────────┐
-  │  Screenshot + dim scrim                              │
-  │                                                      │
-  │  ┌──────────────────────┐  ← Selection rectangle    │
-  │  │  Clear (no scrim)    │     with blue border       │
-  │  └──────────────────────┘                            │
-  │                                                      │
-  │  [Instruction text at top]                           │
-  │  [Status/dimensions at bottom]                       │
-  └──────────────────────────────────────────────────────┘
+Layer stack (bottom to top):
+  1. Screenshot at full brightness
+  2. Dim scrim over everything (19% black)
+  3. Undimmed screenshot clipped to selection area (punches through scrim)
+  4. Selection border (dashed blue)
+  5. Instruction/status text overlays
 
-The overlay captures the screen at the moment the user clicks the region
-button, displays that screenshot with a light dim scrim, and lets the user
-drag-select a region. This is the same approach used by Snipping Tool,
-Greenshot, and ShareX.
+This creates the same visual effect as Windows Snipping Tool:
+the desktop is dimmed, and the selected region appears at full brightness.
 
 Input contract:
   - Drag to draw a selection rectangle
@@ -32,21 +25,26 @@ Input contract:
     <Canvas x:Name="RootCanvas"
             Background="Transparent">
 
-        <!-- Pre-captured screenshot of the virtual desktop displayed as background.
-             The user sees exactly what was on screen when they clicked the region
-             button — same behavior as Windows Snipping Tool and Greenshot. -->
+        <!-- Layer 1: Pre-captured screenshot at full brightness (bottom) -->
         <Image x:Name="BackgroundImage"
                Stretch="Fill"
                IsHitTestVisible="False"/>
 
-        <!-- Dim scrim over the screenshot to indicate selection mode.
-             #30000000 = 19% black — light enough to read content clearly. -->
+        <!-- Layer 2: Dim scrim over the entire screenshot.
+             #40000000 = 25% black — same dim level as Snipping Tool. -->
         <Rectangle x:Name="ScrimRect"
-                   Fill="#30000000"
+                   Fill="#40000000"
                    IsHitTestVisible="False"/>
 
-        <!-- Selection rectangle: dashed blue border, clear interior shows
-             the undimmed screenshot underneath. -->
+        <!-- Layer 3: Undimmed screenshot clipped to selection area.
+             This sits on top of the scrim, creating a "bright window"
+             that shows the original screenshot at full brightness. -->
+        <Image x:Name="SelectionImage"
+               Stretch="Fill"
+               Visibility="Collapsed"
+               IsHitTestVisible="False"/>
+
+        <!-- Layer 4: Selection border (dashed blue outline) -->
         <Rectangle x:Name="SelectionRect"
                    Stroke="#4FC3F7"
                    StrokeThickness="2"
@@ -54,7 +52,7 @@ Input contract:
                    Visibility="Collapsed"
                    IsHitTestVisible="False"/>
 
-        <!-- Instruction text — top-center -->
+        <!-- Layer 5: Instruction text — top-center -->
         <Border x:Name="InstructionBorder"
                 Canvas.ZIndex="10"
                 Background="#CC000000"
@@ -67,7 +65,7 @@ Input contract:
                        TextAlignment="Center"/>
         </Border>
 
-        <!-- Status text — bottom-center -->
+        <!-- Layer 5: Status text — bottom-center -->
         <Border x:Name="StatusBorder"
                 Canvas.ZIndex="10"
                 Background="#CC000000"
