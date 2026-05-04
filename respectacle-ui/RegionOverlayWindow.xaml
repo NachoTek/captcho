@@ -24,17 +24,21 @@ Input contract:
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <Canvas x:Name="RootCanvas"
-            Background="#1A000000">
+    <Canvas x:Name="RootCanvas">
 
-        <!-- Semi-transparent scrim covering the entire overlay -->
+        <!-- Light tint over the entire desktop — transparent enough to see
+             content underneath while clearly indicating selection mode.
+             #30000000 = ~19% black opacity -->
         <Rectangle x:Name="ScrimRect"
-                   Fill="#80000000"
+                   Fill="#30000000"
                    IsHitTestVisible="False"/>
 
-        <!-- Selection rectangle: clear interior, dashed blue border -->
+        <!-- Selection rectangle: bright interior highlights the selected area,
+             dashed blue border provides clear boundary.
+             #18FFFFFF = subtle white tint so the selected area is visibly
+             brighter than the dimmed surroundings. -->
         <Rectangle x:Name="SelectionRect"
-                   Fill="Transparent"
+                   Fill="#18FFFFFF"
                    Stroke="#4FC3F7"
                    StrokeThickness="2"
                    StrokeDashArray="6,3"
