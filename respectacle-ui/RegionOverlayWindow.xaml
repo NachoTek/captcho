@@ -29,7 +29,8 @@ Input contract:
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <Canvas x:Name="RootCanvas">
+    <Canvas x:Name="RootCanvas"
+            Background="Transparent">
 
         <!-- Pre-captured screenshot of the virtual desktop.
              Sized in code to fill the canvas in DIPs. -->
