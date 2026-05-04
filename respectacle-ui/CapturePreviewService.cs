@@ -137,61 +137,60 @@ public sealed class CapturePreviewService
 
     /// <summary>
     /// Captures the full virtual desktop (all monitors stitched) and converts to displayable form.
+    /// Native capture runs on a background thread; WriteableBitmap is created on the calling (UI) thread.
     /// </summary>
-    public Task<CapturePreviewResult> CaptureFullDesktopAsync()
+    public async Task<CapturePreviewResult> CaptureFullDesktopAsync()
     {
-        return Task.Run(() => CaptureCoreAsync("Full Desktop", SafeCaptureResult.CaptureAllMonitors));
+        var raw = await Task.Run(() => CaptureRaw("Full Desktop", SafeCaptureResult.CaptureAllMonitors));
+        return await BuildDisplayResultAsync(raw);
     }
 
     /// <summary>
     /// Captures the monitor the cursor is on and converts to displayable form.
     /// Falls back to primary monitor if cursor resolution fails.
+    /// Native capture runs on a background thread; WriteableBitmap is created on the calling (UI) thread.
     /// </summary>
-    public Task<CapturePreviewResult> CaptureCurrentMonitorAsync()
+    public async Task<CapturePreviewResult> CaptureCurrentMonitorAsync()
     {
-        return Task.Run(async () =>
-        {
-            uint monitorIndex = CurrentMonitorResolver.GetCurrentMonitorIndex();
-            return await CaptureCoreAsync(
-                $"Current Monitor [{monitorIndex}]",
-                () => SafeCaptureResult.CaptureMonitorByIndex(monitorIndex));
-        });
+        uint monitorIndex = CurrentMonitorResolver.GetCurrentMonitorIndex();
+        string mode = $"Current Monitor [{monitorIndex}]";
+        var raw = await Task.Run(() => CaptureRaw(mode, () => SafeCaptureResult.CaptureMonitorByIndex(monitorIndex)));
+        return await BuildDisplayResultAsync(raw);
     }
 
     /// <summary>
     /// Captures the currently active (foreground) window and converts to displayable form.
     /// Uses WindowResolver for a descriptive mode label with title and handle.
+    /// Native capture runs on a background thread; WriteableBitmap is created on the calling (UI) thread.
     /// </summary>
-    public Task<CapturePreviewResult> CaptureActiveWindowAsync()
+    public async Task<CapturePreviewResult> CaptureActiveWindowAsync()
     {
-        return Task.Run(() =>
-        {
-            string mode = WindowResolver.BuildActiveWindowLabel();
-            return CaptureCoreAsync(mode, SafeCaptureResult.CaptureActiveWindow);
-        });
+        string mode = WindowResolver.BuildActiveWindowLabel();
+        var raw = await Task.Run(() => CaptureRaw(mode, SafeCaptureResult.CaptureActiveWindow));
+        return await BuildDisplayResultAsync(raw);
     }
 
     /// <summary>
     /// Captures the top-level window under the mouse cursor and converts to displayable form.
     /// Uses WindowResolver for a descriptive mode label with title and handle.
+    /// Native capture runs on a background thread; WriteableBitmap is created on the calling (UI) thread.
     /// </summary>
-    public Task<CapturePreviewResult> CaptureWindowUnderCursorAsync()
+    public async Task<CapturePreviewResult> CaptureWindowUnderCursorAsync()
     {
-        return Task.Run(() =>
-        {
-            string mode = WindowResolver.BuildWindowUnderCursorLabel();
-            return CaptureCoreAsync(mode, SafeCaptureResult.CaptureWindowUnderCursor);
-        });
+        string mode = WindowResolver.BuildWindowUnderCursorLabel();
+        var raw = await Task.Run(() => CaptureRaw(mode, SafeCaptureResult.CaptureWindowUnderCursor));
+        return await BuildDisplayResultAsync(raw);
     }
 
     /// <summary>
     /// Captures a rectangular region of the virtual desktop and converts to displayable form.
     /// Rounds fractional coordinates intentionally; rejects zero-dimension regions.
     /// The mode label includes signed coordinates and dimensions for diagnostics.
+    /// Native capture runs on a background thread; WriteableBitmap is created on the calling (UI) thread.
     /// </summary>
     /// <param name="region">The region rectangle in virtual-desktop coordinates (WinUI Rect).</param>
     /// <returns>A capture result with "Rectangular Region (...)" mode label, timings, and error info.</returns>
-    public Task<CapturePreviewResult> CaptureRegionAsync(Windows.Foundation.Rect region)
+    public async Task<CapturePreviewResult> CaptureRegionAsync(Windows.Foundation.Rect region)
     {
         // Round/cast coordinates intentionally: X/Y are signed (virtual-desktop can have negative origin),
         // Width/Height are unsigned (must be positive). Clamp near-zero dimensions to zero.
@@ -202,71 +201,70 @@ public sealed class CapturePreviewService
 
         string mode = $"Rectangular Region (X={x}, Y={y}, {width}×{height})";
 
-        return Task.Run(async () =>
+        if (width == 0 || height == 0)
         {
-            if (width == 0 || height == 0)
+            return new CapturePreviewResult
             {
-                return new CapturePreviewResult
-                {
-                    Mode = mode,
-                    Error = $"Region has zero dimensions after rounding: {width}×{height}.",
-                };
-            }
+                Mode = mode,
+                Error = $"Region has zero dimensions after rounding: {width}×{height}.",
+            };
+        }
 
-            return await CaptureCoreAsync(mode, () => SafeCaptureResult.CaptureRegion(x, y, width, height));
-        });
+        var raw = await Task.Run(() => CaptureRaw(mode, () => SafeCaptureResult.CaptureRegion(x, y, width, height)));
+        return await BuildDisplayResultAsync(raw);
     }
 
-    private async Task<CapturePreviewResult> CaptureCoreAsync(
+    /// <summary>
+    /// Intermediate result from the native capture phase (runs on background thread).
+    /// Contains either raw pixel data ready for display conversion, or an error.
+    /// </summary>
+    private sealed class RawCaptureResult
+    {
+        public string Mode { get; init; } = "";
+        public string Dimensions { get; init; } = "";
+        public double CaptureMs { get; init; }
+        public ContiguousBitmap? Bitmap { get; init; }
+        public string? Error { get; init; }
+    }
+
+    /// <summary>
+    /// Phase 1+2: Runs native capture and stride stripping on a background thread.
+    /// Returns a RawCaptureResult with either pixel data or an error.
+    /// Never creates UI objects — safe to call from any thread.
+    /// </summary>
+    private static RawCaptureResult CaptureRaw(
         string mode,
         Func<SafeCaptureResult> captureFunc)
     {
-        var totalSw = Stopwatch.StartNew();
+        var captureSw = Stopwatch.StartNew();
         string? error = null;
         string dimensions = "";
-        double captureMs = 0;
-        double displayMs = 0;
-        WriteableBitmap? imageSource = null;
         ContiguousBitmap? contiguousResult = null;
 
         try
         {
-            // Phase 1: Native capture
-            var captureSw = Stopwatch.StartNew();
             using var result = captureFunc();
             captureSw.Stop();
-            captureMs = captureSw.Elapsed.TotalMilliseconds;
 
             if (!result.IsSuccess)
             {
-                // Failed capture does NOT overwrite the last successful cache.
                 error = string.IsNullOrEmpty(result.ErrorMessage)
                     ? $"Capture failed: {result.Status}"
                     : result.ErrorMessage;
-                totalSw.Stop();
-                return new CapturePreviewResult
+                return new RawCaptureResult
                 {
                     Mode = mode,
-                    CaptureMs = Math.Round(captureMs, 1),
-                    TotalMs = Math.Round(totalSw.Elapsed.TotalMilliseconds, 1),
+                    CaptureMs = Math.Round(captureSw.Elapsed.TotalMilliseconds, 1),
                     Error = error
                 };
             }
 
             dimensions = $"{result.Width}×{result.Height}";
-
-            // Phase 2: Strip stride padding → contiguous BGRA
             contiguousResult = BitmapBufferConverter.StripPadding(
                 result.Pixels!,
                 (int)result.Width,
                 (int)result.Height,
                 (int)result.Stride);
-
-            // Phase 3: Convert to WriteableBitmap
-            var displaySw = Stopwatch.StartNew();
-            imageSource = await SoftwareBitmapConverter.ToWriteableBitmapAsync(contiguousResult);
-            displaySw.Stop();
-            displayMs = displaySw.Elapsed.TotalMilliseconds;
         }
         catch (DllNotFoundException ex)
         {
@@ -289,18 +287,59 @@ public sealed class CapturePreviewService
             error = $"Unexpected error: {ex.Message}";
         }
 
-        // Cache only on successful capture — failures leave prior cache intact.
-        if (error == null && contiguousResult != null)
+        return new RawCaptureResult
         {
-            _lastCapturedBitmap = contiguousResult;
+            Mode = mode,
+            Dimensions = dimensions,
+            CaptureMs = captureSw.Elapsed.TotalMilliseconds > 0
+                ? Math.Round(captureSw.Elapsed.TotalMilliseconds, 1) : 0,
+            Bitmap = contiguousResult,
+            Error = error
+        };
+    }
+
+    /// <summary>
+    /// Phase 3: Converts raw capture data to a displayable WriteableBitmap.
+    /// Must run on the UI thread because WriteableBitmap is a WinRT UI object.
+    /// Caches the bitmap on success for export workflows.
+    /// </summary>
+    private async Task<CapturePreviewResult> BuildDisplayResultAsync(RawCaptureResult raw)
+    {
+        var totalSw = Stopwatch.StartNew();
+        // Account for capture time already elapsed
+        double captureMs = raw.CaptureMs;
+        double displayMs = 0;
+        WriteableBitmap? imageSource = null;
+        string? error = raw.Error;
+
+        if (error == null && raw.Bitmap != null)
+        {
+            try
+            {
+                var displaySw = Stopwatch.StartNew();
+                imageSource = await SoftwareBitmapConverter.ToWriteableBitmapAsync(raw.Bitmap);
+                displaySw.Stop();
+                displayMs = displaySw.Elapsed.TotalMilliseconds;
+
+                // Cache only on successful capture
+                _lastCapturedBitmap = raw.Bitmap;
+            }
+            catch (ArgumentException ex)
+            {
+                error = $"Display conversion error: {ex.Message}";
+            }
+            catch (Exception ex)
+            {
+                error = $"Unexpected display error: {ex.Message}";
+            }
         }
 
         totalSw.Stop();
         return new CapturePreviewResult
         {
-            Mode = mode,
-            Dimensions = dimensions,
-            CaptureMs = Math.Round(captureMs, 1),
+            Mode = raw.Mode,
+            Dimensions = raw.Dimensions,
+            CaptureMs = captureMs,
             DisplayMs = Math.Round(displayMs, 1),
             TotalMs = Math.Round(totalSw.Elapsed.TotalMilliseconds, 1),
             Error = error,
