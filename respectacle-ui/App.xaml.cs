@@ -42,6 +42,18 @@ public partial class App : Application
         LoadResult = loadResult;
 
         _window = new MainWindow(loadResult.Settings, configService, loadResult);
+        _window.Closed += OnWindowClosed;
         _window.Activate();
+    }
+
+    /// <summary>
+    /// When the main window closes, terminate the application.
+    /// WinUI 3 does not auto-exit when the last window closes — the dispatcher
+    /// loop keeps the process alive indefinitely unless Application.Exit() is called.
+    /// </summary>
+    private void OnWindowClosed(object sender, WindowEventArgs args)
+    {
+        _window = null;
+        Application.Current.Exit();
     }
 }
