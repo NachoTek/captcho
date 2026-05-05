@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-dll
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # ── Rust: build + test ──────────────────────────────────────────
+      - name: Build Rust DLL
+        working-directory: rust-dll
+        run: cargo build --release
+
+      - name: Run Rust tests
+        working-directory: rust-dll
+        run: cargo test
+
+      # ── Copy native DLL for .NET resolution ─────────────────────────
+      - name: Copy native DLL
+        run: |
+          New-Item -Path respectacle-capture/runtimes/win-x64/native -ItemType Directory -Force
+          Copy-Item rust-dll/target/release/respectacle_capture.dll respectacle-capture/runtimes/win-x64/native/
+        shell: pwsh
+
+      # ── .NET: build + test ──────────────────────────────────────────
+      - name: Restore .NET dependencies
+        run: dotnet restore Respectacle.sln
+
+      - name: Build .NET solution
+        run: dotnet build Respectacle.sln --configuration Release --no-restore
+
+      - name: Run .NET tests
+        run: dotnet test Respectacle.sln --configuration Release --no-build --verbosity normal

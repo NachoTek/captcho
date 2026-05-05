@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-dll
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # ── Build Rust DLL ──────────────────────────────────────────────
+      - name: Build Rust DLL (release)
+        working-directory: rust-dll
+        run: cargo build --release
+
+      - name: Run Rust tests
+        working-directory: rust-dll
+        run: cargo test
+
+      # ── Copy native DLL ─────────────────────────────────────────────
+      - name: Copy native DLL
+        run: |
+          New-Item -Path respectacle-capture/runtimes/win-x64/native -ItemType Directory -Force
+          Copy-Item rust-dll/target/release/respectacle_capture.dll respectacle-capture/runtimes/win-x64/native/
+        shell: pwsh
+
+      # ── Build .NET ──────────────────────────────────────────────────
+      - name: Restore .NET dependencies
+        run: dotnet restore Respectacle.sln
+
+      - name: Build .NET solution (release)
+        run: dotnet build Respectacle.sln --configuration Release --no-restore
+
+      - name: Run .NET tests
+        run: dotnet test Respectacle.sln --configuration Release --no-build --verbosity normal
+
+      # ── Publish ─────────────────────────────────────────────────────
+      - name: Publish respectacle-ui
+        run: |
+          dotnet publish respectacle-ui/respectacle-ui.csproj `
+            --configuration Release --runtime win-x64 --self-contained false `
+            --output publish/ui
+
+      - name: Publish respectacle-cli
+        run: |
+          dotnet publish respectacle-cli/respectacle-cli.csproj `
+            --configuration Release --runtime win-x64 --self-contained false `
+            --output publish/cli
+
+      # ── Package + Release ───────────────────────────────────────────
+      - name: Create release archives
+        run: |
+          Compress-Archive -Path publish/ui/* -DestinationPath respectacle-ui-${{ github.ref_name }}.zip
+          Compress-Archive -Path publish/cli/* -DestinationPath respectacle-cli-${{ github.ref_name }}.zip
+        shell: pwsh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            respectacle-ui-${{ github.ref_name }}.zip
+            respectacle-cli-${{ github.ref_name }}.zip
+          generate_release_notes: true
