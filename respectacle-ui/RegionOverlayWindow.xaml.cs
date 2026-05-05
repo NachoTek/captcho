@@ -79,6 +79,8 @@ public sealed partial class RegionOverlayWindow : IDisposable
     private const int AC_SRC_ALPHA  = 0x01;
     private const int SW_SHOW       = 5;
 
+    private const int IDC_CROSS     = 32515;
+
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int X, Y; }
 
@@ -131,6 +133,7 @@ public sealed partial class RegionOverlayWindow : IDisposable
     [DllImport("user32.dll")] private static extern bool DestroyWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern IntPtr LoadCursor(IntPtr hInstance, int lpCursorName);
     [DllImport("user32.dll")] private static extern bool UpdateLayeredWindow(IntPtr hWnd, IntPtr hdcDst, ref POINT pptDst, ref SIZE psize, IntPtr hdcSrc, ref POINT pptSrc, int crKey, ref BLENDFUNCTION pblend, int dwFlags);
     [DllImport("user32.dll")] private static extern bool GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
     [DllImport("user32.dll")] private static extern bool TranslateMessage(ref MSG lpMsg);
@@ -225,6 +228,7 @@ public sealed partial class RegionOverlayWindow : IDisposable
         {
             style = CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc = StaticWndProc,
+            hCursor = LoadCursor(IntPtr.Zero, IDC_CROSS),
             hInstance = GetModuleHandle(IntPtr.Zero),
             lpszClassName = _className,
         };
