@@ -131,15 +131,15 @@ public sealed partial class RegionOverlayWindow : IDisposable
     [DllImport("user32.dll")] private static extern bool DestroyWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
-    [DllImport("user32.dll")] private static extern bool UpdateLayeredWindow(IntPtr hWnd, IntPtr hdcDst, POINT? pptDst, SIZE? psize, IntPtr hdcSrc, POINT pptSrc, int crKey, BLENDFUNCTION pblend, int dwFlags);
+    [DllImport("user32.dll")] private static extern bool UpdateLayeredWindow(IntPtr hWnd, IntPtr hdcDst, ref POINT pptDst, ref SIZE psize, IntPtr hdcSrc, ref POINT pptSrc, int crKey, ref BLENDFUNCTION pblend, int dwFlags);
     [DllImport("user32.dll")] private static extern bool GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
     [DllImport("user32.dll")] private static extern bool TranslateMessage(ref MSG lpMsg);
     [DllImport("user32.dll")] private static extern IntPtr DispatchMessage(ref MSG lpMsg);
     [DllImport("user32.dll")] private static extern IntPtr DefWindowProcW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
-    [DllImport("user32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr hDC);
-    [DllImport("user32.dll")] private static extern bool DeleteDC(IntPtr hDC);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr hDC);
+    [DllImport("gdi32.dll")] private static extern bool DeleteDC(IntPtr hDC);
     [DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr hdc, IntPtr hgdiobj);
     [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr ho);
     [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(IntPtr lpModuleName);
@@ -440,12 +440,13 @@ public sealed partial class RegionOverlayWindow : IDisposable
             SourceConstantAlpha = 255,
             AlphaFormat = AC_SRC_ALPHA,
         };
+        var dstPt = new POINT { X = _vdx, Y = _vdy };
+        var dstSz = new SIZE { cx = w, cy = h };
+        var srcPt = new POINT { X = 0, Y = 0 };
         UpdateLayeredWindow(_hwnd, IntPtr.Zero,
-            new POINT { X = _vdx, Y = _vdy },
-            new SIZE { cx = w, cy = h },
-            _bitmapDC,
-            new POINT { X = 0, Y = 0 },
-            0, blend, ULW_ALPHA);
+            ref dstPt, ref dstSz,
+            _bitmapDC, ref srcPt,
+            0, ref blend, ULW_ALPHA);
     }
 
     // ── Cleanup ──────────────────────────────────────────────────────
