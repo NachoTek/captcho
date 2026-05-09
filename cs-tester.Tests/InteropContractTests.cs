@@ -1,7 +1,7 @@
 // InteropContractTests — validates the FFI contract types, P/Invoke signatures,
 // managed wrapper validation, bitmap conversion, and negative test cases.
 //
-// These tests exercise the types from the shared respectacle-capture library,
+// These tests exercise the types from the shared captcho-capture library,
 // plus the Program entry point from cs-tester.
 //
 // Tests cover:
@@ -16,10 +16,10 @@
 using System;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using Respectacle.Capture;
+using captcho.Capture;
 using Xunit;
 
-namespace Respectacle.Tester.Tests;
+namespace captcho.Tester.Tests;
 
 public class InteropContractTests
 {
@@ -102,17 +102,17 @@ public class InteropContractTests
         var names = new HashSet<string>();
         foreach (var m in methods) names.Add(m.Name);
 
-        Assert.Contains("respectacle_capture_frame", names);
-        Assert.Contains("respectacle_free_frame", names);
-        Assert.Contains("respectacle_free_error_message", names);
-        Assert.Contains("respectacle_free_capture_result", names);
-        Assert.Contains("respectacle_capture_all_monitors", names);
-        Assert.Contains("respectacle_capture_monitor_by_index", names);
+        Assert.Contains("captcho_capture_frame", names);
+        Assert.Contains("captcho_free_frame", names);
+        Assert.Contains("captcho_free_error_message", names);
+        Assert.Contains("captcho_free_capture_result", names);
+        Assert.Contains("captcho_capture_all_monitors", names);
+        Assert.Contains("captcho_capture_monitor_by_index", names);
 
         // S03 exports
-        Assert.Contains("respectacle_capture_active_window", names);
-        Assert.Contains("respectacle_capture_window_under_cursor", names);
-        Assert.Contains("respectacle_capture_window_by_handle", names);
+        Assert.Contains("captcho_capture_active_window", names);
+        Assert.Contains("captcho_capture_window_under_cursor", names);
+        Assert.Contains("captcho_capture_window_by_handle", names);
     }
 
     // ── Program Entry Point ──────────────────────────────────────────────

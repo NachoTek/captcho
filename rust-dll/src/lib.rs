@@ -1,4 +1,4 @@
-//! Respectacle Capture Engine — Rust cdylib with Windows Graphics Capture
+//! captcho Capture Engine — Rust cdylib with Windows Graphics Capture
 //!
 //! This module implements the C ABI contract that the C# host calls via P/Invoke.
 //! It captures a single frame from the primary monitor using Windows Graphics Capture
@@ -7,10 +7,10 @@
 //!
 //! # Exported Functions
 //!
-//! - `respectacle_capture_frame()` — Capture one frame from the primary monitor.
-//! - `respectacle_free_frame(data)` — Free frame pixel data.
-//! - `respectacle_free_error_message(msg)` — Free error message string.
-//! - `respectacle_free_capture_result(result)` — Free entire capture result (frame + error).
+//! - `captcho_capture_frame()` — Capture one frame from the primary monitor.
+//! - `captcho_free_frame(data)` — Free frame pixel data.
+//! - `captcho_free_error_message(msg)` — Free error message string.
+//! - `captcho_free_capture_result(result)` — Free entire capture result (frame + error).
 //!
 //! # Memory Ownership
 //!
@@ -28,7 +28,7 @@ pub mod monitor_utils;
 // ---------------------------------------------------------------------------
 
 /// Opaque handle to captured frame buffer owned by Rust.
-/// The C# side never interprets this — it only passes it back to `respectacle_free_frame`.
+/// The C# side never interprets this — it only passes it back to `captcho_free_frame`.
 pub type FrameHandle = *mut u8;
 
 /// Status codes returned across the FFI boundary.
@@ -53,8 +53,8 @@ pub enum CaptureStatus {
 }
 
 /// Result of a capture attempt, returned by value across the FFI boundary.
-/// Rust owns all allocated memory; the caller must call `respectacle_free_frame`
-/// or `respectacle_free_capture_result` to release when done.
+/// Rust owns all allocated memory; the caller must call `captcho_free_frame`
+/// or `captcho_free_capture_result` to release when done.
 #[repr(C)]
 #[derive(Debug)]
 pub struct CaptureResult {
@@ -71,7 +71,7 @@ pub struct CaptureResult {
     /// Total size of the pixel buffer in bytes (`stride * height`).
     pub data_len: u32,
     /// Pointer to a UTF-8 error message string owned by Rust. Null on success.
-    /// Call `respectacle_free_error_message` to release.
+    /// Call `captcho_free_error_message` to release.
     pub error_message: *mut std::ffi::c_char,
 }
 
@@ -93,7 +93,7 @@ impl CaptureResult {
     /// Create an error result with a message.
     ///
     /// The returned struct owns the error_message allocation.
-    /// The caller must eventually call `respectacle_free_error_message`.
+    /// The caller must eventually call `captcho_free_error_message`.
     pub fn error(status: CaptureStatus, msg: impl Into<String>) -> Self {
         let msg_str = msg.into();
         let c_msg = CString::new(msg_str.as_str()).unwrap_or_else(|_| {
@@ -108,7 +108,7 @@ impl CaptureResult {
 
     /// Create a success result from a frame buffer.
     ///
-    /// Takes ownership of the Vec; the caller must free via `respectacle_free_frame`.
+    /// Takes ownership of the Vec; the caller must free via `captcho_free_frame`.
     fn from_frame(data: Vec<u8>, width: u32, height: u32, stride: u32) -> Self {
         let data_len = data.len() as u32;
         let mut data = std::mem::ManuallyDrop::new(data);
@@ -129,7 +129,7 @@ impl CaptureResult {
 // ---------------------------------------------------------------------------
 
 // Global registry of outstanding frame allocations.
-// This allows us to reconstruct Vec<u8> from a raw pointer in `respectacle_free_frame`.
+// This allows us to reconstruct Vec<u8> from a raw pointer in `captcho_free_frame`.
 use std::collections::HashMap;
 
 static FRAME_REGISTRY: std::sync::LazyLock<parking_lot::Mutex<HashMap<usize, (usize, usize)>>> =
@@ -538,7 +538,7 @@ fn get_monitor_bounds(monitor: &windows_capture::monitor::Monitor) -> Result<mon
 /// The buffer is filled with a test pattern (each pixel = [B, G, R, 0xFF]).
 ///
 /// Returns the CaptureResult owning the synthetic frame data.
-/// The caller must free it with `respectacle_free_frame` or `respectacle_free_capture_result`.
+/// The caller must free it with `captcho_free_frame` or `captcho_free_capture_result`.
 #[cfg(any(test, feature = "test-helpers"))]
 pub fn create_synthetic_frame(width: u32, height: u32) -> CaptureResult {
     let bpp = 4u32; // BGRA = 4 bytes per pixel
@@ -626,14 +626,14 @@ pub fn create_invalid_frame_zero_dims() -> CaptureResult {
 ///
 /// Returns a `CaptureResult` by value (C struct return).
 /// On success, `frame_data` points to BGRA pixel data owned by Rust.
-/// The caller MUST call `respectacle_free_frame` or `respectacle_free_capture_result`
+/// The caller MUST call `captcho_free_frame` or `captcho_free_capture_result`
 /// when done with the pixels.
 ///
 /// # Safety
 /// This function is safe to call from C#. The returned struct contains
 /// pointers that must be freed using the matching free functions.
 #[no_mangle]
-pub extern "C" fn respectacle_capture_frame() -> CaptureResult {
+pub extern "C" fn captcho_capture_frame() -> CaptureResult {
     // Catch panics so they never cross the FFI boundary
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         do_capture_primary_monitor()
@@ -646,13 +646,13 @@ pub extern "C" fn respectacle_capture_frame() -> CaptureResult {
     }
 }
 
-/// Free a frame buffer previously returned by `respectacle_capture_frame`.
+/// Free a frame buffer previously returned by `captcho_capture_frame`.
 ///
 /// # Safety
 /// `data` must be a pointer previously returned in `CaptureResult.frame_data`,
 /// or null. Passing any other value is undefined behavior.
 #[no_mangle]
-pub unsafe extern "C" fn respectacle_free_frame(data: FrameHandle) {
+pub unsafe extern "C" fn captcho_free_frame(data: FrameHandle) {
     if data.is_null() {
         return;
     }
@@ -675,7 +675,7 @@ pub unsafe extern "C" fn respectacle_free_frame(data: FrameHandle) {
 /// This function is safe to call from C#. The returned struct contains
 /// pointers that must be freed using the matching free functions.
 #[no_mangle]
-pub extern "C" fn respectacle_capture_monitor_by_index(index: u32) -> CaptureResult {
+pub extern "C" fn captcho_capture_monitor_by_index(index: u32) -> CaptureResult {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         do_capture_monitor_by_index(index)
     })) {
@@ -726,7 +726,7 @@ fn do_capture_monitor_by_index(index: u32) -> CaptureResult {
 /// This function is safe to call from C#. The returned struct contains
 /// pointers that must be freed using the matching free functions.
 #[no_mangle]
-pub extern "C" fn respectacle_capture_all_monitors() -> CaptureResult {
+pub extern "C" fn captcho_capture_all_monitors() -> CaptureResult {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         do_capture_all_monitors()
     })) {
@@ -919,7 +919,7 @@ fn validate_captured_buffer(captured: &CaptureResult) -> Result<(), CaptureResul
 /// This function is safe to call from C#. The returned struct contains
 /// pointers that must be freed using the matching free functions.
 #[no_mangle]
-pub extern "C" fn respectacle_capture_region(x: i32, y: i32, width: u32, height: u32) -> CaptureResult {
+pub extern "C" fn captcho_capture_region(x: i32, y: i32, width: u32, height: u32) -> CaptureResult {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         do_capture_region(x, y, width, height)
     })) {
@@ -1004,7 +1004,7 @@ fn do_capture_region(x: i32, y: i32, width: u32, height: u32) -> CaptureResult {
 
     // Phase 5: validate captured buffer metadata before crop
     if let Err(e) = validate_captured_buffer(&captured) {
-        unsafe { respectacle_free_frame(captured.frame_data) };
+        unsafe { captcho_free_frame(captured.frame_data) };
         return e;
     }
 
@@ -1023,14 +1023,14 @@ fn do_capture_region(x: i32, y: i32, width: u32, height: u32) -> CaptureResult {
     ) {
         Ok(c) => c,
         Err(e) => {
-            unsafe { respectacle_free_frame(captured.frame_data) };
+            unsafe { captcho_free_frame(captured.frame_data) };
             return CaptureResult::error(CaptureStatus::InvalidBuffer, e);
         }
     };
 
     // Phase 7: free the intermediate full-desktop frame
     // (registered by do_capture_all_monitors; we must unregister + free it)
-    unsafe { respectacle_free_frame(captured.frame_data) };
+    unsafe { captcho_free_frame(captured.frame_data) };
 
     // Phase 8: register and return the cropped frame with tight stride
     let crop_stride = crop_result.width * 4;
@@ -1054,7 +1054,7 @@ fn do_capture_region(x: i32, y: i32, width: u32, height: u32) -> CaptureResult {
 /// This function is safe to call from C#. The returned struct contains
 /// pointers that must be freed using the matching free functions.
 #[no_mangle]
-pub extern "C" fn respectacle_capture_active_window() -> CaptureResult {
+pub extern "C" fn captcho_capture_active_window() -> CaptureResult {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         do_capture_active_window()
     })) {
@@ -1090,7 +1090,7 @@ fn do_capture_active_window() -> CaptureResult {
 /// This function is safe to call from C#. The returned struct contains
 /// pointers that must be freed using the matching free functions.
 #[no_mangle]
-pub extern "C" fn respectacle_capture_window_under_cursor() -> CaptureResult {
+pub extern "C" fn captcho_capture_window_under_cursor() -> CaptureResult {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         do_capture_window_under_cursor()
     })) {
@@ -1153,7 +1153,7 @@ fn do_capture_window_under_cursor() -> CaptureResult {
 /// This function is safe to call from C#. The returned struct contains
 /// pointers that must be freed using the matching free functions.
 #[no_mangle]
-pub extern "C" fn respectacle_capture_window_by_handle(hwnd: u64) -> CaptureResult {
+pub extern "C" fn captcho_capture_window_by_handle(hwnd: u64) -> CaptureResult {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         do_capture_window_by_handle(hwnd)
     })) {
@@ -1194,7 +1194,7 @@ fn do_capture_window_by_handle(hwnd: u64) -> CaptureResult {
 /// `msg` must be a pointer previously returned in `CaptureResult.error_message`,
 /// or null. Passing any other value is undefined behavior.
 #[no_mangle]
-pub unsafe extern "C" fn respectacle_free_error_message(msg: *mut std::ffi::c_char) {
+pub unsafe extern "C" fn captcho_free_error_message(msg: *mut std::ffi::c_char) {
     if msg.is_null() {
         return;
     }
@@ -1208,12 +1208,12 @@ pub unsafe extern "C" fn respectacle_free_error_message(msg: *mut std::ffi::c_ch
 /// in a single call. After this call, the CaptureResult's pointers must not be used.
 ///
 /// # Safety
-/// The result must contain pointers previously returned by `respectacle_capture_frame`,
+/// The result must contain pointers previously returned by `captcho_capture_frame`,
 /// or null pointers. Passing any other values is undefined behavior.
 #[no_mangle]
-pub unsafe extern "C" fn respectacle_free_capture_result(result: CaptureResult) {
-    respectacle_free_frame(result.frame_data);
-    respectacle_free_error_message(result.error_message);
+pub unsafe extern "C" fn captcho_free_capture_result(result: CaptureResult) {
+    captcho_free_frame(result.frame_data);
+    captcho_free_error_message(result.error_message);
 }
 
 // ---------------------------------------------------------------------------
@@ -1251,15 +1251,15 @@ mod tests {
         assert!(!result.error_message.is_null());
         let msg = unsafe { std::ffi::CStr::from_ptr(result.error_message) };
         assert_eq!(msg.to_str().unwrap(), "test error");
-        unsafe { respectacle_free_error_message(result.error_message) };
+        unsafe { captcho_free_error_message(result.error_message) };
     }
 
     #[test]
     fn free_null_pointers_are_safe() {
         unsafe {
-            respectacle_free_frame(std::ptr::null_mut());
-            respectacle_free_error_message(std::ptr::null_mut());
-            respectacle_free_capture_result(CaptureResult::default());
+            captcho_free_frame(std::ptr::null_mut());
+            captcho_free_error_message(std::ptr::null_mut());
+            captcho_free_capture_result(CaptureResult::default());
         }
     }
 
@@ -1274,14 +1274,14 @@ mod tests {
         assert_eq!(result.stride, 64 * 4); // 256
         assert_eq!(result.data_len, 256 * 48); // 12288
         assert!(!result.frame_data.is_null());
-        unsafe { respectacle_free_capture_result(result) };
+        unsafe { captcho_free_capture_result(result) };
     }
 
     #[test]
     fn synthetic_frame_data_len_equals_stride_times_height() {
         let result = create_synthetic_frame(100, 50);
         assert_eq!(result.data_len, result.stride * result.height);
-        unsafe { respectacle_free_capture_result(result) };
+        unsafe { captcho_free_capture_result(result) };
     }
 
     #[test]
@@ -1294,7 +1294,7 @@ mod tests {
         assert_eq!(result.stride, 420);
         assert_eq!(result.data_len, 420 * 50); // 21000
         assert!(!result.frame_data.is_null());
-        unsafe { respectacle_free_capture_result(result) };
+        unsafe { captcho_free_capture_result(result) };
     }
 
     #[test]
@@ -1302,7 +1302,7 @@ mod tests {
         let result = create_synthetic_frame_with_stride(100, 50, 399);
         assert_eq!(result.status, CaptureStatus::InvalidBuffer);
         assert!(result.frame_data.is_null());
-        unsafe { respectacle_free_capture_result(result) };
+        unsafe { captcho_free_capture_result(result) };
     }
 
     #[test]
@@ -1324,7 +1324,7 @@ mod tests {
         assert_eq!(slice[5], 0);     // G
         assert_eq!(slice[6], 0x80);  // R
         assert_eq!(slice[7], 0xFF);  // A
-        unsafe { respectacle_free_capture_result(result) };
+        unsafe { captcho_free_capture_result(result) };
     }
 
     #[test]
@@ -1334,17 +1334,17 @@ mod tests {
         assert!(!ptr.is_null());
 
         // First free via free_frame
-        unsafe { respectacle_free_frame(ptr) };
+        unsafe { captcho_free_frame(ptr) };
 
         // Second free should be silently ignored (pointer not in registry)
-        unsafe { respectacle_free_frame(ptr) };
+        unsafe { captcho_free_frame(ptr) };
     }
 
     #[test]
     fn free_via_capture_result_works() {
         let result = create_synthetic_frame(8, 8);
         assert_eq!(result.status, CaptureStatus::Ok);
-        unsafe { respectacle_free_capture_result(result) };
+        unsafe { captcho_free_capture_result(result) };
         // No crash = pass
     }
 
@@ -1353,7 +1353,7 @@ mod tests {
         let result = create_invalid_frame_zero_dims();
         assert_eq!(result.status, CaptureStatus::InvalidBuffer);
         assert!(result.frame_data.is_null());
-        unsafe { respectacle_free_capture_result(result) };
+        unsafe { captcho_free_capture_result(result) };
     }
 
     // =======================================================================
@@ -1376,7 +1376,7 @@ mod tests {
 
         // Validate captured buffer metadata
         if let Err(e) = validate_captured_buffer(&captured) {
-            unsafe { respectacle_free_frame(captured.frame_data) };
+            unsafe { captcho_free_frame(captured.frame_data) };
             return e;
         }
 
@@ -1395,13 +1395,13 @@ mod tests {
         ) {
             Ok(c) => c,
             Err(e) => {
-                unsafe { respectacle_free_frame(captured.frame_data) };
+                unsafe { captcho_free_frame(captured.frame_data) };
                 return CaptureResult::error(CaptureStatus::InvalidBuffer, e);
             }
         };
 
         // Free the intermediate full-desktop frame
-        unsafe { respectacle_free_frame(captured.frame_data) };
+        unsafe { captcho_free_frame(captured.frame_data) };
 
         // Register and return the cropped frame with tight stride
         let crop_stride = crop_result.width * 4;
@@ -1439,7 +1439,7 @@ mod tests {
         assert_eq!(result.stride, 120); // 30 * 4
         assert_eq!(result.data_len, 4800); // 30 * 40 * 4
         assert!(!result.frame_data.is_null());
-        unsafe { respectacle_free_capture_result(result) };
+        unsafe { captcho_free_capture_result(result) };
     }
 
     #[test]
@@ -1465,7 +1465,7 @@ mod tests {
         let msg = unsafe { std::ffi::CStr::from_ptr(result.error_message) };
         let msg_str = msg.to_str().unwrap();
         assert!(msg_str.starts_with("region:"));
-        unsafe { respectacle_free_capture_result(result) };
+        unsafe { captcho_free_capture_result(result) };
     }
 
     #[test]
@@ -1492,7 +1492,7 @@ mod tests {
         assert!(result.frame_data.is_null());
         let msg = unsafe { std::ffi::CStr::from_ptr(result.error_message) };
         assert_eq!(msg.to_str().unwrap(), "test capture failure");
-        unsafe { respectacle_free_capture_result(result) };
+        unsafe { captcho_free_capture_result(result) };
     }
 
     #[test]
@@ -1516,7 +1516,7 @@ mod tests {
         assert_eq!(result.width, 100);
         assert_eq!(result.height, 100);
         assert_eq!(result.stride, 400); // 100 * 4
-        unsafe { respectacle_free_capture_result(result) };
+        unsafe { captcho_free_capture_result(result) };
     }
 
     #[test]
@@ -1552,7 +1552,7 @@ mod tests {
         // Free the result frame manually since we unregistered it
         unsafe {
             register_frame(result_ptr, result.data_len as usize, result.data_len as usize);
-            respectacle_free_capture_result(result);
+            captcho_free_capture_result(result);
         }
     }
 
@@ -1577,7 +1577,7 @@ mod tests {
         assert_eq!(result.status, CaptureStatus::Ok);
         assert_eq!(result.stride, 50 * 4); // Tight stride, not padded
         assert_eq!(result.data_len, 50 * 60 * 4);
-        unsafe { respectacle_free_capture_result(result) };
+        unsafe { captcho_free_capture_result(result) };
     }
 
     #[test]
@@ -1595,7 +1595,7 @@ mod tests {
         assert_eq!(err.status, CaptureStatus::InvalidBuffer);
         let msg = unsafe { std::ffi::CStr::from_ptr(err.error_message) };
         assert!(msg.to_str().unwrap().contains("zero dimensions"));
-        unsafe { respectacle_free_capture_result(err) };
+        unsafe { captcho_free_capture_result(err) };
     }
 
     #[test]
@@ -1613,7 +1613,7 @@ mod tests {
         assert_eq!(err.status, CaptureStatus::InvalidBuffer);
         let msg = unsafe { std::ffi::CStr::from_ptr(err.error_message) };
         assert!(msg.to_str().unwrap().contains("stride"));
-        unsafe { respectacle_free_capture_result(err) };
+        unsafe { captcho_free_capture_result(err) };
     }
 
     #[test]
@@ -1631,7 +1631,7 @@ mod tests {
         assert_eq!(err.status, CaptureStatus::InvalidBuffer);
         let msg = unsafe { std::ffi::CStr::from_ptr(err.error_message) };
         assert!(msg.to_str().unwrap().contains("mismatch"));
-        unsafe { respectacle_free_capture_result(err) };
+        unsafe { captcho_free_capture_result(err) };
     }
 
     #[test]

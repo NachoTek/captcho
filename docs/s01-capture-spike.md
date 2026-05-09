@@ -8,14 +8,14 @@ Downstream slices (especially S02 UI integration and R011 performance work) refe
 
 ## FFI Contract Summary
 
-The Rust `cdylib` (`respectacle_capture.dll`) exports four C-ABI functions:
+The Rust `cdylib` (`captcho_capture.dll`) exports four C-ABI functions:
 
 | Function | Signature | Description |
 |---|---|---|
-| `respectacle_capture_frame` | `() -> CaptureResult` | Captures one frame from the primary monitor via Windows Graphics Capture. Returns a struct with status, pixel pointer, dimensions, stride, and optional error message. |
-| `respectacle_free_frame` | `(data: *mut u8)` | Frees pixel data allocated by Rust. Null-safe. |
-| `respectacle_free_error_message` | `(msg: *mut c_char)` | Frees error message string allocated by Rust. Null-safe. |
-| `respectacle_free_capture_result` | `(result: CaptureResult)` | Frees the entire capture result (frame data + error message). Null-safe. |
+| `captcho_capture_frame` | `() -> CaptureResult` | Captures one frame from the primary monitor via Windows Graphics Capture. Returns a struct with status, pixel pointer, dimensions, stride, and optional error message. |
+| `captcho_free_frame` | `(data: *mut u8)` | Frees pixel data allocated by Rust. Null-safe. |
+| `captcho_free_error_message` | `(msg: *mut c_char)` | Frees error message string allocated by Rust. Null-safe. |
+| `captcho_free_capture_result` | `(result: CaptureResult)` | Frees the entire capture result (frame data + error message). Null-safe. |
 
 ### CaptureResult Layout (#[repr(C), Sequential])
 
@@ -37,7 +37,7 @@ cargo test --manifest-path rust-dll/Cargo.toml
 cargo build --manifest-path rust-dll/Cargo.toml --release
 
 # .NET: build + test
-dotnet build Respectacle.sln
+dotnet build captcho.sln
 dotnet test cs-tester.Tests/cs-tester.Tests.csproj
 
 # Full build verification

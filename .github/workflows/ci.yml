@@ -44,16 +44,16 @@ jobs:
       # ── Copy native DLL for .NET resolution ─────────────────────────
       - name: Copy native DLL
         run: |
-          New-Item -Path respectacle-capture/runtimes/win-x64/native -ItemType Directory -Force
-          Copy-Item rust-dll/target/release/respectacle_capture.dll respectacle-capture/runtimes/win-x64/native/
+          New-Item -Path captcho-capture/runtimes/win-x64/native -ItemType Directory -Force
+          Copy-Item rust-dll/target/release/captcho_capture.dll captcho-capture/runtimes/win-x64/native/
         shell: pwsh
 
       # ── .NET: build + test ──────────────────────────────────────────
       - name: Restore .NET dependencies
-        run: dotnet restore Respectacle.sln
+        run: dotnet restore captcho.sln
 
       - name: Build .NET solution
-        run: dotnet build Respectacle.sln --configuration Release --no-restore
+        run: dotnet build captcho.sln --configuration Release --no-restore
 
       - name: Run .NET tests
-        run: dotnet test Respectacle.sln --configuration Release --no-build --verbosity normal
+        run: dotnet test captcho.sln --configuration Release --no-build --verbosity normal

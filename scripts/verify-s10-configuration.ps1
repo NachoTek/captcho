@@ -23,7 +23,7 @@ Write-Host ""
 
 # ── Step 1: .NET solution build ───────────────────────────────────────────
 Write-Host "[1/6] Building .NET solution..." -ForegroundColor Yellow
-$output = dotnet build (Join-Path $RootDir "Respectacle.sln") 2>&1
+$output = dotnet build (Join-Path $RootDir "captcho.sln") 2>&1
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
 if ($exitCode -ne 0) {
@@ -35,7 +35,7 @@ Write-Host ""
 
 # ── Step 2: Capture-library configuration tests (ConfigurationService + AppSettings) ─
 Write-Host "[2/6] Running capture-library configuration tests..." -ForegroundColor Yellow
-$output = dotnet test (Join-Path $RootDir "respectacle-capture.Tests/respectacle-capture.Tests.csproj") `
+$output = dotnet test (Join-Path $RootDir "captcho-capture.Tests/captcho-capture.Tests.csproj") `
     --filter "ConfigurationService|AppSettings" --verbosity normal 2>&1
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
@@ -48,7 +48,7 @@ Write-Host ""
 
 # ── Step 3: FilenameTemplate regression tests ─────────────────────────────
 Write-Host "[3/6] Running FilenameTemplate regression tests..." -ForegroundColor Yellow
-$output = dotnet test (Join-Path $RootDir "respectacle-capture.Tests/respectacle-capture.Tests.csproj") `
+$output = dotnet test (Join-Path $RootDir "captcho-capture.Tests/captcho-capture.Tests.csproj") `
     --filter "FilenameTemplate" --verbosity normal 2>&1
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
@@ -61,7 +61,7 @@ Write-Host ""
 
 # ── Step 4: UI configuration wiring tests ─────────────────────────────────
 Write-Host "[4/6] Running ConfigurationUiWiring tests..." -ForegroundColor Yellow
-$output = dotnet test (Join-Path $RootDir "respectacle-ui.Tests/respectacle-ui.Tests.csproj") `
+$output = dotnet test (Join-Path $RootDir "captcho-ui.Tests/captcho-ui.Tests.csproj") `
     --filter "ConfigurationUiWiring" --verbosity normal 2>&1
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
@@ -74,7 +74,7 @@ Write-Host ""
 
 # ── Step 5: CapturePreviewService regression (settings-aware export) ───────
 Write-Host "[5/6] Running CapturePreviewService regression tests..." -ForegroundColor Yellow
-$output = dotnet test (Join-Path $RootDir "respectacle-ui.Tests/respectacle-ui.Tests.csproj") `
+$output = dotnet test (Join-Path $RootDir "captcho-ui.Tests/captcho-ui.Tests.csproj") `
     --filter "CapturePreviewService" --verbosity normal 2>&1
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
@@ -87,7 +87,7 @@ Write-Host ""
 
 # ── Step 6: ExportUiWiring regression tests ────────────────────────────────
 Write-Host "[6/6] Running ExportUiWiring regression tests..." -ForegroundColor Yellow
-$output = dotnet test (Join-Path $RootDir "respectacle-ui.Tests/respectacle-ui.Tests.csproj") `
+$output = dotnet test (Join-Path $RootDir "captcho-ui.Tests/captcho-ui.Tests.csproj") `
     --filter "ExportUiWiring" --verbosity normal 2>&1
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
@@ -102,20 +102,20 @@ Write-Host "=== All S10 configuration checks passed ===" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Manual UAT for configuration persistence (requires interactive desktop):" -ForegroundColor White
 Write-Host ""
-Write-Host "1. Launch the app:  dotnet run --project respectacle-ui"
+Write-Host "1. Launch the app:  dotnet run --project captcho-ui"
 Write-Host "2. RESTART PERSISTENCE:"
 Write-Host "   - Close and relaunch the app -> verify it starts without errors"
-Write-Host "   - Check %LOCALAPPDATA%\Respectacle\settings.json exists (created on first save)"
+Write-Host "   - Check %LOCALAPPDATA%\captcho\settings.json exists (created on first save)"
 Write-Host "3. SAVE LOCATION PERSISTENCE:"
 Write-Host "   - Capture a screenshot -> click Save As -> choose a different directory"
 Write-Host "   - After successful save, close and relaunch the app"
 Write-Host "   - Capture again -> click Save -> verify it saves to the previously chosen directory"
 Write-Host "4. CORRUPTED CONFIG RECOVERY:"
-Write-Host "   - Edit %LOCALAPPDATA%\Respectacle\settings.json to contain invalid JSON (e.g. '{bad')"
+Write-Host "   - Edit %LOCALAPPDATA%\captcho\settings.json to contain invalid JSON (e.g. '{bad')"
 Write-Host "   - Launch the app -> verify it starts with defaults and shows a config warning"
 Write-Host "   - Check that a .backup file was created next to the corrupted settings.json"
 Write-Host "5. MISSING CONFIG:"
-Write-Host "   - Delete %LOCALAPPDATA%\Respectacle\settings.json"
+Write-Host "   - Delete %LOCALAPPDATA%\captcho\settings.json"
 Write-Host "   - Launch the app -> verify it starts normally with default settings"
 Write-Host "6. SAVE AS CANCEL:"
 Write-Host "   - Capture a screenshot -> click Save As -> cancel the picker"

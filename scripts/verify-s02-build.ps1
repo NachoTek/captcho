@@ -41,7 +41,7 @@ Write-Host ""
 
 # ── Step 3: .NET solution build ───────────────────────────────────────────
 Write-Host "[3/6] Building .NET solution..." -ForegroundColor Yellow
-$output = dotnet build (Join-Path $RootDir "Respectacle.sln") 2>&1
+$output = dotnet build (Join-Path $RootDir "captcho.sln") 2>&1
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
 if ($exitCode -ne 0) {
@@ -51,16 +51,16 @@ if ($exitCode -ne 0) {
 Write-Host "PASS: .NET build" -ForegroundColor Green
 Write-Host ""
 
-# ── Step 4: respectacle-capture tests ─────────────────────────────────────
-Write-Host "[4/6] Running respectacle-capture tests..." -ForegroundColor Yellow
-$output = dotnet test (Join-Path $RootDir "respectacle-capture.Tests/respectacle-capture.Tests.csproj") 2>&1
+# ── Step 4: captcho-capture tests ─────────────────────────────────────
+Write-Host "[4/6] Running captcho-capture tests..." -ForegroundColor Yellow
+$output = dotnet test (Join-Path $RootDir "captcho-capture.Tests/captcho-capture.Tests.csproj") 2>&1
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
 if ($exitCode -ne 0) {
-    Write-Host "FAIL: respectacle-capture tests exited with code $exitCode" -ForegroundColor Red
+    Write-Host "FAIL: captcho-capture tests exited with code $exitCode" -ForegroundColor Red
     exit 1
 }
-Write-Host "PASS: respectacle-capture tests" -ForegroundColor Green
+Write-Host "PASS: captcho-capture tests" -ForegroundColor Green
 Write-Host ""
 
 # ── Step 5: cs-tester tests ───────────────────────────────────────────────
@@ -75,16 +75,16 @@ if ($exitCode -ne 0) {
 Write-Host "PASS: cs-tester tests" -ForegroundColor Green
 Write-Host ""
 
-# ── Step 6: respectacle-ui tests ──────────────────────────────────────────
-Write-Host "[6/6] Running respectacle-ui tests..." -ForegroundColor Yellow
-$output = dotnet test (Join-Path $RootDir "respectacle-ui.Tests/respectacle-ui.Tests.csproj") 2>&1
+# ── Step 6: captcho-ui tests ──────────────────────────────────────────
+Write-Host "[6/6] Running captcho-ui tests..." -ForegroundColor Yellow
+$output = dotnet test (Join-Path $RootDir "captcho-ui.Tests/captcho-ui.Tests.csproj") 2>&1
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
 if ($exitCode -ne 0) {
-    Write-Host "FAIL: respectacle-ui tests exited with code $exitCode" -ForegroundColor Red
+    Write-Host "FAIL: captcho-ui tests exited with code $exitCode" -ForegroundColor Red
     exit 1
 }
-Write-Host "PASS: respectacle-ui tests" -ForegroundColor Green
+Write-Host "PASS: captcho-ui tests" -ForegroundColor Green
 Write-Host ""
 
 Write-Host "=== All S02 build checks passed ===" -ForegroundColor Cyan

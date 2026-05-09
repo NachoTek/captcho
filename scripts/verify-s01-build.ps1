@@ -41,7 +41,7 @@ Write-Host ""
 
 # ── Step 3: .NET solution build ───────────────────────────────────────────
 Write-Host "[3/4] Building .NET solution..." -ForegroundColor Yellow
-$output = dotnet build (Join-Path $RootDir "Respectacle.sln") 2>&1
+$output = dotnet build (Join-Path $RootDir "captcho.sln") 2>&1
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
 if ($exitCode -ne 0) {

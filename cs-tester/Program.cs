@@ -1,4 +1,4 @@
-// Respectacle Capture Tester — console runner for the Rust capture DLL.
+// captcho Capture Tester — console runner for the Rust capture DLL.
 //
 // Usage:
 //   dotnet run --project cs-tester [--capture] [--capture-full] [--capture-monitor <index>]
@@ -16,9 +16,9 @@
 
 using System;
 using System.Diagnostics;
-using Respectacle.Capture;
+using captcho.Capture;
 
-namespace Respectacle.Tester;
+namespace captcho.Tester;
 
 public class Program
 {
@@ -66,9 +66,9 @@ public class Program
 
     private static void PrintUsage()
     {
-        Console.WriteLine("Respectacle Capture Tester");
+        Console.WriteLine("captcho Capture Tester");
         Console.WriteLine();
-        Console.WriteLine("Usage: respectacle.tester [options]");
+        Console.WriteLine("Usage: captcho.tester [options]");
         Console.WriteLine();
         Console.WriteLine("  --capture                        Capture primary monitor, print metadata.");
         Console.WriteLine("  --capture-full                   Capture full desktop (all monitors stitched).");

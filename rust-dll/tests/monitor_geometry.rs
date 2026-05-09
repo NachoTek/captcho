@@ -4,7 +4,7 @@
 //! data, covering virtual desktop bounds computation, row-copy stitching,
 //! stride padding, negative coordinates, and buffer invariant validation.
 
-use respectacle_capture::monitor_utils::*;
+use captcho_capture::monitor_utils::*;
 
 // ---------------------------------------------------------------------------
 // Virtual desktop bounds computation

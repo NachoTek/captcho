@@ -1,8 +1,8 @@
 [package]
-name = "respectacle-capture"
+name = "captcho-capture"
 version = "0.1.0"
 edition = "2021"
-description = "Respectacle screen capture engine (Windows Graphics Capture via Rust cdylib)"
+description = "captcho screen capture engine (Windows Graphics Capture via Rust cdylib)"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -25,4 +25,4 @@ windows = { version = "0.62", features = [
 ] }
 
 [dev-dependencies]
-respectacle-capture = { path = ".", features = ["test-helpers"] }
+captcho-capture = { path = ".", features = ["test-helpers"] }

@@ -1,6 +1,6 @@
 # verify-s09-cli.ps1 — Verification script for S09 (Production CLI).
 #
-# Builds the .NET solution, runs CLI unit tests, runs respectacle-cli --help,
+# Builds the .NET solution, runs CLI unit tests, runs captcho-cli --help,
 # verifies invalid-argument exit codes, and attempts a real capture smoke test
 # (accepting CaptureUnavailable as an environment limitation in non-interactive sessions).
 #
@@ -37,7 +37,7 @@ Write-Host ""
 
 # ── Step 1: Build .NET solution ──────────────────────────────────────────
 Write-Host "[1/6] Building .NET solution..." -ForegroundColor Yellow
-$buildOutput = dotnet build (Join-Path $RootDir "Respectacle.sln") 2>&1
+$buildOutput = dotnet build (Join-Path $RootDir "captcho.sln") 2>&1
 $buildExit = $LASTEXITCODE
 $buildOutput | ForEach-Object { Write-Host $_ }
 if ($buildExit -ne 0) {
@@ -54,7 +54,7 @@ Write-Host ""
 
 # ── Step 2: Run CLI unit tests ───────────────────────────────────────────
 Write-Host "[2/6] Running CLI unit tests..." -ForegroundColor Yellow
-$testOutput = dotnet test (Join-Path $RootDir "respectacle-cli.Tests/respectacle-cli.Tests.csproj") `
+$testOutput = dotnet test (Join-Path $RootDir "captcho-cli.Tests/captcho-cli.Tests.csproj") `
     --verbosity normal 2>&1
 $testExit = $LASTEXITCODE
 $testOutput | ForEach-Object { Write-Host $_ }
@@ -68,11 +68,11 @@ if ($testExit -ne 0) {
 Write-Host ""
 
 # ── Step 3: --help smoke test ────────────────────────────────────────────
-Write-Host "[3/6] Testing respectacle-cli --help..." -ForegroundColor Yellow
+Write-Host "[3/6] Testing captcho-cli --help..." -ForegroundColor Yellow
 
 # Find the CLI output directory
-$cliProj = Join-Path $RootDir "respectacle-cli/respectacle-cli.csproj"
-$cliOutputDir = Join-Path $RootDir "respectacle-cli/bin/Debug/net8.0-windows"
+$cliProj = Join-Path $RootDir "captcho-cli/captcho-cli.csproj"
+$cliOutputDir = Join-Path $RootDir "captcho-cli/bin/Debug/net8.0-windows"
 
 # Build the CLI project explicitly to ensure it's available
 $cliBuildOutput = dotnet build $cliProj 2>&1
@@ -219,7 +219,7 @@ Write-Host ""
 Write-Host "[5/6] Real capture smoke test (full-desktop)..." -ForegroundColor Yellow
 
 # Check if Rust DLL is available for native capture
-$rustDll = Join-Path $RootDir "rust-dll/target/release/respectacle_capture.dll"
+$rustDll = Join-Path $RootDir "rust-dll/target/release/captcho_capture.dll"
 $captureAvailable = Test-Path $rustDll
 
 if (-not $captureAvailable) {
@@ -228,19 +228,19 @@ if (-not $captureAvailable) {
     Record-Result "capture smoke test" "WARN" "Rust DLL not available"
 } else {
     # Stage the DLL into the CLI output directory
-    $cliOutDir = Join-Path $RootDir "respectacle-cli/bin/Debug/net8.0-windows"
+    $cliOutDir = Join-Path $RootDir "captcho-cli/bin/Debug/net8.0-windows"
     if (-not (Test-Path $cliOutDir)) {
         # Try finding any matching output directory
-        $cliOutDir = (Get-ChildItem -Path (Join-Path $RootDir "respectacle-cli/bin/Debug") -Directory -Recurse |
-                        Where-Object { $_.Name -like "net8.0*" -and (Test-Path (Join-Path $_.FullName "respectacle-cli.dll")) } |
+        $cliOutDir = (Get-ChildItem -Path (Join-Path $RootDir "captcho-cli/bin/Debug") -Directory -Recurse |
+                        Where-Object { $_.Name -like "net8.0*" -and (Test-Path (Join-Path $_.FullName "captcho-cli.dll")) } |
                         Sort-Object LastWriteTime -Descending |
                         Select-Object -First 1).FullName
     }
 
     if ($cliOutDir -and (Test-Path $cliOutDir)) {
-        Copy-Item -Path $rustDll -Destination (Join-Path $cliOutDir "respectacle_capture.dll") -Force
+        Copy-Item -Path $rustDll -Destination (Join-Path $cliOutDir "captcho_capture.dll") -Force
 
-        $captureOutput = dotnet run --project $cliProj -- --full --output "$env:TEMP\respectacle-s09-verify" --verbose 2>&1
+        $captureOutput = dotnet run --project $cliProj -- --full --output "$env:TEMP\captcho-s09-verify" --verbose 2>&1
         $captureExit = $LASTEXITCODE
         $captureText = ($captureOutput | Where-Object { $_ -is [string] }) -join "`n"
         $captureOutput | ForEach-Object { Write-Host $_ }
@@ -283,7 +283,7 @@ if (-not $captureAvailable) {
             }
 
             # Clean up temp file
-            $tempFile = Get-ChildItem "$env:TEMP\respectacle-s09-verify\*.png" -ErrorAction SilentlyContinue | Select-Object -First 1
+            $tempFile = Get-ChildItem "$env:TEMP\captcho-s09-verify\*.png" -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($tempFile) {
                 Remove-Item $tempFile.FullName -Force -ErrorAction SilentlyContinue
                 $parentDir = Split-Path $tempFile.FullName -Parent
@@ -320,7 +320,7 @@ Write-Host ""
 
 # ── Step 6: Documentation consistency test ───────────────────────────────
 Write-Host "[6/6] Running documentation consistency tests..." -ForegroundColor Yellow
-$docTestOutput = dotnet test (Join-Path $RootDir "respectacle-cli.Tests/respectacle-cli.Tests.csproj") `
+$docTestOutput = dotnet test (Join-Path $RootDir "captcho-cli.Tests/captcho-cli.Tests.csproj") `
     --filter "CliDocumentation" --verbosity normal 2>&1
 $docTestExit = $LASTEXITCODE
 $docTestOutput | ForEach-Object { Write-Host $_ }

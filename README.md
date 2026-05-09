@@ -1,4 +1,4 @@
-# Respectacle — Screen Capture Preview
+# captcho — Screen Capture Preview
 
 A Windows screen capture application built with Rust (native capture) + C#/.NET 8 (managed interop) + WinUI 3 (preview UI).
 
@@ -7,9 +7,9 @@ A Windows screen capture application built with Rust (native capture) + C#/.NET 
 | Layer | Technology | Description |
 |-------|-----------|-------------|
 | **Native capture** | Rust DLL (`rust-dll/`) | Windows Graphics Capture API via `windows-capture` crate. Supports monitor-by-index, full-desktop (stitched), active window, window-under-cursor, and window-by-HWND capture modes. |
-| **Managed interop** | .NET 8 library (`respectacle-capture/`) | P/Invoke bindings, `SafeCaptureResult` handle, `BitmapBufferConverter` for stride stripping, `CaptureDiagnostics` for timing, `WindowResolver` for cursor-to-HWND resolution. |
+| **Managed interop** | .NET 8 library (`captcho-capture/`) | P/Invoke bindings, `SafeCaptureResult` handle, `BitmapBufferConverter` for stride stripping, `CaptureDiagnostics` for timing, `WindowResolver` for cursor-to-HWND resolution. |
 | **Console tester** | .NET 8 console (`cs-tester/`) | CLI runner for capture commands and structured verification output, including `--verify-s03` for window capture diagnostics. |
-| **Preview UI** | WinUI 3 (`respectacle-ui/`) | Desktop app with Full Desktop, Current Monitor, Active Window, and Window Under Cursor capture buttons, WriteableBitmap preview, and timing diagnostics. |
+| **Preview UI** | WinUI 3 (`captcho-ui/`) | Desktop app with Full Desktop, Current Monitor, Active Window, and Window Under Cursor capture buttons, WriteableBitmap preview, and timing diagnostics. |
 
 ## Prerequisites
 
@@ -23,7 +23,7 @@ A Windows screen capture application built with Rust (native capture) + C#/.NET 
 ```powershell
 # Build everything
 cargo build --manifest-path rust-dll/Cargo.toml --release
-dotnet build Respectacle.sln
+dotnet build captcho.sln
 ```
 
 ## Verification Scripts
@@ -99,7 +99,7 @@ powershell -ExecutionPolicy Bypass -File scripts/verify-s07-build.ps1
 **Export architecture:**
 - **Filename template expander** (`ExportFilenameTemplate`) — expands `{date}`, `{time}`, `{title}`, `{seq}` placeholders with filesystem-safe sanitization. Default template: `{date}_{time}`.
 - **PNG export** (`PngExportService`) — encodes `ContiguousBitmap` BGRA data via `System.Drawing.Common`, creates directories, reports timing and phase-labeled failures.
-- **Default save location** — `Pictures\Respectacle\` under the user profile, with auto-incrementing sequence collision resolution.
+- **Default save location** — `Pictures\captcho\` under the user profile, with auto-incrementing sequence collision resolution.
 - **Clipboard copy** (`ClipboardExportService`) — copies PNG bytes via `IClipboardAdapter` abstraction; production uses `DataPackage`, tests use fakes.
 - **Status feedback** (`ExportStatusFormatter`) — pure-logic formatting of `ExportResult` status/timing into user-visible strings; fully testable without WinUI.
 - **Export buttons** (Save, Save As, Copy) are disabled until a capture succeeds and during export operations, preventing double-export races.
@@ -142,13 +142,13 @@ powershell -ExecutionPolicy Bypass -File scripts/verify-s10-configuration.ps1
 ```
 
 **Configuration architecture:**
-- **Settings file** — `%LOCALAPPDATA%\Respectacle\settings.json`. Created automatically on first save. Uses camelCase JSON with unknown-property preservation for forward compatibility.
+- **Settings file** — `%LOCALAPPDATA%\captcho\settings.json`. Created automatically on first save. Uses camelCase JSON with unknown-property preservation for forward compatibility.
 - **AppSettings model** — Two nullable properties: `saveLocation` (default save directory) and `filenameTemplate` (filename pattern). Computed `EffectiveSaveLocation`/`EffectiveFilenameTemplate` properties fall back to defaults when unset.
-- **ConfigurationService** — Loads/saves settings with constructor-injected config path. Production default: `%LOCALAPPDATA%\Respectacle\`. Tests inject temp directories. Returns structured `ConfigurationLoadResult`/`ConfigurationSaveResult` with phase, sanitized error message, and metadata — never throws for expected failures.
+- **ConfigurationService** — Loads/saves settings with constructor-injected config path. Production default: `%LOCALAPPDATA%\captcho\`. Tests inject temp directories. Returns structured `ConfigurationLoadResult`/`ConfigurationSaveResult` with phase, sanitized error message, and metadata — never throws for expected failures.
 - **Atomic save** — Writes to a temp file first, then moves into place. Corrupted JSON files are renamed to `.backup` (with incremental suffixes) before falling back to defaults.
 - **Startup wiring** — `App.OnLaunched` loads settings and passes them to `MainWindow`. Missing file → defaults (no error). Corrupted file → defaults + status warning + backup file created.
 - **Save/SaveAs integration** — Save uses `settings.EffectiveSaveLocation` and `settings.EffectiveFilenameTemplate`. SaveAs persists the chosen directory only after successful save. Cancel/failure does not modify settings.
-- **Defaults** — Save location: `Pictures\Respectacle\` under user profile. Filename template: `Respectacle_<yyyy>-<MM>-<dd>_<hh><mm><ss>`.
+- **Defaults** — Save location: `Pictures\captcho\` under user profile. Filename template: `captcho_<yyyy>-<MM>-<dd>_<hh><mm><ss>`.
 
 **Settings file example:**
 ```json
@@ -170,19 +170,19 @@ An empty JSON object `{}` is valid — it means "use all defaults". Omitting eit
 
 **Manual UAT for configuration persistence (requires interactive desktop):**
 
-1. **Restart persistence**: Launch the app → capture a screenshot → click **Save As** → choose a different directory and save → close the app → relaunch → capture again → click **Save** → verify it saves to the previously chosen directory (not the default `Pictures\Respectacle\`).
-2. **Missing config**: Delete `%LOCALAPPDATA%\Respectacle\settings.json` if it exists → launch the app → verify it starts normally with no error. Capture and Save → verify file goes to default `Pictures\Respectacle\`.
-3. **Corrupted config recovery**: Edit `%LOCALAPPDATA%\Respectacle\settings.json` to contain invalid JSON (e.g., `{bad`) → launch the app → verify it starts with defaults and shows a config warning → check that `settings.json.backup` was created → the original corrupted content is preserved in the backup file.
+1. **Restart persistence**: Launch the app → capture a screenshot → click **Save As** → choose a different directory and save → close the app → relaunch → capture again → click **Save** → verify it saves to the previously chosen directory (not the default `Pictures\captcho\`).
+2. **Missing config**: Delete `%LOCALAPPDATA%\captcho\settings.json` if it exists → launch the app → verify it starts normally with no error. Capture and Save → verify file goes to default `Pictures\captcho\`.
+3. **Corrupted config recovery**: Edit `%LOCALAPPDATA%\captcho\settings.json` to contain invalid JSON (e.g., `{bad`) → launch the app → verify it starts with defaults and shows a config warning → check that `settings.json.backup` was created → the original corrupted content is preserved in the backup file.
 4. **Save As cancel does not persist**: Launch the app → capture → click **Save As** → cancel the picker → verify status shows "Save cancelled" → close and relaunch → capture → click **Save** → verify it still uses the previous directory (not any cancelled location).
 
 ## Production CLI
 
-The `respectacle-cli` project provides headless screen capture from the command line — no WinUI preview window is shown. It supports all five capture modes, writes PNG files, and returns deterministic exit codes plus structured diagnostics for automation.
+The `captcho-cli` project provides headless screen capture from the command line — no WinUI preview window is shown. It supports all five capture modes, writes PNG files, and returns deterministic exit codes plus structured diagnostics for automation.
 
 ### Usage
 
 ```
-respectacle-cli <mode> [options]
+captcho-cli <mode> [options]
 ```
 
 ### Capture Modes (exactly one required)
@@ -201,8 +201,8 @@ respectacle-cli <mode> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--output <path>` | Output file path or directory. If path ends in `.png`, treated as full file path. Otherwise treated as a directory. Default: `%USERPROFILE%\Pictures\Respectacle\` |
-| `--filename <template>` | Filename template with placeholders: `<yyyy>` `<MM>` `<dd>` `<hh>` `<mm>` `<ss>` `<#>`. Default: `Respectacle_<yyyy>-<MM>-<dd>_<hh><mm><ss>.png` |
+| `--output <path>` | Output file path or directory. If path ends in `.png`, treated as full file path. Otherwise treated as a directory. Default: `%USERPROFILE%\Pictures\captcho\` |
+| `--filename <template>` | Filename template with placeholders: `<yyyy>` `<MM>` `<dd>` `<hh>` `<mm>` `<ss>` `<#>`. Default: `captcho_<yyyy>-<MM>-<dd>_<hh><mm><ss>.png` |
 
 ### General Options
 
@@ -215,22 +215,22 @@ respectacle-cli <mode> [options]
 
 ```powershell
 # Capture all monitors, save to default directory
-respectacle-cli --full
+captcho-cli --full
 
 # Capture second monitor (index 1), save to custom directory
-respectacle-cli --monitor 1 --output C:\captures
+captcho-cli --monitor 1 --output C:\captures
 
 # Capture current monitor with custom filename
-respectacle-cli --monitor --filename my_<yyyy><MM><dd>.png
+captcho-cli --monitor --filename my_<yyyy><MM><dd>.png
 
 # Capture active window, save as specific file
-respectacle-cli --window-active --output screenshot.png
+captcho-cli --window-active --output screenshot.png
 
 # Capture 800x600 region at (100,200) with verbose diagnostics
-respectacle-cli --region 100,200,800,600 --output C:\out --verbose
+captcho-cli --region 100,200,800,600 --output C:\out --verbose
 
 # Capture window under cursor
-respectacle-cli --window-cursor --output C:\captures
+captcho-cli --window-cursor --output C:\captures
 ```
 
 ### Exit Codes
@@ -249,7 +249,7 @@ All output is printed as `key=value` pairs to stdout. Use `--verbose` for a capt
 
 Example success output:
 ```
-CaptureMode=full Status=success OutputPath=C:\Users\...\Respectacle_2026-05-01_224800.png Dimensions=3840x1080 ExitCode=0
+CaptureMode=full Status=success OutputPath=C:\Users\...\captcho_2026-05-01_224800.png Dimensions=3840x1080 ExitCode=0
 ```
 
 Example verbose output:
@@ -271,7 +271,7 @@ The CLI is designed for automation. In non-interactive environments (CI, RDP wit
 3. **Cancel before zero**: Start a delayed capture with any non-zero delay, click Cancel during countdown → countdown stops, progress resets, window title/status return to idle. No capture occurs.
 4. **Max delay sanity**: Set Delay (sec) to 60 (the maximum) → verify the spinner clamps at 60. Start capture → countdown runs 60 seconds, then captures. Verify the progress bar reaches 100% at the end.
 
-1. **Save (default location)**: Capture any screenshot → click **Save** → status text shows "Saved — <filename> (<dimensions>)" and timing shows export milliseconds. Verify the PNG file exists in `Pictures\Respectacle\` under your user profile with a timestamped filename.
+1. **Save (default location)**: Capture any screenshot → click **Save** → status text shows "Saved — <filename> (<dimensions>)" and timing shows export milliseconds. Verify the PNG file exists in `Pictures\captcho\` under your user profile with a timestamped filename.
 2. **Save As (custom location)**: Capture any screenshot → click **Save As** → FileSavePicker opens → navigate to a different folder, enter a filename, click Save → status shows "Saved — <filename> (<dimensions>)". Verify the file is at the chosen location.
 3. **Save As cancelled**: Capture any screenshot → click **Save As** → dismiss the picker without saving → status shows "Save cancelled". Export buttons should remain enabled.
 4. **Copy to clipboard**: Capture any screenshot → click **Copy** → status shows "Copied to clipboard (<dimensions>)" with timing. Paste into Paint or another application → the screenshot image should appear.
@@ -288,17 +288,17 @@ The e2e script verifies the WinUI project compiles. Runtime UI testing is manual
 
 1. Stage the Rust DLL:
    ```powershell
-   Copy-Item rust-dll/target/release/respectacle_capture.dll respectacle-ui/bin/Debug/net8.0-windows10.0.19041.0/win-x64/ -Force
+   Copy-Item rust-dll/target/release/captcho_capture.dll captcho-ui/bin/Debug/net8.0-windows10.0.19041.0/win-x64/ -Force
    ```
    (Adjust output path if needed — the DLL must be beside the app executable.)
 
 2. Launch the app:
    ```powershell
-   dotnet run --project respectacle-ui
+   dotnet run --project captcho-ui
    ```
 
 3. Expected behavior:
-   - Window opens at ~1000×700 with title "Respectacle — Screen Capture Preview"
+   - Window opens at ~1000×700 with title "captcho — Screen Capture Preview"
    - Click **Full Desktop** → captures all monitors stitched, displays preview
    - Click **Current Monitor** → captures the monitor under cursor, displays preview
    - Click **Active Window** → captures the foreground window, displays preview
@@ -310,7 +310,7 @@ The e2e script verifies the WinUI project compiles. Runtime UI testing is manual
 
 ```powershell
 # Stage DLL first:
-Copy-Item rust-dll/target/release/respectacle_capture.dll cs-tester/bin/Debug/net8.0-windows/ -Force
+Copy-Item rust-dll/target/release/captcho_capture.dll cs-tester/bin/Debug/net8.0-windows/ -Force
 
 # Run specific captures:
 dotnet run --project cs-tester -- --capture
@@ -339,9 +339,9 @@ The `verify-s03-e2e.ps1` script handles non-interactive sessions gracefully. Whe
 1. Open two visible windows side-by-side (e.g., Notepad and a browser).
 2. Launch the WinUI app:
    ```powershell
-   dotnet run --project respectacle-ui
+   dotnet run --project captcho-ui
    ```
-3. **Active Window capture**: Click "Active Window" button → preview shows the Respectacle window itself (it was the foreground window when clicked).
+3. **Active Window capture**: Click "Active Window" button → preview shows the captcho window itself (it was the foreground window when clicked).
 4. **Window Under Cursor**: Move cursor over a different window (e.g., Notepad), press the "Window Under Cursor" button → preview shows Notepad.
 5. Verify status text shows mode + dimensions (e.g., "Active Window — 800×600").
 6. Verify timing text shows capture/display/total milliseconds.

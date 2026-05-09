@@ -49,16 +49,16 @@ Stage the Rust DLL (if not already staged):
 
 ```powershell
 cargo build --manifest-path rust-dll/Cargo.toml --release
-Copy-Item rust-dll/target/release/respectacle_capture.dll respectacle-ui/bin/Debug/net8.0-windows10.0.19041.0/win-x64/ -Force
+Copy-Item rust-dll/target/release/captcho_capture.dll captcho-ui/bin/Debug/net8.0-windows10.0.19041.0/win-x64/ -Force
 ```
 
 Then launch:
 
 ```powershell
-dotnet run --project respectacle-ui
+dotnet run --project captcho-ui
 ```
 
-The app opens at approximately 1000×700 with the title "Respectacle — Screen Capture Preview".
+The app opens at approximately 1000×700 with the title "captcho — Screen Capture Preview".
 
 ## UAT Checklist
 

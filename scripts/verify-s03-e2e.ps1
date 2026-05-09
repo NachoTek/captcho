@@ -45,7 +45,7 @@ Write-Host ""
 # ── Step 2: Locate and stage Rust DLL ────────────────────────────────────
 Write-Host "[2/3] Staging Rust DLL..." -ForegroundColor Yellow
 
-$dllName = "respectacle_capture.dll"
+$dllName = "captcho_capture.dll"
 $rustDll = Join-Path $RootDir "rust-dll/target/release/$dllName"
 if (-not (Test-Path $rustDll)) {
     Write-Host "FAIL: Rust DLL not found at $rustDll" -ForegroundColor Red

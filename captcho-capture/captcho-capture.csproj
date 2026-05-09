@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Platforms>x64</Platforms>
+    <RootNamespace>captcho.Capture</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="captcho-capture.Tests" />
+    <InternalsVisibleTo Include="cs-tester" />
+    <InternalsVisibleTo Include="cs-tester.Tests" />
+    <InternalsVisibleTo Include="captcho-ui" />
+    <InternalsVisibleTo Include="captcho-ui.Tests" />
+    <InternalsVisibleTo Include="captcho-cli" />
+    <InternalsVisibleTo Include="captcho-cli.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Drawing.Common" Version="10.0.7" />
+  </ItemGroup>
+  <!--
+    Native Rust DLL: copied to runtimes/win-x64/native/ so .NET finds it via
+    the standard runtime-specific asset resolution. In CI, the Rust build step
+    copies the DLL here. In local dev, the build.ps1 scripts handle this.
+  -->
+  <ItemGroup Condition="Exists('runtimes/win-x64/native/captcho_capture.dll')">
+    <Content Include="runtimes/win-x64/native/captcho_capture.dll" Pack="true" PackagePath="runtimes/win-x64/native/" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

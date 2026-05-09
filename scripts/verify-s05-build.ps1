@@ -59,7 +59,7 @@ Write-Host ""
 
 # ── Step 4: .NET solution build ───────────────────────────────────────────
 Write-Host "[4/7] Building .NET solution..." -ForegroundColor Yellow
-$output = dotnet build (Join-Path $RootDir "Respectacle.sln") 2>&1
+$output = dotnet build (Join-Path $RootDir "captcho.sln") 2>&1
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
 if ($exitCode -ne 0) {
@@ -71,7 +71,7 @@ Write-Host ""
 
 # ── Step 5: Managed interop tests (RegionCapture) ─────────────────────────
 Write-Host "[5/7] Running managed RegionCapture interop tests..." -ForegroundColor Yellow
-$output = dotnet test (Join-Path $RootDir "respectacle-capture.Tests/respectacle-capture.Tests.csproj") --filter "RegionCapture" --verbosity normal 2>&1
+$output = dotnet test (Join-Path $RootDir "captcho-capture.Tests/captcho-capture.Tests.csproj") --filter "RegionCapture" --verbosity normal 2>&1
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
 if ($exitCode -ne 0) {
@@ -83,7 +83,7 @@ Write-Host ""
 
 # ── Step 6: UI service + wiring tests ─────────────────────────────────────
 Write-Host "[6/7] Running UI RegionCapturePreviewService + wiring tests..." -ForegroundColor Yellow
-$output = dotnet test (Join-Path $RootDir "respectacle-ui.Tests/respectacle-ui.Tests.csproj") --filter "RegionCapture" --verbosity normal 2>&1
+$output = dotnet test (Join-Path $RootDir "captcho-ui.Tests/captcho-ui.Tests.csproj") --filter "RegionCapture" --verbosity normal 2>&1
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
 if ($exitCode -ne 0) {
@@ -95,7 +95,7 @@ Write-Host ""
 
 # ── Step 7: S04 overlay regression tests ──────────────────────────────────
 Write-Host "[7/7] Running S04 overlay regression tests..." -ForegroundColor Yellow
-$output = dotnet test (Join-Path $RootDir "respectacle-ui.Tests/respectacle-ui.Tests.csproj") --filter "RegionSelection|CoordinateHelper|RegionSelectionStatus" --verbosity normal 2>&1
+$output = dotnet test (Join-Path $RootDir "captcho-ui.Tests/captcho-ui.Tests.csproj") --filter "RegionSelection|CoordinateHelper|RegionSelectionStatus" --verbosity normal 2>&1
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
 if ($exitCode -ne 0) {

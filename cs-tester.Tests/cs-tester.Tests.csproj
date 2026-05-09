@@ -2,7 +2,7 @@
   <PropertyGroup>
     <TargetFramework>net8.0-windows</TargetFramework>
     <Platforms>x64</Platforms>
-    <RootNamespace>Respectacle.Tester.Tests</RootNamespace>
+    <RootNamespace>captcho.Tester.Tests</RootNamespace>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
@@ -16,6 +16,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\cs-tester\cs-tester.csproj" />
-    <ProjectReference Include="..\respectacle-capture\respectacle-capture.csproj" />
+    <ProjectReference Include="..\captcho-capture\captcho-capture.csproj" />
   </ItemGroup>
 </Project>

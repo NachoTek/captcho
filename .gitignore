@@ -8,7 +8,7 @@
 *.suo
 
 # ── Native DLLs (built from Rust, copied to runtimes/) ──
-respectacle-capture/runtimes/
+captcho-capture/runtimes/
 
 # ── Rust build outputs ──
 rust-dll/target/

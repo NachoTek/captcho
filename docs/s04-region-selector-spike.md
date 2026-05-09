@@ -24,10 +24,10 @@ coordinates — **without invoking Windows Graphics Capture or any native captur
 ## Launch
 
 ```powershell
-dotnet run --project respectacle-ui
+dotnet run --project captcho-ui
 ```
 
-The app opens at approximately 1000×700 with the title "Respectacle — Screen Capture Preview".
+The app opens at approximately 1000×700 with the title "captcho — Screen Capture Preview".
 
 ## UAT Checklist
 

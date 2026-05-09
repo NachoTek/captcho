@@ -38,44 +38,44 @@ jobs:
       # ── Copy native DLL ─────────────────────────────────────────────
       - name: Copy native DLL
         run: |
-          New-Item -Path respectacle-capture/runtimes/win-x64/native -ItemType Directory -Force
-          Copy-Item rust-dll/target/release/respectacle_capture.dll respectacle-capture/runtimes/win-x64/native/
+          New-Item -Path captcho-capture/runtimes/win-x64/native -ItemType Directory -Force
+          Copy-Item rust-dll/target/release/captcho_capture.dll captcho-capture/runtimes/win-x64/native/
         shell: pwsh
 
       # ── Build .NET ──────────────────────────────────────────────────
       - name: Restore .NET dependencies
-        run: dotnet restore Respectacle.sln
+        run: dotnet restore captcho.sln
 
       - name: Build .NET solution (release)
-        run: dotnet build Respectacle.sln --configuration Release --no-restore
+        run: dotnet build captcho.sln --configuration Release --no-restore
 
       - name: Run .NET tests
-        run: dotnet test Respectacle.sln --configuration Release --no-build --verbosity normal
+        run: dotnet test captcho.sln --configuration Release --no-build --verbosity normal
 
       # ── Publish ─────────────────────────────────────────────────────
-      - name: Publish respectacle-ui
+      - name: Publish captcho-ui
         run: |
-          dotnet publish respectacle-ui/respectacle-ui.csproj `
+          dotnet publish captcho-ui/captcho-ui.csproj `
             --configuration Release --runtime win-x64 --self-contained false `
             --output publish/ui
 
-      - name: Publish respectacle-cli
+      - name: Publish captcho-cli
         run: |
-          dotnet publish respectacle-cli/respectacle-cli.csproj `
+          dotnet publish captcho-cli/captcho-cli.csproj `
             --configuration Release --runtime win-x64 --self-contained false `
             --output publish/cli
 
       # ── Package + Release ───────────────────────────────────────────
       - name: Create release archives
         run: |
-          Compress-Archive -Path publish/ui/* -DestinationPath respectacle-ui-${{ github.ref_name }}.zip
-          Compress-Archive -Path publish/cli/* -DestinationPath respectacle-cli-${{ github.ref_name }}.zip
+          Compress-Archive -Path publish/ui/* -DestinationPath captcho-ui-${{ github.ref_name }}.zip
+          Compress-Archive -Path publish/cli/* -DestinationPath captcho-cli-${{ github.ref_name }}.zip
         shell: pwsh
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            respectacle-ui-${{ github.ref_name }}.zip
-            respectacle-cli-${{ github.ref_name }}.zip
+            captcho-ui-${{ github.ref_name }}.zip
+            captcho-cli-${{ github.ref_name }}.zip
           generate_release_notes: true

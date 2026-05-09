@@ -21,7 +21,7 @@ Write-Host ""
 
 # ── Step 1: .NET solution build ───────────────────────────────────────────
 Write-Host "[1/4] Building .NET solution..." -ForegroundColor Yellow
-$output = dotnet build (Join-Path $RootDir "Respectacle.sln") 2>&1
+$output = dotnet build (Join-Path $RootDir "captcho.sln") 2>&1
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
 if ($exitCode -ne 0) {
@@ -33,7 +33,7 @@ Write-Host ""
 
 # ── Step 2: Delayed capture countdown + UI wiring tests ───────────────────
 Write-Host "[2/4] Running DelayedCapture countdown + UI wiring tests..." -ForegroundColor Yellow
-$output = dotnet test (Join-Path $RootDir "respectacle-ui.Tests/respectacle-ui.Tests.csproj") --filter "DelayedCapture" --verbosity normal 2>&1
+$output = dotnet test (Join-Path $RootDir "captcho-ui.Tests/captcho-ui.Tests.csproj") --filter "DelayedCapture" --verbosity normal 2>&1
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
 if ($exitCode -ne 0) {
@@ -45,7 +45,7 @@ Write-Host ""
 
 # ── Step 3: CapturePreviewService regression tests ────────────────────────
 Write-Host "[3/4] Running CapturePreviewService regression tests..." -ForegroundColor Yellow
-$output = dotnet test (Join-Path $RootDir "respectacle-ui.Tests/respectacle-ui.Tests.csproj") --filter "CapturePreviewService" --verbosity normal 2>&1
+$output = dotnet test (Join-Path $RootDir "captcho-ui.Tests/captcho-ui.Tests.csproj") --filter "CapturePreviewService" --verbosity normal 2>&1
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
 if ($exitCode -ne 0) {
@@ -57,7 +57,7 @@ Write-Host ""
 
 # ── Step 4: S05 region-capture regression tests ───────────────────────────
 Write-Host "[4/4] Running S05 region-capture regression tests..." -ForegroundColor Yellow
-$output = dotnet test (Join-Path $RootDir "respectacle-ui.Tests/respectacle-ui.Tests.csproj") --filter "RegionCapturePreviewService|RegionCaptureUiWiring" --verbosity normal 2>&1
+$output = dotnet test (Join-Path $RootDir "captcho-ui.Tests/captcho-ui.Tests.csproj") --filter "RegionCapturePreviewService|RegionCaptureUiWiring" --verbosity normal 2>&1
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
 if ($exitCode -ne 0) {

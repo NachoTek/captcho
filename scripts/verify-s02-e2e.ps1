@@ -45,7 +45,7 @@ Write-Host ""
 # ── Step 2: Locate and stage Rust DLL ────────────────────────────────────
 Write-Host "[2/4] Staging Rust DLL..." -ForegroundColor Yellow
 
-$dllName = "respectacle_capture.dll"
+$dllName = "captcho_capture.dll"
 $rustDll = Join-Path $RootDir "rust-dll/target/release/$dllName"
 if (-not (Test-Path $rustDll)) {
     Write-Host "FAIL: Rust DLL not found at $rustDll" -ForegroundColor Red
@@ -117,7 +117,7 @@ if ($fullDesktopUnavailable -and $monitorUnavailable -and $wgcError) {
     # Still verify WinUI project builds (Step 4)
     Write-Host ""
     Write-Host "[4/4] Verifying WinUI project builds..." -ForegroundColor Yellow
-    $uiProj = Join-Path $RootDir "respectacle-ui/respectacle-ui.csproj"
+    $uiProj = Join-Path $RootDir "captcho-ui/captcho-ui.csproj"
     $output = dotnet build $uiProj 2>&1
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
@@ -249,7 +249,7 @@ Write-Host "  Monitor[0]: round-trip=$m0RoundTrip ms" -ForegroundColor Green
 # ── Step 4: Verify WinUI project build (UI launch is manual UAT) ─────────
 Write-Host ""
 Write-Host "[4/4] Verifying WinUI project builds..." -ForegroundColor Yellow
-$uiProj = Join-Path $RootDir "respectacle-ui/respectacle-ui.csproj"
+$uiProj = Join-Path $RootDir "captcho-ui/captcho-ui.csproj"
 $output = dotnet build $uiProj 2>&1
 $exitCode = $LASTEXITCODE
 if ($exitCode -ne 0) {

@@ -1,4 +1,4 @@
-//! FFI contract integration tests for respectacle-capture.
+//! FFI contract integration tests for captcho-capture.
 //!
 //! These tests validate:
 //! - Struct layout invariants (CaptureStatus repr, CaptureResult field offsets)
@@ -10,7 +10,7 @@
 //! These tests run via `cargo test` and do NOT require a desktop session
 //! or WGC availability — they use synthetic frame helpers exclusively.
 
-use respectacle_capture::*;
+use captcho_capture::*;
 
 // ---------------------------------------------------------------------------
 // CaptureStatus repr(C) layout invariants
@@ -77,7 +77,7 @@ fn error_result_has_null_frame_and_non_null_error() {
     let msg = unsafe { std::ffi::CStr::from_ptr(r.error_message) };
     assert!(msg.to_str().unwrap().contains("something broke"));
 
-    unsafe { respectacle_free_error_message(r.error_message) };
+    unsafe { captcho_free_error_message(r.error_message) };
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@ fn synthetic_frame_basic_properties() {
     assert_eq!(r.data_len, 1920 * 4 * 1080);
     assert!(!r.frame_data.is_null());
     assert!(r.error_message.is_null());
-    unsafe { respectacle_free_capture_result(r) };
+    unsafe { captcho_free_capture_result(r) };
 }
 
 #[test]
@@ -111,7 +111,7 @@ fn synthetic_frame_data_len_equals_stride_times_height() {
             r.data_len,
             r.stride * r.height
         );
-        unsafe { respectacle_free_capture_result(r) };
+        unsafe { captcho_free_capture_result(r) };
     }
 }
 
@@ -125,7 +125,7 @@ fn synthetic_frame_with_custom_stride_preserves_padding() {
     assert_eq!(r.data_len, 512 * 50);
     assert_eq!(r.width, 100);
     assert_eq!(r.height, 50);
-    unsafe { respectacle_free_capture_result(r) };
+    unsafe { captcho_free_capture_result(r) };
 }
 
 #[test]
@@ -135,7 +135,7 @@ fn synthetic_frame_stride_cannot_be_less_than_width_times_four() {
     assert!(r.frame_data.is_null());
     // Error message should explain the problem
     assert!(!r.error_message.is_null());
-    unsafe { respectacle_free_capture_result(r) };
+    unsafe { captcho_free_capture_result(r) };
 }
 
 #[test]
@@ -163,7 +163,7 @@ fn synthetic_frame_pixel_data_is_readable() {
     assert_eq!(pixels[6], 0x80);
     assert_eq!(pixels[7], 0xFF);
 
-    unsafe { respectacle_free_capture_result(r) };
+    unsafe { captcho_free_capture_result(r) };
 }
 
 // ---------------------------------------------------------------------------
@@ -172,18 +172,18 @@ fn synthetic_frame_pixel_data_is_readable() {
 
 #[test]
 fn free_null_frame_is_safe() {
-    unsafe { respectacle_free_frame(std::ptr::null_mut()) };
+    unsafe { captcho_free_frame(std::ptr::null_mut()) };
 }
 
 #[test]
 fn free_null_error_message_is_safe() {
-    unsafe { respectacle_free_error_message(std::ptr::null_mut()) };
+    unsafe { captcho_free_error_message(std::ptr::null_mut()) };
 }
 
 #[test]
 fn free_default_capture_result_is_safe() {
     let r = CaptureResult::default();
-    unsafe { respectacle_free_capture_result(r) };
+    unsafe { captcho_free_capture_result(r) };
 }
 
 #[test]
@@ -193,19 +193,19 @@ fn double_free_frame_is_safe() {
     assert!(!ptr.is_null());
 
     // First free
-    unsafe { respectacle_free_frame(ptr) };
+    unsafe { captcho_free_frame(ptr) };
 
     // Second free — should silently ignore (not in registry)
-    unsafe { respectacle_free_frame(ptr) };
+    unsafe { captcho_free_frame(ptr) };
 }
 
 #[test]
 fn free_error_only_then_frame_is_safe() {
     let r = create_synthetic_frame(5, 5);
     // Free error message first (it's null, so this is a no-op)
-    unsafe { respectacle_free_error_message(r.error_message) };
+    unsafe { captcho_free_error_message(r.error_message) };
     // Then free frame
-    unsafe { respectacle_free_frame(r.frame_data) };
+    unsafe { captcho_free_frame(r.frame_data) };
 }
 
 // ---------------------------------------------------------------------------
@@ -220,7 +220,7 @@ fn invalid_frame_zero_dims_is_error() {
     assert_eq!(r.width, 0);
     assert_eq!(r.height, 0);
     assert!(!r.error_message.is_null());
-    unsafe { respectacle_free_capture_result(r) };
+    unsafe { captcho_free_capture_result(r) };
 }
 
 #[test]
@@ -231,7 +231,7 @@ fn one_pixel_frame_is_valid() {
     assert_eq!(r.height, 1);
     assert_eq!(r.stride, 4);
     assert_eq!(r.data_len, 4);
-    unsafe { respectacle_free_capture_result(r) };
+    unsafe { captcho_free_capture_result(r) };
 }
 
 #[test]
@@ -240,7 +240,7 @@ fn large_frame_allocates_and_frees() {
     let r = create_synthetic_frame(3840, 2160);
     assert_eq!(r.status, CaptureStatus::Ok);
     assert_eq!(r.data_len, 3840 * 4 * 2160);
-    unsafe { respectacle_free_capture_result(r) };
+    unsafe { captcho_free_capture_result(r) };
 }
 
 #[test]
@@ -253,12 +253,12 @@ fn error_message_with_nul_byte_is_handled() {
     // The message should be readable
     let msg = unsafe { std::ffi::CStr::from_ptr(r.error_message) };
     assert!(!msg.to_bytes().is_empty());
-    unsafe { respectacle_free_capture_message(r.error_message) };
+    unsafe { captcho_free_capture_message(r.error_message) };
 }
 
 // Helper that uses the correct function name
-unsafe fn respectacle_free_capture_message(msg: *mut std::ffi::c_char) {
-    respectacle_free_error_message(msg);
+unsafe fn captcho_free_capture_message(msg: *mut std::ffi::c_char) {
+    captcho_free_error_message(msg);
 }
 
 // ---------------------------------------------------------------------------
@@ -268,14 +268,14 @@ unsafe fn respectacle_free_capture_message(msg: *mut std::ffi::c_char) {
 #[test]
 fn exported_functions_exist_and_are_callable() {
     // This test primarily ensures the function signatures compile correctly.
-    // We can't call respectacle_capture_frame() in CI (no desktop session),
+    // We can't call captcho_capture_frame() in CI (no desktop session),
     // but we verify the other functions work with synthetic data.
     let r = create_synthetic_frame(2, 2);
     assert_eq!(r.status, CaptureStatus::Ok);
 
     // Verify all three free functions compile and work:
     unsafe {
-        respectacle_free_capture_result(r);
+        captcho_free_capture_result(r);
     }
 }
 
@@ -287,7 +287,7 @@ fn exported_functions_exist_and_are_callable() {
 fn stride_equals_width_times_four_for_standard_frame() {
     let r = create_synthetic_frame(640, 480);
     assert_eq!(r.stride, r.width * 4);
-    unsafe { respectacle_free_capture_result(r) };
+    unsafe { captcho_free_capture_result(r) };
 }
 
 #[test]
@@ -296,5 +296,5 @@ fn stride_with_padding_still_satisfies_data_len_equals_stride_times_height() {
     assert_eq!(r.status, CaptureStatus::Ok);
     assert!(r.stride > r.width * 4); // Has padding
     assert_eq!(r.data_len, r.stride * r.height);
-    unsafe { respectacle_free_capture_result(r) };
+    unsafe { captcho_free_capture_result(r) };
 }
