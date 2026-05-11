@@ -1,0 +1,133 @@
+{
+  "timestamp": "2026-04-30T21:26:36.434Z",
+  "tool": "gsd_plan_slice",
+  "args": {
+    "actorName": "executor-01",
+    "goal": "Validate the riskiest Core Capture boundary before building UI: a Rust `cdylib` captures one primary-monitor frame through Windows Graphics Capture, exposes Rust-owned BGRA pixel data through a C ABI, and a C# console runner calls it via P/Invoke, converts the buffer to `SoftwareBitmap`, prints dimensions and timing, then frees native memory. Demo: `scripts/verify-s01-e2e.ps1` builds both sides, runs the C# tester against the Rust DLL on a Windows desktop session, and shows successful capture metadata plus round-trip timing.",
+    "integrationClosure": "- Upstream surfaces consumed: none; this is the first slice.\n- New wiring introduced in this slice: Rust `cdylib` entrypoints in `rust-dll/src/lib.rs`; C# P/Invoke declarations and managed wrappers in `cs-tester`; PowerShell scripts that compose the Rust DLL with the C# runner.\n- What remains before the milestone is truly usable end-to-end: S02 must integrate the proven buffer contract into a WinUI 3 preview window and add full-screen/current-monitor workflows; S03/S05 add remaining capture targets; S07/S09 reuse this boundary for export and CLI.",
+    "milestoneId": "M001-cb7uv2",
+    "observabilityImpact": "- Runtime signals: The C# runner prints structured single-line fields for capture status, dimensions, stride, data length, SoftwareBitmap dimensions, and round-trip milliseconds; failures print native status/error without dumping pixels.\n- Inspection surfaces: `scripts/verify-s01-build.ps1`, `scripts/verify-s01-e2e.ps1`, Rust test output, C# test output, and `docs/s01-capture-spike.md` baseline notes.\n- Failure visibility: Native capture failures include a status code and sanitized error message; managed validation failures identify which invariant failed (null pointer, zero dimensions, mismatched data length, bitmap dimension mismatch).\n- Redaction constraints: Never log raw screenshot bytes, image dumps, screen contents, file paths containing secrets, or clipboard contents.",
+    "proofLevel": "- This slice proves: integration contract and operational spike\n- Real runtime required: yes — WGC capture must run against an actual Windows desktop session for final e2e proof\n- Human/UAT required: no, unless the local environment blocks Windows Graphics Capture permission and the script cannot exercise the real desktop path",
+    "sliceId": "S01",
+    "successCriteria": "## Must-Haves\n\n- Rust project `rust-dll` builds as a C-compatible DLL (`cdylib`) and contains an FFI-safe frame/result contract with explicit free functions.\n- Rust capture implementation uses `windows-capture` / WGC for one primary-monitor frame and returns BGRA-compatible pixel data with width, height, stride, byte length, status, and error information.\n- C# project `cs-tester` declares matching P/Invoke structs/functions and converts native buffer data into a `Windows.Graphics.Imaging.SoftwareBitmap` without corrupting dimensions or buffer length.\n- Tests cover the interop contract with real assertions: Rust tests validate FFI layout/synthetic frame ownership, and C# tests validate struct layout plus SoftwareBitmap conversion from a synthetic BGRA buffer.\n- End-to-end verification script builds Rust + C#, copies/locates the DLL, runs the real capture path, asserts non-zero dimensions, asserts `data_len == stride * height`, asserts a `SoftwareBitmap` is created with matching dimensions, and reports round-trip milliseconds as the baseline for R011.\n- Memory ownership is explicit: C# always calls the native free function in `finally`/`IDisposable`-style code, and error strings or result allocations have matching cleanup.\n\n## Threat Surface\n\n- **Abuse**: This spike exposes no network or auth surface, but the P/Invoke boundary can be abused by malformed native pointers, double-free attempts, or stale frame handles. Managed wrappers must centralize ownership and prevent normal callers from freeing the same frame twice.\n- **Data exposure**: Captured screenshots may contain sensitive desktop content. The spike must not write image bytes to tracked logs or artifacts by default; diagnostics should print only dimensions, byte counts, status, and timing.\n- **Input trust**: The only untrusted boundary is native data crossing into managed code. C# must validate width/height/stride/data length before copying into managed memory or creating a SoftwareBitmap.\n\n## Requirement Impact\n\n- **Requirements touched**: R011 directly (performance baseline, supporting all slices); R001/R002/R009 indirectly by proving capture-mode data and preview/CLI interop foundations.\n- **Re-verify**: Re-run Rust tests, C# tests, and the real desktop e2e script before closing the slice. Later S02 must re-verify display latency using this same timing pattern.\n- **Decisions revisited**: D001, D003, D008, D009 remain valid if the e2e script passes; revisit them if WGC cannot run reliably from a DLL or if the copy path is far above the <50ms capture baseline.\n\n## Verification\n\n- `cargo test --manifest-path rust-dll/Cargo.toml`\n- `dotnet test cs-tester.Tests/cs-tester.Tests.csproj`\n- `pwsh -File scripts/verify-s01-build.ps1`\n- `pwsh -File scripts/verify-s01-e2e.ps1` on an interactive Windows desktop session with screen capture permission available\n\nThe planned test files are `rust-dll/tests/ffi_contract.rs` and `cs-tester.Tests/InteropContractTests.cs`. The planned runtime verification scripts are `scripts/verify-s01-build.ps1` and `scripts/verify-s01-e2e.ps1`.",
+    "tasks": [
+      {
+        "description": "Expected task-plan `skills_used`: `tdd`, `verify-before-complete`.\n\nWhy: The repository currently has no tracked app code, so executors need a buildable scaffold before implementing the FFI and capture logic. This task creates the minimal Rust `cdylib`, C# console app, C# test project, solution file, and build verification script so later tasks can focus on behavior instead of project plumbing.\n\nDo:\n1. Create `rust-dll` as a Cargo library with `crate-type = [\"cdylib\", \"rlib\"]`, Windows-only dependencies needed for WGC, and a placeholder `src/lib.rs` exposing compile-safe FFI contract stubs.\n2. Create `cs-tester` as a Windows-targeted .NET console project that can reference WinRT imaging APIs later and currently prints a placeholder usage message.\n3. Create `cs-tester.Tests` as a test project referencing `cs-tester`, with an initial placeholder/failing-safe contract test that compiles but does not assert final capture behavior yet.\n4. Add `Respectacle.sln` and include both C# projects.\n5. Add `scripts/verify-s01-build.ps1` that runs `cargo test --manifest-path rust-dll/Cargo.toml`, `cargo build --manifest-path rust-dll/Cargo.toml --release`, `dotnet build Respectacle.sln`, and `dotnet test cs-tester.Tests/cs-tester.Tests.csproj` with fail-fast behavior.\n\nVerify: `pwsh -File scripts/verify-s01-build.ps1` should run and fail only if the scaffold does not compile.\nDone when: The solution, Rust project, C# projects, and build script are all tracked-file outputs and the build script exercises both toolchains.",
+        "estimate": "45m",
+        "expectedOutput": [
+          "`Respectacle.sln`",
+          "`rust-dll/Cargo.toml`",
+          "`rust-dll/src/lib.rs`",
+          "`cs-tester/cs-tester.csproj`",
+          "`cs-tester/Program.cs`",
+          "`cs-tester.Tests/cs-tester.Tests.csproj`",
+          "`cs-tester.Tests/InteropContractTests.cs`",
+          "`scripts/verify-s01-build.ps1`"
+        ],
+        "files": [
+          "Respectacle.sln",
+          "rust-dll/Cargo.toml",
+          "rust-dll/src/lib.rs",
+          "cs-tester/cs-tester.csproj",
+          "cs-tester/Program.cs",
+          "cs-tester.Tests/cs-tester.Tests.csproj",
+          "cs-tester.Tests/InteropContractTests.cs",
+          "scripts/verify-s01-build.ps1"
+        ],
+        "inputs": [
+          "`.gitignore`"
+        ],
+        "taskId": "T01",
+        "title": "Create the tracked Rust/C# spike workspace and verification harness",
+        "verify": "pwsh -File scripts/verify-s01-build.ps1"
+      },
+      {
+        "description": "Expected task-plan `skills_used`: `tdd`, `verify-before-complete`.\n\nWhy: This closes the native side of the spike: downstream slices need a concrete C ABI that returns a frame buffer, status/error data, and cleanup hooks without panicking or leaking memory across P/Invoke.\n\nFailure Modes:\n| Dependency | On error | On timeout | On malformed response |\n|------------|----------|-----------|----------------------|\n| Windows Graphics Capture / `windows-capture` | Return non-zero status and sanitized error string; never unwind across FFI | The one-shot call should fail with a timeout/status if no frame arrives within the chosen bounded wait | Validate captured buffer metadata before constructing a success result; return error if width/height/stride/data are inconsistent |\n| Rust-owned heap memory exposed over C ABI | Return null frame on allocation/capture failure with error status | N/A | `free_frame` and result cleanup tolerate null pointers and tests cover synthetic allocation/free paths |\n\nLoad Profile:\n- **Shared resources**: Desktop capture session, COM/WGC runtime, native heap allocations for one frame.\n- **Per-operation cost**: One WGC session, one frame copy into Rust-owned `Vec<u8>`, one result allocation.\n- **10x breakpoint**: Repeated captures could pressure heap allocation/copy time first; S02 can optimize after this spike baseline is measured.\n\nNegative Tests:\n- **Malformed inputs**: Call cleanup functions with null pointers; validate synthetic frames with zero width/height and inconsistent stride are rejected by helper-level tests.\n- **Error paths**: Ensure capture setup errors become status/error results rather than panics.\n- **Boundary conditions**: Assert `data_len == stride * height` for synthetic frame allocation and that stride may exceed `width * 4`.\n\nDo:\n1. Define FFI-safe structs in `rust-dll/src/lib.rs` such as `CapturedFrame` and `CaptureResult` with `#[repr(C)]`, fixed-size integer fields, raw data pointer, `data_len`, `status`, and optional error pointer/length or an explicit last-error accessor.\n2. Implement exported `capture_primary_monitor()`/`capture_full_screen()` and cleanup functions (`free_frame`, result/error cleanup as needed) using `extern \"C\"` and no Rust panics crossing the boundary.\n3. Use `windows-capture` to select `Monitor::primary()`, capture a single frame, copy BGRA-compatible bytes into Rust-owned memory, compute `stride`, and stop after the first frame.\n4. Add test-only helpers for constructing synthetic frames without WGC so ownership and invariant tests run in CI-like contexts.\n5. Add `rust-dll/tests/ffi_contract.rs` with assertions for struct layout-relevant invariants, synthetic frame allocation, null cleanup safety, and `data_len == stride * height`.\n\nVerify: `cargo test --manifest-path rust-dll/Cargo.toml` and `pwsh -File scripts/verify-s01-build.ps1`.\nDone when: Rust tests pass, release DLL builds, exported functions have stable names documented in code comments, and error paths return status data instead of `expect`/panic at the FFI boundary.",
+        "estimate": "2h",
+        "expectedOutput": [
+          "`rust-dll/Cargo.toml`",
+          "`rust-dll/src/lib.rs`",
+          "`rust-dll/tests/ffi_contract.rs`",
+          "`scripts/verify-s01-build.ps1`"
+        ],
+        "files": [
+          "rust-dll/Cargo.toml",
+          "rust-dll/src/lib.rs",
+          "rust-dll/tests/ffi_contract.rs",
+          "scripts/verify-s01-build.ps1"
+        ],
+        "inputs": [
+          "`rust-dll/Cargo.toml`",
+          "`rust-dll/src/lib.rs`",
+          "`scripts/verify-s01-build.ps1`"
+        ],
+        "observabilityImpact": "- Signals added/changed: Native status codes and sanitized native error messages for capture setup/frame failures.\n- How a future agent inspects this: Run `cargo test --manifest-path rust-dll/Cargo.toml` or invoke the C# runner; failures identify status/error instead of crashing the process.\n- Failure state exposed: WGC setup failure, no-frame/timeout failure, invalid buffer metadata, and null cleanup behavior become visible.",
+        "taskId": "T02",
+        "title": "Implement the Rust WGC one-shot capture DLL and FFI ownership tests",
+        "verify": "cargo test --manifest-path rust-dll/Cargo.toml && pwsh -File scripts/verify-s01-build.ps1"
+      },
+      {
+        "description": "Expected task-plan `skills_used`: `tdd`, `verify-before-complete`.\n\nWhy: The spike is not proven until managed code can safely consume the Rust-owned buffer and create the same `SoftwareBitmap` type S02 will display in WinUI. This task validates the C# side with synthetic data before real desktop capture is run.\n\nFailure Modes:\n| Dependency | On error | On timeout | On malformed response |\n|------------|----------|-----------|----------------------|\n| Rust DLL loaded through P/Invoke | Managed runner reports missing DLL/export with actionable message and non-zero exit code | N/A | Managed wrapper validates result status, pointers, dimensions, stride, and length before copying |\n| WinRT `SoftwareBitmap` APIs | Surface the exception with context and non-zero exit code | N/A | Synthetic tests reject invalid buffers before calling `SoftwareBitmap.CreateCopyFromBuffer` |\n\nLoad Profile:\n- **Shared resources**: Managed heap copy of one screenshot buffer and WinRT imaging allocation.\n- **Per-operation cost**: One native call, one managed byte-array copy, one SoftwareBitmap allocation.\n- **10x breakpoint**: Large multi-monitor frames will pressure memory/copy time first; the runner must print byte length and timing for S02 baseline analysis.\n\nNegative Tests:\n- **Malformed inputs**: Tests cover null data pointer, zero dimensions, `data_len` smaller than `stride * height`, and invalid stride.\n- **Error paths**: Tests cover non-zero native status mapping to managed exception/result failure.\n- **Boundary conditions**: Tests use synthetic stride padding greater than `width * 4` and verify dimensions survive conversion.\n\nDo:\n1. Move P/Invoke declarations and matching `[StructLayout(LayoutKind.Sequential)]` structs into `cs-tester/NativeCapture.cs`, matching the Rust field order exactly.\n2. Implement a safe managed wrapper that owns an `IntPtr` result/frame handle, validates native metadata, copies bytes into managed memory, and frees native resources in `Dispose`/`finally`.\n3. Implement `cs-tester/BitmapConverter.cs` to convert BGRA-compatible byte arrays into `SoftwareBitmap` with width/height and stride-aware validation.\n4. Update `cs-tester/Program.cs` to run the native capture, start a `Stopwatch`, create the SoftwareBitmap, print structured lines (`Captured:`, `SoftwareBitmap:`, `RoundTripMs:`), and return non-zero on failure.\n5. Add `cs-tester.Tests/InteropContractTests.cs` assertions for struct layout, validation failures, padded-stride synthetic buffers, and SoftwareBitmap dimension matching.\n\nVerify: `dotnet test cs-tester.Tests/cs-tester.Tests.csproj` and `pwsh -File scripts/verify-s01-build.ps1`.\nDone when: C# tests pass with real assertions, the console runner has one clear success path and one clear failure path, and native frames are always freed even if SoftwareBitmap conversion fails.",
+        "estimate": "2h",
+        "expectedOutput": [
+          "`cs-tester/cs-tester.csproj`",
+          "`cs-tester/Program.cs`",
+          "`cs-tester/NativeCapture.cs`",
+          "`cs-tester/BitmapConverter.cs`",
+          "`cs-tester.Tests/cs-tester.Tests.csproj`",
+          "`cs-tester.Tests/InteropContractTests.cs`",
+          "`scripts/verify-s01-build.ps1`"
+        ],
+        "files": [
+          "cs-tester/cs-tester.csproj",
+          "cs-tester/Program.cs",
+          "cs-tester/NativeCapture.cs",
+          "cs-tester/BitmapConverter.cs",
+          "cs-tester.Tests/cs-tester.Tests.csproj",
+          "cs-tester.Tests/InteropContractTests.cs",
+          "scripts/verify-s01-build.ps1"
+        ],
+        "inputs": [
+          "`cs-tester/cs-tester.csproj`",
+          "`cs-tester/Program.cs`",
+          "`cs-tester.Tests/cs-tester.Tests.csproj`",
+          "`cs-tester.Tests/InteropContractTests.cs`",
+          "`rust-dll/src/lib.rs`",
+          "`scripts/verify-s01-build.ps1`"
+        ],
+        "observabilityImpact": "- Signals added/changed: Console runner emits structured capture metadata and managed validation errors.\n- How a future agent inspects this: Run `dotnet test cs-tester.Tests/cs-tester.Tests.csproj` for contract failures or `dotnet run --project cs-tester/cs-tester.csproj` for runtime diagnostics.\n- Failure state exposed: Missing DLL/export, native status failure, invalid metadata, and SoftwareBitmap conversion exceptions are visible with context.",
+        "taskId": "T03",
+        "title": "Implement C# P/Invoke wrappers and SoftwareBitmap conversion tests",
+        "verify": "dotnet test cs-tester.Tests/cs-tester.Tests.csproj && pwsh -File scripts/verify-s01-build.ps1"
+      },
+      {
+        "description": "Expected task-plan `skills_used`: `verify-before-complete`.\n\nWhy: Unit tests prove contracts, but the slice demo requires real Rust DLL + C# P/Invoke + WGC capture composition. This task makes the end-to-end proof repeatable and records the baseline that downstream slices use for R011 performance work.\n\nFailure Modes:\n| Dependency | On error | On timeout | On malformed response |\n|------------|----------|-----------|----------------------|\n| Rust release DLL artifact | Script stops with path/build instructions and non-zero exit | N/A | Script verifies expected DLL path and exported runner output before declaring pass |\n| Interactive Windows desktop/WGC availability | Script reports environment/capture failure as a spike blocker, not a silent pass | Capture runner should be bounded by script timeout | Script asserts dimensions, stride, data length, bitmap dimensions, and timing lines are parseable |\n\nLoad Profile:\n- **Shared resources**: One active desktop capture session and one native/managed image buffer.\n- **Per-operation cost**: Full build plus one real capture run.\n- **10x breakpoint**: Repeated e2e loops would be dominated by build time and screen-size memory copy; the script should perform one capture by default.\n\nNegative Tests:\n- **Malformed inputs**: Script fails if output lines are missing, dimensions are zero, or byte counts are inconsistent.\n- **Error paths**: Script fails loudly on missing SDKs, missing DLL, P/Invoke load failure, or WGC runtime error.\n- **Boundary conditions**: Script accepts stride padding and asserts `data_len` equals `stride * height`, not `width * height * 4`.\n\nDo:\n1. Add `scripts/verify-s01-e2e.ps1` that invokes `scripts/verify-s01-build.ps1`, locates the Rust release DLL, copies it beside the C# runner output if needed, runs `dotnet run --project cs-tester/cs-tester.csproj -- --verify`, captures stdout/stderr, and exits non-zero on any failed invariant.\n2. Ensure `cs-tester/Program.cs` has a `--verify` mode whose output is stable enough for the script to parse without logging raw pixels.\n3. Add `docs/s01-capture-spike.md` with the FFI contract summary, build/run commands, expected success output shape, known environment assumptions, and a place for the executor to record the observed round-trip milliseconds.\n4. Run the script on the local Windows desktop session and update `docs/s01-capture-spike.md` with the observed baseline or, if the environment blocks WGC, the exact blocking error and follow-up needed.\n\nVerify: `pwsh -File scripts/verify-s01-e2e.ps1`.\nDone when: The e2e script composes the real DLL and console runner, parses and asserts the runtime proof, and `docs/s01-capture-spike.md` contains a concise baseline/failure note for S02.",
+        "estimate": "1h",
+        "expectedOutput": [
+          "`scripts/verify-s01-e2e.ps1`",
+          "`docs/s01-capture-spike.md`",
+          "`cs-tester/Program.cs`",
+          "`scripts/verify-s01-build.ps1`"
+        ],
+        "files": [
+          "scripts/verify-s01-e2e.ps1",
+          "scripts/verify-s01-build.ps1",
+          "docs/s01-capture-spike.md",
+          "cs-tester/Program.cs"
+        ],
+        "inputs": [
+          "`scripts/verify-s01-build.ps1`",
+          "`cs-tester/Program.cs`",
+          "`cs-tester/NativeCapture.cs`",
+          "`cs-tester/BitmapConverter.cs`",
+          "`rust-dll/src/lib.rs`"
+        ],
+        "observabilityImpact": "- Signals added/changed: Repeatable e2e script output with parsed dimensions, data length, bitmap dimensions, status, and round-trip timing.\n- How a future agent inspects this: Run `pwsh -File scripts/verify-s01-e2e.ps1` and read `docs/s01-capture-spike.md` for the last baseline/blocker note.\n- Failure state exposed: Missing build tools, missing DLL, WGC capture failure, parse/invariant failure, and performance baseline are all surfaced without dumping screenshot contents.",
+        "taskId": "T04",
+        "title": "Wire the real desktop e2e validation script and capture baseline notes",
+        "verify": "pwsh -File scripts/verify-s01-e2e.ps1"
+      }
+    ],
+    "triggerReason": "plan-slice S01 core capture validation"
+  }
+}

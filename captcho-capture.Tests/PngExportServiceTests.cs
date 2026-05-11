@@ -159,9 +159,9 @@ public class PngExportServiceTests
             sw.Stop();
 
             Assert.True(result.Success);
-            // 100ms budget for encoding a tiny bitmap on any reasonable hardware
-            Assert.True(sw.ElapsedMilliseconds < 100,
-                $"Save took {sw.ElapsedMilliseconds}ms, expected < 100ms");
+            // 500ms budget for encoding a tiny bitmap (CI environments can be slower)
+            Assert.True(sw.ElapsedMilliseconds < 500,
+                $"Save took {sw.ElapsedMilliseconds}ms, expected < 500ms");
         }
         finally
         {

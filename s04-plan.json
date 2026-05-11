@@ -1,0 +1,120 @@
+{
+  "actorName": "gsd-auto-planner",
+  "goal": "Validate the rectangular region selector approach with a minimal WinUI 3 overlay window that can cover the virtual desktop, draw a selection rectangle with pointer input, move/resize it with keyboard input, and return sanitized region coordinates to the preview window without invoking native capture.",
+  "integrationClosure": "S04 consumes the existing WinUI preview app and status/timing conventions from S02/S03, adds a real UI entrypoint for the selector spike, and leaves native rectangular capture/crop integration for S05.",
+  "milestoneId": "M001-cb7uv2",
+  "observabilityImpact": "Adds numeric region-selection status in the preview window, deterministic geometry unit tests for failure localization, and S04 verification/manual-UAT scripts/docs. The spike must surface cancellation and invalid geometry as explicit statuses rather than UI crashes.",
+  "proofLevel": "Integration spike: automated geometry/contract tests plus human/UAT verification on an interactive Windows desktop are required. Real runtime is required for overlay coverage and input behavior because WinUI top-level window behavior cannot be proven by headless unit tests alone.",
+  "sliceId": "S04",
+  "successCriteria": "## Must-Haves\n\n- A minimal `RegionOverlayWindow` can be launched from `MainWindow` through a clearly labeled spike button.\n- The overlay spans the virtual desktop bounds, including negative virtual-desktop offsets used by multi-monitor layouts.\n- Dragging on the overlay draws a visible rectangle with real-time feedback and normalized positive width/height.\n- Arrow keys move the current selection; Shift+Arrow performs fine-grained movement; Alt+Arrow resizes the selection.\n- Enter or double-click confirms the region and returns virtual-desktop coordinates; Escape cancels and returns null.\n- Unit tests cover rectangle normalization, movement, resizing, clamping, and coordinate translation with negative monitor offsets.\n- `scripts/verify-s04-build.ps1` builds the solution and runs the new UI unit tests; `docs/s04-region-selector-spike.md` records manual UAT steps for the real overlay behavior.\n\n## Threat Surface\n\n- **Abuse**: The overlay is a top-level full-screen UI that captures pointer/keyboard input. The primary abuse/failure scenario is trapping the user behind an overlay that cannot be dismissed, or accepting unusably tiny/negative regions. Escape cancellation, minimum region size, and normalized geometry must be verified.\n- **Data exposure**: The spike must not capture pixels, write screenshots, or log raw screen content. Only numeric rectangle coordinates and dimensions may be displayed or documented.\n- **Input trust**: Pointer and keyboard input are untrusted UI input. Geometry helpers must clamp movement/resizing to explicit virtual-desktop bounds and sanitize zero/negative dimensions before returning a region.\n\n## Requirement Impact\n\n- **Requirements touched**: R003 directly as a supporting spike; R001 indirectly because rectangular region capture depends on this selector in S05; R011 indirectly because selector timing diagnostics must not regress existing capture diagnostics.\n- **Re-verify**: Existing Full Desktop, Current Monitor, Active Window, and Window Under Cursor buttons still build and remain wired after adding the spike button; the new region spike flow must show status text for confirmed/cancelled selections.\n- **Decisions revisited**: No existing decision is superseded. Preserve D011's separated timing diagnostics pattern and S02/S03's sanitized UI error/status conventions.\n\n## Verification\n\n- `powershell -ExecutionPolicy Bypass -File scripts/verify-s04-build.ps1`\n- `dotnet test respectacle-ui.Tests/respectacle-ui.Tests.csproj --filter \"RegionSelection|CoordinateHelper|RegionSelectionStatus\"`\n- Manual UAT from `docs/s04-region-selector-spike.md`: launch `respectacle-ui`, click the Region Spike button, verify overlay coverage on all monitors, drag a rectangle, move/resize with arrows/Shift/Alt, confirm with Enter or double-click, cancel with Escape, and confirm the main window reports sanitized coordinates or cancellation.\n\n## Observability / Diagnostics\n\n- Runtime signals: Main window status text reports `Region selected — x,y width×height` on confirm and `Region selection cancelled` on cancel; overlay hint/status text describes current keyboard controls.\n- Inspection surfaces: `docs/s04-region-selector-spike.md` manual checklist plus `scripts/verify-s04-build.ps1` automated build/test output.\n- Failure visibility: Invalid or cancelled selections are represented as null/cancel status rather than exceptions; geometry helpers expose deterministic unit-testable results for malformed dimensions and negative offsets.\n- Redaction constraints: Never log pixels, window titles, file paths, or screen content from the overlay spike; numeric geometry only.\n\n## Integration Closure\n\n- Upstream surfaces consumed: `respectacle-ui/MainWindow.xaml`, `respectacle-ui/MainWindow.xaml.cs`, S02/S03 UI state/status conventions, and the existing `respectacle-ui.Tests` xUnit project.\n- New wiring introduced in this slice: a MainWindow entrypoint launches `RegionOverlayWindow.ShowAndWaitAsync()` and displays the returned virtual-desktop region or cancellation status.\n- What remains before the milestone is truly usable end-to-end: S05 must use the validated selector to call a real rectangular-region capture implementation and display the cropped screenshot in the preview pipeline.",
+  "tasks": [
+    {
+      "description": "---\nestimated_steps: 5\nestimated_files: 5\nskills_used:\n  - test\n  - verify-before-complete\n---\n\nCreate the pure, unit-testable model layer that the overlay will use before any WinUI window behavior is added. This task exists because S05 will depend on stable geometry semantics, and headless tests are the only reliable automated proof for negative monitor offsets and malformed rectangle dimensions.\n\nSteps:\n1. Add `RegionSelection` (or equivalently named pure model) under `respectacle-ui/` with normalized construction from drag start/end points, minimum-size validation, movement, resize, and clamp-to-bounds behavior.\n2. Add `CoordinateHelper` (or equivalent) under `respectacle-ui/` with pure translation between overlay-relative coordinates and virtual-desktop coordinates, including negative virtual-desktop origins.\n3. Keep the helpers free of direct UI element references where possible so xUnit tests can exercise them in headless runs.\n4. Add `respectacle-ui.Tests/RegionSelectionTests.cs` covering normalization, zero/negative dimensions, min-size behavior, movement, resizing, and bounds clamping.\n5. Add `respectacle-ui.Tests/CoordinateHelperTests.cs` covering positive origins, negative monitor offsets, and round-trip overlay↔virtual translation.\n\nMust-haves:\n- Geometry returns positive width/height regardless of drag direction.\n- Movement and resize cannot push the region outside an explicit virtual-desktop bounds rectangle.\n- Tests use inline fixtures only; do not read `.gsd/` or other ignored paths.\n\nFailure Modes:\n| Dependency | On error | On timeout | On malformed response |\n|------------|----------|-----------|----------------------|\n| WinUI/Windows.Foundation geometry types | Keep helper logic pure and fallback to simple numeric calculations where possible | Not applicable | Treat NaN/negative/zero dimensions as invalid or normalized before returning |\n\nLoad Profile:\n- **Shared resources**: None beyond per-pointer-event object allocation.\n- **Per-operation cost**: Constant-time numeric math per pointer/key event.\n- **10x breakpoint**: Excess allocation during pointer move would hurt UI responsiveness; prefer small immutable value objects or in-place updates without logging per move.\n\nNegative Tests:\n- **Malformed inputs**: reversed drag points, zero width/height, dimensions below minimum size, selection larger than bounds.\n- **Error paths**: coordinate conversion with negative virtual-desktop origins and selections outside bounds.\n- **Boundary conditions**: top/left edge, bottom/right edge, exact minimum size, and multi-monitor coordinates where x or y is negative.",
+      "estimate": "1h",
+      "expectedOutput": [
+        "respectacle-ui/RegionSelection.cs",
+        "respectacle-ui/CoordinateHelper.cs",
+        "respectacle-ui.Tests/RegionSelectionTests.cs",
+        "respectacle-ui.Tests/CoordinateHelperTests.cs"
+      ],
+      "files": [
+        "respectacle-ui/RegionSelection.cs",
+        "respectacle-ui/CoordinateHelper.cs",
+        "respectacle-ui.Tests/RegionSelectionTests.cs",
+        "respectacle-ui.Tests/CoordinateHelperTests.cs",
+        "respectacle-ui.Tests/respectacle-ui.Tests.csproj"
+      ],
+      "inputs": [
+        "respectacle-ui/respectacle-ui.csproj",
+        "respectacle-ui.Tests/respectacle-ui.Tests.csproj",
+        "respectacle-ui.Tests/CurrentMonitorResolverTests.cs"
+      ],
+      "taskId": "T01",
+      "title": "Implement testable region geometry and coordinate helpers",
+      "verify": "dotnet test respectacle-ui.Tests/respectacle-ui.Tests.csproj --filter \"RegionSelection|CoordinateHelper\""
+    },
+    {
+      "description": "---\nestimated_steps: 5\nestimated_files: 5\nskills_used:\n  - accessibility\n  - test\n  - verify-before-complete\n---\n\nImplement the actual spike overlay using the geometry helpers from T01. This task proves the riskiest UI pattern: a top-level WinUI overlay can render over the desktop, update a selection rectangle during pointer drag, handle keyboard adjustments, and complete through a `Task<Rect?>` contract.\n\nSteps:\n1. Add `respectacle-ui/RegionOverlayWindow.xaml` with a transparent/semi-transparent root, full-size Canvas, visible selection rectangle, and concise instruction/status text.\n2. Add `respectacle-ui/RegionOverlayWindow.xaml.cs` exposing `Task<Windows.Foundation.Rect?> ShowAndWaitAsync()` and using `TaskCompletionSource<Rect?>` for confirm/cancel.\n3. Position and size the window to the virtual desktop bounds provided by `CoordinateHelper`; ensure negative virtual origins are respected when moving the AppWindow.\n4. Implement pointer drag-to-draw, double-click/Enter confirm, Escape cancel, Arrow move, Shift+Arrow fine movement, and Alt+Arrow resize.\n5. Use T01 model methods for normalization/clamping instead of duplicating geometry math in event handlers.\n\nMust-haves:\n- Escape must always cancel the overlay and close it safely.\n- The overlay must return null for cancelled or invalid/below-minimum selections.\n- The overlay must not invoke native capture or inspect screen pixels in this spike.\n\nFailure Modes:\n| Dependency | On error | On timeout | On malformed response |\n|------------|----------|-----------|----------------------|\n| WinUI AppWindow/window activation | Surface a sanitized cancel/error status to caller and close overlay if possible | User can press Escape to cancel; no background wait without a visible window | Invalid geometry returns null instead of throwing |\n| Pointer/keyboard input events | Keep overlay visible with instructions and allow Escape cancellation | Not applicable | Clamp and normalize event coordinates through `RegionSelection` |\n\nLoad Profile:\n- **Shared resources**: UI thread and top-level overlay window.\n- **Per-operation cost**: Constant-time rectangle update per pointer move or key press.\n- **10x breakpoint**: Pointer-move storms can cause jank if each event allocates/logs heavily; do not emit per-event diagnostics.\n\nNegative Tests:\n- **Malformed inputs**: drag backwards, drag below minimum size, press Enter before a valid selection.\n- **Error paths**: AppWindow positioning unavailable should not crash MainWindow; cancellation remains available.\n- **Boundary conditions**: move/resize at virtual-desktop edges and negative virtual origin monitors.",
+      "estimate": "2h",
+      "expectedOutput": [
+        "respectacle-ui/RegionOverlayWindow.xaml",
+        "respectacle-ui/RegionOverlayWindow.xaml.cs"
+      ],
+      "files": [
+        "respectacle-ui/RegionOverlayWindow.xaml",
+        "respectacle-ui/RegionOverlayWindow.xaml.cs",
+        "respectacle-ui/RegionSelection.cs",
+        "respectacle-ui/CoordinateHelper.cs",
+        "respectacle-ui/respectacle-ui.csproj"
+      ],
+      "inputs": [
+        "respectacle-ui/RegionSelection.cs",
+        "respectacle-ui/CoordinateHelper.cs",
+        "respectacle-ui/MainWindow.xaml",
+        "respectacle-ui/MainWindow.xaml.cs",
+        "respectacle-ui/respectacle-ui.csproj"
+      ],
+      "observabilityImpact": "The overlay adds visible instruction/status text and returns null for cancellation/invalid selections so callers can distinguish cancel from crashes. It must not log per-pointer movement or screen content.",
+      "taskId": "T02",
+      "title": "Build the minimal WinUI overlay window",
+      "verify": "dotnet build Respectacle.sln && dotnet test respectacle-ui.Tests/respectacle-ui.Tests.csproj --filter \"RegionSelection|CoordinateHelper\""
+    },
+    {
+      "description": "---\nestimated_steps: 5\nestimated_files: 5\nskills_used:\n  - accessibility\n  - test\n  - verify-before-complete\n---\n\nConnect the overlay spike to the existing app so the slice demo is real and executor/manual UAT can launch it without custom test harnesses. The wiring should follow S02/S03 conventions: disable capture controls while work is active, display sanitized status, and keep existing capture buttons intact.\n\nSteps:\n1. Add a clearly labeled `Region Spike` or `Region Selector Spike` button to `respectacle-ui/MainWindow.xaml` without breaking the existing Full Desktop, Current Monitor, Active Window, and Window Under Cursor buttons.\n2. Add a click handler in `MainWindow.xaml.cs` that disables all capture/selector buttons, opens `RegionOverlayWindow.ShowAndWaitAsync()`, and then updates `StatusText` with either sanitized coordinates/dimensions or cancellation.\n3. Extract region status formatting into a small testable helper such as `RegionSelectionStatusFormatter` if needed to avoid testing private UI handlers.\n4. Add `respectacle-ui.Tests/RegionSelectionStatusTests.cs` for confirmed region formatting, cancelled formatting, and invalid-region formatting.\n5. Ensure exceptions from the overlay are caught and shown as sanitized user-readable errors, consistent with `RunCaptureAsync`.\n\nMust-haves:\n- Existing capture modes remain wired and enabled after the spike flow completes.\n- The main window displays only numeric coordinates/dimensions or a cancellation/error message; no screen content or raw exception dump.\n- The region spike flow does not call Rust/native capture yet.\n\nFailure Modes:\n| Dependency | On error | On timeout | On malformed response |\n|------------|----------|-----------|----------------------|\n| RegionOverlayWindow | Show `Region selector error: ...` sanitized in status and re-enable buttons | User can cancel overlay with Escape; finally block re-enables controls | Null or invalid rectangle maps to cancelled/invalid status, not a crash |\n\nLoad Profile:\n- **Shared resources**: Main UI thread and one overlay window at a time.\n- **Per-operation cost**: One overlay lifetime per user invocation; no native capture or pixel buffers.\n- **10x breakpoint**: Repeated launches could leave hidden windows if completion/close is not centralized; ensure each flow closes and re-enables controls in `finally`.\n\nNegative Tests:\n- **Malformed inputs**: null region, zero-sized region, negative width/height if a malformed result reaches formatting.\n- **Error paths**: overlay construction/show failure should produce a sanitized status and re-enable controls.\n- **Boundary conditions**: negative x/y virtual coordinates format clearly.",
+      "estimate": "1.5h",
+      "expectedOutput": [
+        "respectacle-ui/MainWindow.xaml",
+        "respectacle-ui/MainWindow.xaml.cs",
+        "respectacle-ui/RegionSelectionStatusFormatter.cs",
+        "respectacle-ui.Tests/RegionSelectionStatusTests.cs"
+      ],
+      "files": [
+        "respectacle-ui/MainWindow.xaml",
+        "respectacle-ui/MainWindow.xaml.cs",
+        "respectacle-ui/RegionSelectionStatusFormatter.cs",
+        "respectacle-ui/RegionOverlayWindow.xaml.cs",
+        "respectacle-ui.Tests/RegionSelectionStatusTests.cs"
+      ],
+      "inputs": [
+        "respectacle-ui/MainWindow.xaml",
+        "respectacle-ui/MainWindow.xaml.cs",
+        "respectacle-ui/RegionOverlayWindow.xaml.cs",
+        "respectacle-ui/RegionSelection.cs",
+        "respectacle-ui.Tests/CapturePreviewServiceTests.cs"
+      ],
+      "observabilityImpact": "MainWindow status text becomes the runtime inspection surface for selector confirmation, cancellation, and sanitized failures. This is the only runtime diagnostic surface for the S04 spike.",
+      "taskId": "T03",
+      "title": "Wire region spike entrypoint into MainWindow status flow",
+      "verify": "dotnet test respectacle-ui.Tests/respectacle-ui.Tests.csproj --filter \"RegionSelectionStatus|RegionSelection|CoordinateHelper\""
+    },
+    {
+      "description": "---\nestimated_steps: 4\nestimated_files: 4\nskills_used:\n  - write-docs\n  - test\n  - verify-before-complete\n---\n\nClose the spike with repeatable verification. Automated tests prove the deterministic geometry and formatting contracts; manual UAT proves real WinUI overlay behavior on an interactive desktop and multi-monitor setup.\n\nSteps:\n1. Add `scripts/verify-s04-build.ps1` modeled after S03's build script, but scoped to S04: build `Respectacle.sln`, run `respectacle-ui.Tests`, and explicitly run/filter the new `RegionSelection`, `CoordinateHelper`, and `RegionSelectionStatus` tests.\n2. Add `docs/s04-region-selector-spike.md` with manual UAT steps, expected results, known limitations, and pass/fail evidence fields for overlay coverage, drag draw, keyboard move/resize, confirm, cancel, and multi-monitor negative coordinate behavior.\n3. Update `README.md` with a short S04 verification section linking to the script and manual UAT doc.\n4. Run the S04 verification command and fix any script/test naming mismatches.\n\nMust-haves:\n- The verification script uses only tracked source/test files and does not read `.gsd/` artifacts.\n- The manual UAT doc is explicit that WGC/native capture is not part of S04; this spike returns coordinates only.\n- README points future agents to the S04 proof surfaces.\n\nFailure Modes:\n| Dependency | On error | On timeout | On malformed response |\n|------------|----------|-----------|----------------------|\n| dotnet build/test tooling | Script exits non-zero with the failing step visible | Script relies on dotnet test/build defaults; no infinite loops | Missing expected test names should fail the filtered test step |\n\nLoad Profile:\n- **Shared resources**: Build/test process and generated `bin/obj` outputs.\n- **Per-operation cost**: One solution build plus UI test run.\n- **10x breakpoint**: Full solution builds are slower but acceptable for slice verification; no per-test external services.\n\nNegative Tests:\n- **Malformed inputs**: Covered by the region geometry/status tests that the script runs.\n- **Error paths**: Script fails fast on build or test failure.\n- **Boundary conditions**: Manual UAT covers multi-monitor overlay and negative coordinates.",
+      "estimate": "1h",
+      "expectedOutput": [
+        "scripts/verify-s04-build.ps1",
+        "docs/s04-region-selector-spike.md",
+        "README.md"
+      ],
+      "files": [
+        "scripts/verify-s04-build.ps1",
+        "docs/s04-region-selector-spike.md",
+        "README.md",
+        "respectacle-ui.Tests/RegionSelectionTests.cs",
+        "respectacle-ui.Tests/CoordinateHelperTests.cs",
+        "respectacle-ui.Tests/RegionSelectionStatusTests.cs"
+      ],
+      "inputs": [
+        "scripts/verify-s03-build.ps1",
+        "README.md",
+        "respectacle-ui.Tests/RegionSelectionTests.cs",
+        "respectacle-ui.Tests/CoordinateHelperTests.cs",
+        "respectacle-ui.Tests/RegionSelectionStatusTests.cs"
+      ],
+      "observabilityImpact": "Adds a dedicated S04 verification script and manual UAT document so future agents can distinguish automated geometry proof from interactive overlay proof.",
+      "taskId": "T04",
+      "title": "Add S04 verification script and manual UAT documentation",
+      "verify": "powershell -ExecutionPolicy Bypass -File scripts/verify-s04-build.ps1"
+    }
+  ],
+  "triggerReason": "Plan Slice S04 rectangular region selector validation"
+}

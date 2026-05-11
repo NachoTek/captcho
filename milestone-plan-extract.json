@@ -1,0 +1,248 @@
+{
+  "timestamp": "2026-04-30T17:02:26.483Z",
+  "tool": "gsd_plan_milestone",
+  "args": {
+    "boundaryMapMarkdown": "## Boundary Map\n\n### S01 → S02, S03, S05\nProduces:\n- Rust DLL with C ABI exports\n- P/Invoke declarations in C#\n- SoftwareBitmap conversion function\n- Basic error handling at interop boundary\n\nConsumes:\n- nothing (first slice)\n\n### S02 → S03, S05, S06, S07, S08, S09\nProduces:\n- Capture engine foundation (full screen, current monitor modes)\n- Preview window with Image control\n- Capture workflow orchestration\n- Performance measurement infrastructure\n\nConsumes from S01:\n- Rust DLL with capture functions\n- P/Invoke interop layer\n- SoftwareBitmap conversion\n\n### S03 → S07, S08\nProduces:\n- Active window capture mode\n- Window under cursor capture mode\n- Window decoration handling logic\n\nConsumes from S01, S02:\n- Rust capture engine\n- Preview window\n- Interop layer\n\n### S04 → S05\nProduces:\n- WinUI overlay window pattern\n- Rectangle drawing and manipulation primitives\n- Keyboard event handling for region adjustments\n\nConsumes from S02:\n- Preview window patterns\n- Basic WinUI setup\n\n### S05 → S07\nProduces:\n- Rectangular region capture mode\n- Region selector UI (draw, move, resize, confirm)\n- Region coordinate passing to capture engine\n\nConsumes from S01, S02, S04:\n- Rust capture engine\n- Preview window\n- Overlay window patterns\n\n### S06\nProduces:\n- Delayed capture workflow\n- Countdown indicator UI\n- Timer management\n\nConsumes from S02:\n- Capture engine\n- Preview window\n\n### S07 → S10\nProduces:\n- Save to file functionality\n- Clipboard copy functionality\n- Image file encoding (PNG)\n- Filename template expansion\n\nConsumes from S02, S03, S05:\n- Capture engine and all modes\n- Preview window\n- SoftwareBitmap source\n\n### S08\nProduces:\n- Global hotkey registration\n- Hotkey message handling\n- Hotkey-to-capture routing\n\nConsumes from S02:\n- Capture engine\n- Preview window\n\n### S09\nProduces:\n- Command-line argument parser\n- CLI capture workflow\n- Help and usage display\n\nConsumes from S02:\n- Capture engine\n- All capture modes\n\n### S10\nProduces:\n- Configuration file I/O (JSON)\n- Settings model and persistence\n- Config loading on startup\n\nConsumes from S07:\n- Save location and filename template logic",
+    "definitionOfDone": [
+      "All slice deliverables complete and verified",
+      "All 5 capture modes work end-to-end",
+      "Preview window displays captured screenshots",
+      "Rectangular region selector works fully",
+      "Delayed capture with countdown works",
+      "Save to file with templates works",
+      "Copy to clipboard works",
+      "All global hotkeys work",
+      "CLI works for all modes",
+      "Multi-monitor verified on actual setup",
+      "Configuration persists",
+      "Performance thresholds met (<50ms capture, <30ms display, <1s startup)",
+      "Unit tests passing (>80% coverage)",
+      "UI tests passing (WinAppDriver)",
+      "No critical bugs",
+      "Documentation complete (CLI help, user guide)"
+    ],
+    "keyRisks": [
+      {
+        "risk": "P/Invoke performance overhead at Rust↔C# boundary",
+        "whyItMatters": "Could breach <50ms capture latency threshold"
+      },
+      {
+        "risk": "WGC API limitations for window capture edge cases",
+        "whyItMatters": "May cause window modes to fail unexpectedly"
+      },
+      {
+        "risk": "WinUI 3 overlay window performance for region selector",
+        "whyItMatters": "Selector must feel responsive or UX suffers"
+      },
+      {
+        "risk": "Global hotkey conflicts with system or other apps",
+        "whyItMatters": "Hotkeys may not register or work reliably"
+      },
+      {
+        "risk": "Multi-monitor edge cases with different DPI scales",
+        "whyItMatters": "Capture coordinates may be incorrect"
+      }
+    ],
+    "milestoneId": "M001-cb7uv2",
+    "proofStrategy": [
+      {
+        "retireIn": "S01 (Spike)",
+        "riskOrUnknown": "P/Invoke performance overhead",
+        "whatWillBeProven": "Rust↔C# interop round-trip time measured, image data flow verified"
+      },
+      {
+        "retireIn": "S02 (Foundation)",
+        "riskOrUnknown": "WGC API limitations",
+        "whatWillBeProven": "Core capture modes work end-to-end, edge cases identified"
+      },
+      {
+        "retireIn": "S04 (Spike)",
+        "riskOrUnknown": "WinUI 3 overlay window performance",
+        "whatWillBeProven": "Selector overlay is responsive, rectangle operations feel smooth"
+      },
+      {
+        "retireIn": "S08 (Global Hotkeys)",
+        "riskOrUnknown": "Global hotkey conflicts",
+        "whatWillBeProven": "All four Print Screen variants register and fire correctly"
+      },
+      {
+        "retireIn": "S03 (Window Modes)",
+        "riskOrUnknown": "Multi-monitor edge cases",
+        "whatWillBeProven": "Window capture works correctly across multiple monitors with different DPI"
+      }
+    ],
+    "requirementCoverage": "Covers: R001 (5 capture modes), R002 (preview), R003 (region selector), R004 (delayed capture), R005 (save to file), R006 (copy to clipboard), R007 (hotkeys), R008 (CLI), R009 (multi-monitor), R010 (config), R011 (performance). Partially covers: None. Leaves for later: R020-R023. Orphan risks: None.",
+    "slices": [
+      {
+        "demo": "Simple Rust DLL with WGC capture called from C#, proves P/Invoke and image data flow works",
+        "depends": [],
+        "goal": "Validate that Rust+WGC+P/Invoke architecture works before building full application. Prove image data can flow from Rust to WinUI 3 efficiently.",
+        "integrationClosure": "Rust and C# communicate successfully, WGC API accessible from Rust",
+        "isSketch": false,
+        "observabilityImpact": "Add logging at interop boundary, measure and log round-trip times",
+        "proofLevel": "Contract proof: Interop works, image data flows",
+        "risk": "high",
+        "sliceId": "S01",
+        "successCriteria": "- Rust DLL compiles successfully\n- C# loads Rust DLL\n- P/Invoke calls execute without errors\n- WGC captures full screen\n- SoftwareBitmap created from Rust data\n- Image displays in WinUI 3 Image control\n- Round-trip time measured (<50ms target)",
+        "title": "Spike - Core Capture Validation"
+      },
+      {
+        "demo": "Can capture and display full screen and current monitor screenshots in preview window",
+        "depends": [
+          "S01"
+        ],
+        "goal": "Build the foundation: Rust capture engine with full screen and current monitor modes, WinUI 3 preview window, basic error handling.",
+        "integrationClosure": "Rust capture engine integrated with WinUI 3 UI, preview workflow complete",
+        "isSketch": false,
+        "observabilityImpact": "Log capture start/end, measure and log latencies, log errors with context",
+        "proofLevel": "Integration proof: End-to-end capture and display",
+        "risk": "high",
+        "sliceId": "S02",
+        "successCriteria": "- Full screen capture (all monitors) works\n- Current screen capture (monitor under cursor) works\n- Preview window displays captured screenshots\n- Display latency <30ms verified\n- App startup <1s verified\n- Basic error handling in place\n- SoftwareBitmap creation efficient",
+        "title": "Foundation and Core Capture"
+      },
+      {
+        "demo": "Can capture active window and window under cursor correctly",
+        "depends": [
+          "S02"
+        ],
+        "goal": "Add active window and window under cursor capture modes to the foundation.",
+        "integrationClosure": "Window capture modes integrated with foundation, accessible from all entry points",
+        "isSketch": false,
+        "observabilityImpact": "Log window detection, log capture boundaries, log any WGC window-specific errors",
+        "proofLevel": "Integration proof: Window capture works end-to-end",
+        "risk": "medium",
+        "sliceId": "S03",
+        "successCriteria": "- Active window capture works correctly\n- Window under cursor capture works correctly\n- Multi-monitor window capture verified\n- Window decorations handled correctly\n- Both modes accessible from UI and CLI",
+        "title": "Window Capture Modes"
+      },
+      {
+        "demo": "Minimal WinUI overlay window with rectangle drawing, proves selector UI approach",
+        "depends": [
+          "S02"
+        ],
+        "goal": "Validate that WinUI 3 can create a responsive overlay window for rectangular region selection. Prove drawing, moving, resizing rectangles works.",
+        "integrationClosure": "WinUI overlay pattern proven, rectangle operations performant",
+        "isSketch": false,
+        "observabilityImpact": "Log overlay window lifecycle, log rectangle coordinates, log keyboard events",
+        "proofLevel": "Contract proof: Overlay window and rectangle manipulation work",
+        "risk": "high",
+        "sliceId": "S04",
+        "successCriteria": "- WinUI overlay window displays over desktop\n- Mouse drag draws rectangle visual\n- Rectangle can be moved\n- Rectangle can be resized\n- Keyboard arrow keys work (normal, Shift+slow, Alt+resize)\n- Confirmed region coordinates accessible",
+        "title": "Spike - Rectangular Region Selector Validation"
+      },
+      {
+        "demo": "Can draw, move, resize, and confirm rectangular screen region for capture",
+        "depends": [
+          "S04"
+        ],
+        "goal": "Build complete rectangular region selector with capture integration. All draw, move, resize, confirm operations must work.",
+        "integrationClosure": "Region selector passes coordinates to Rust capture engine, captures selected area",
+        "isSketch": false,
+        "observabilityImpact": "Log all selector operations, log final region coordinates, log capture trigger",
+        "proofLevel": "Integration proof: Region selector integrates with capture engine",
+        "risk": "high",
+        "sliceId": "S05",
+        "successCriteria": "- Draw rectangle with mouse drag works\n- Move rectangle with mouse and keyboard works\n- Resize rectangle with mouse and keyboard works\n- Double-click confirms selection\n- Enter key confirms selection\n- Arrow keys: normal move, Shift+slow move, Alt+resize\n- Region persists during capture operation\n- Works across multiple monitors",
+        "title": "Rectangular Region Selector"
+      },
+      {
+        "demo": "Can set delay seconds, see countdown indicator, capture triggers after delay",
+        "depends": [
+          "S02"
+        ],
+        "goal": "Add delayed capture functionality with visible countdown. Users can set delay and cancel if needed.",
+        "integrationClosure": "Delayed capture workflow integrated with all capture modes",
+        "isSketch": false,
+        "observabilityImpact": "Log delay start, countdown tick, cancel, capture trigger",
+        "proofLevel": "Contract proof: Timer and countdown work",
+        "risk": "medium",
+        "sliceId": "S06",
+        "successCriteria": "- Configurable delay (0-60 seconds) works\n- Countdown indicator visible in window title\n- Task manager button shows progress bar\n- Cancel button appears during countdown\n- Cancel stops countdown and returns to ready state\n- Capture triggers automatically after delay completes\n- Works for all capture modes",
+        "title": "Delayed Capture"
+      },
+      {
+        "demo": "Can save screenshots to configurable location with filename templates, copy to clipboard",
+        "depends": [
+          "S02"
+        ],
+        "goal": "Add save to file and copy to clipboard functionality. Include filename template expansion.",
+        "integrationClosure": "Export functionality integrated with all capture modes, works with preview window",
+        "isSketch": false,
+        "observabilityImpact": "Log save operations, log errors, measure save times",
+        "proofLevel": "Integration proof: Save and copy work with captured images",
+        "risk": "low",
+        "sliceId": "S07",
+        "successCriteria": "- Save to file works (PNG format)\n- Configurable save location works\n- Filename template with placeholders works\n- Placeholders: <dd>, <hh>, <MM>, <ss>, <title>, <yyyy>, <#>, <mm>, <yy>\n- Copy to clipboard works\n- File save <100ms verified\n- Error handling for permissions/disk full/invalid path",
+        "title": "Export and Clipboard"
+      },
+      {
+        "demo": "Can trigger captures via Print Screen, Meta+Print, Shift+Print, Meta+Shift+Print",
+        "depends": [
+          "S02"
+        ],
+        "goal": "Register and handle global keyboard shortcuts for all capture modes. Hotkeys must work even when app is minimized.",
+        "integrationClosure": "Global hotkeys integrated with capture engine and preview window",
+        "isSketch": false,
+        "observabilityImpact": "Log hotkey registration, log hotkey triggers, log conflicts",
+        "proofLevel": "Integration proof: Hotkeys trigger captures correctly",
+        "risk": "medium",
+        "sliceId": "S08",
+        "successCriteria": "- Print Screen triggers full screen capture\n- Meta+Print triggers active window capture\n- Shift+Print triggers full desktop capture\n- Meta+Shift+Print triggers rectangular region capture\n- Hotkeys work when app is minimized\n- Hotkeys work when app is focused\n- Hotkey registration on startup\n- Hotkey unregistration on shutdown\n- Handle hotkey conflicts gracefully",
+        "title": "Global Hotkeys"
+      },
+      {
+        "demo": "Can capture from command line without showing UI",
+        "depends": [
+          "S02"
+        ],
+        "goal": "Build CLI that can trigger all capture modes without showing the UI window. Support filename and location arguments.",
+        "integrationClosure": "CLI integrated with Rust capture engine, bypasses UI",
+        "isSketch": false,
+        "observabilityImpact": "Log CLI arguments, log capture start/end, log errors to stderr",
+        "proofLevel": "Contract proof: CLI triggers captures correctly",
+        "risk": "low",
+        "sliceId": "S09",
+        "successCriteria": "- CLI accepts capture mode arguments\n- CLI captures without showing UI\n- CLI supports filename argument\n- CLI supports location argument\n- Help command displays usage\n- Exit codes indicate success (0) or failure (non-zero)\n- Error messages printed to stderr\n- All 5 capture modes accessible via CLI",
+        "title": "Command-Line Interface"
+      },
+      {
+        "demo": "Settings (save location, filename template) persist across sessions",
+        "depends": [
+          "S07"
+        ],
+        "goal": "Add configuration persistence. User settings save to JSON file in AppData and load on startup.",
+        "integrationClosure": "Configuration integrated with save functionality, loads on app startup",
+        "isSketch": false,
+        "observabilityImpact": "Log config load/save, log errors, log reset to defaults",
+        "proofLevel": "Contract proof: Config persists and loads",
+        "risk": "low",
+        "sliceId": "S10",
+        "successCriteria": "- Save location persists across sessions\n- Filename template persists across sessions\n- JSON file written to %APPDATA%\\respectacle\\\n- JSON file read on startup\n- Corrupted config resets to defaults\n- Corrupted config backed up before reset\n- Config changes take effect immediately\n- Invalid save path handled gracefully",
+        "title": "Configuration"
+      }
+    ],
+    "successCriteria": [
+      "All 5 capture modes work end-to-end (full screen, current screen, rectangular region, active window, window under cursor)",
+      "Preview window displays captured screenshots correctly",
+      "Rectangular region selector UI works (draw, move, resize, confirm)",
+      "Delayed capture with countdown indicator works",
+      "Save to file works with configurable location and filename templates",
+      "Copy to clipboard works",
+      "All global keyboard shortcuts work",
+      "Command-line interface works for all capture modes",
+      "Multi-monitor support verified on actual multi-monitor setup",
+      "Configuration persists correctly",
+      "All performance thresholds met (capture <50ms, display <30ms, startup <1s)",
+      "Core unit tests passing (>80% coverage)",
+      "Basic UI tests passing (WinAppDriver)",
+      "No critical bugs"
+    ],
+    "title": "Core Capture",
+    "verificationContract": "Performance thresholds verified: capture <50ms (Rust→C# image available), display <30ms (preview rendered), startup <1s (app ready). Multi-monitor capture verified on actual setup. All 5 modes produce valid SoftwareBitmap. Spikes validate interop and selector before main implementation.",
+    "verificationIntegration": "Rust DLL loads in C# process, P/Invoke calls succeed, captured images display in WinUI 3 Image control. Global hotkeys registered and fire even when app minimized. CLI captures without showing UI. Configuration persists across app restarts.",
+    "verificationOperational": "App launches within 1s, hotkeys work on running or newly-started app, captures complete within 80ms total (trigger→display), app handles rapid repeated captures without degradation. Multi-monitor setups work correctly.",
+    "verificationUat": "User can take all 5 types of screenshots, preview them, save with custom filenames, copy to clipboard, use Print Screen shortcuts, and run CLI commands. Settings persist. Performance feels instant.",
+    "vision": "Build a high-performance screenshot capture application with Rust engine and WinUI 3 UI. Capture the entire desktop, individual monitors, active windows, windows under cursor, or rectangular regions. Preview, save, copy to clipboard, trigger via global hotkeys or CLI. All with near-instant performance."
+  }
+}

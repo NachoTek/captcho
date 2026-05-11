@@ -100,6 +100,9 @@ captcho-cli --full
 # Capture current monitor
 captcho-cli --monitor
 
+# Capture a specific monitor by index (0 = primary)
+captcho-cli --monitor 1
+
 # Capture active window
 captcho-cli --window-active
 
@@ -109,6 +112,18 @@ captcho-cli --window-cursor
 # Capture custom region (x,y,width,height)
 captcho-cli --region 100,200,800,600
 ```
+
+### Capture Modes
+
+Exactly one capture mode is required:
+
+| Flag | Description |
+|------|-------------|
+| `--full` | Capture all monitors (full virtual desktop) |
+| `--monitor [index]` | Capture a monitor by 0-based index. Without index, captures the current monitor |
+| `--window-active` | Capture the currently active (foreground) window |
+| `--window-cursor` | Capture the top-level window under the cursor |
+| `--region <x,y,width,height>` | Capture a rectangular region of the virtual desktop using coordinates |
 
 ### Output Options
 
