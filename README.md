@@ -5,6 +5,7 @@
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/version-0.1.0-blue" alt="Version 0.1.0">
   <img src="https://img.shields.io/badge/Windows-10%2B-blue?logo=windows" alt="Windows 10+">
   <img src="https://img.shields.io/badge/Rust-stable-orange?logo=rust" alt="Rust">
   <img src="https://img.shields.io/badge/.NET-8-purple?logo=dotnet" alt=".NET 8">
