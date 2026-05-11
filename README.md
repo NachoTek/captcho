@@ -1,368 +1,308 @@
-# captcho — Screen Capture Preview
+# captcho
 
-A Windows screen capture application built with Rust (native capture) + C#/.NET 8 (managed interop) + WinUI 3 (preview UI).
+<p align="center">
+  <strong>A fast, modern screen capture application for Windows</strong>
+</p>
 
-## Architecture
+<p align="center">
+  <img src="https://img.shields.io/badge/Windows-10%2B-blue?logo=windows" alt="Windows 10+">
+  <img src="https://img.shields.io/badge/Rust-stable-orange?logo=rust" alt="Rust">
+  <img src="https://img.shields.io/badge/.NET-8-purple?logo=dotnet" alt=".NET 8">
+  <img src="https://img.shields.io/badge/WinUI-3-blueviolet?logo=windows" alt="WinUI 3">
+</p>
 
-| Layer | Technology | Description |
-|-------|-----------|-------------|
-| **Native capture** | Rust DLL (`rust-dll/`) | Windows Graphics Capture API via `windows-capture` crate. Supports monitor-by-index, full-desktop (stitched), active window, window-under-cursor, and window-by-HWND capture modes. |
-| **Managed interop** | .NET 8 library (`captcho-capture/`) | P/Invoke bindings, `SafeCaptureResult` handle, `BitmapBufferConverter` for stride stripping, `CaptureDiagnostics` for timing, `WindowResolver` for cursor-to-HWND resolution. |
-| **Console tester** | .NET 8 console (`cs-tester/`) | CLI runner for capture commands and structured verification output, including `--verify-s03` for window capture diagnostics. |
-| **Preview UI** | WinUI 3 (`captcho-ui/`) | Desktop app with Full Desktop, Current Monitor, Active Window, and Window Under Cursor capture buttons, WriteableBitmap preview, and timing diagnostics. |
+captcho is a high-performance screenshot tool for Windows built with a native Rust capture engine and a polished WinUI 3 interface. Capture your screen, windows, or custom regions with speed and precision.
 
-## Prerequisites
+## ✨ Features
 
-- **Rust toolchain** — `cargo` on PATH (stable, targeting MSVC)
-- **.NET 8 SDK** — `dotnet` on PATH
-- **Windows 10 1903+** or **Windows 11** — required for Windows Graphics Capture API
-- **Interactive desktop session** — WGC requires a visible desktop; RDP/frozen sessions may fail
+- **5 Capture Modes** — Full desktop, current monitor, active window, window under cursor, and custom rectangular region
+- **Global Hotkeys** — Quick capture with Print Screen, Win+Print, Shift+Print, and Win+Shift+Print
+- **Delayed Capture** — Set a 0-60 second countdown for timed screenshots
+- **Flexible Export** — Save to file with customizable filename templates, or copy directly to clipboard
+- **Multi-Monitor Support** — Works seamlessly across multiple displays
+- **Command-Line Interface** — Headless capture for automation and scripts
+- **Persistent Configuration** — Save your preferences between sessions
 
-## Build
+## 🚀 Quick Start
 
-```powershell
-# Build everything
-cargo build --manifest-path rust-dll/Cargo.toml --release
-dotnet build captcho.sln
-```
+### Prerequisites
 
-## Verification Scripts
+- **Windows 10 1903+** or Windows 11
+- **Interactive desktop session** (required by Windows Graphics Capture API)
 
-### S01 — Core Capture Spike
+### Installing from Release
 
-```powershell
-# Build + compile checks only (no desktop required)
-powershell -ExecutionPolicy Bypass -File scripts/verify-s01-build.ps1
+1. Download the latest release from the [Releases](../../releases) page
+2. Extract the archive
+3. Run `captcho-ui.exe` for the GUI, or `captcho-cli.exe` for command-line use
 
-# Real desktop capture verification
-powershell -ExecutionPolicy Bypass -File scripts/verify-s01-e2e.ps1
-```
+### Building from Source
 
-### S02 — Capture Library + WinUI Preview
+See the [Building from Source](#building-from-source) section below.
 
-```powershell
-# Build + compile + all test projects
-powershell -ExecutionPolicy Bypass -File scripts/verify-s02-build.ps1
+## 📷 Using the GUI
 
-# Real desktop capture verification (full desktop + monitor[0])
-# Also verifies WinUI project builds successfully
-powershell -ExecutionPolicy Bypass -File scripts/verify-s02-e2e.ps1
-```
+Launch `captcho-ui.exe` to open the capture window.
 
-### S03 — Window Capture Modes
+### Capture Modes
 
-```powershell
-# Build + compile + all test projects (Rust + .NET, including S03 window tests)
-powershell -ExecutionPolicy Bypass -File scripts/verify-s03-build.ps1
+Click any button to capture:
 
-# Real window capture verification (active window + window under cursor + negative tests)
-# Gracefully reports CaptureUnavailable in non-interactive sessions
-powershell -ExecutionPolicy Bypass -File scripts/verify-s03-e2e.ps1
-```
+| Button | Capture |
+|--------|---------|
+| **Full Desktop** | All monitors stitched together |
+| **Current Monitor** | The monitor under your cursor |
+| **Active Window** | The currently focused window |
+| **Window Under Cursor** | The window beneath your mouse pointer |
+| **Rectangular Region** | Draw a custom selection |
 
-### S04 — Rectangular Region Selector Spike
+### Using Rectangular Region
 
-```powershell
-# Build + all S04 deterministic tests (RegionSelection, CoordinateHelper, RegionSelectionStatus)
-powershell -ExecutionPolicy Bypass -File scripts/verify-s04-build.ps1
-```
+1. Click **Rectangular Region**
+2. Click and drag to draw a selection
+3. Adjust with arrow keys (hold Shift for 10px increments)
+4. Press Enter to confirm, or Escape to cancel
 
-Manual UAT for the region overlay window (requires interactive desktop):
-See [docs/s04-region-selector-spike.md](docs/s04-region-selector-spike.md) for the full UAT checklist covering overlay coverage, drag-to-draw, keyboard move/resize, confirm, cancel, and multi-monitor behavior.
+### Delayed Capture
 
-### S05 — Rectangular Region Capture
+Set the **Delay (sec)** spinner to 0-60 seconds, then click any capture button. A countdown appears in the window title and progress bar. Click **Cancel** to abort.
 
-```powershell
-# Build + Rust crop/FFI tests + managed interop + UI service/wiring tests + S04 regressions
-powershell -ExecutionPolicy Bypass -File scripts/verify-s05-build.ps1
-```
+### Saving Screenshots
 
-Manual UAT for the region capture flow (draw/move/resize → confirm → crop → preview):
-See [docs/s05-region-selector.md](docs/s05-region-selector.md) for the full UAT checklist covering capture-region button, drag-to-draw, keyboard move/resize, confirm with preview, cancel, negative-origin monitors, spanning regions, invalid tiny regions, sanitized error paths, and existing-button regressions.
+- **Save** — Saves to your configured location with the current filename template
+- **Save As** — Opens a file picker to choose location and filename
+- **Copy** — Copies the screenshot to your clipboard for pasting elsewhere
 
-### S06 — Delayed Capture
+Default save location: `Pictures\captcho\` in your user profile.
 
-```powershell
-# Build + DelayedCapture countdown + UI wiring tests + CapturePreviewService regression + S05 regressions
-powershell -ExecutionPolicy Bypass -File scripts/verify-s06-build.ps1
-```
+### Global Hotkeys
 
-Manual UAT for delayed capture (requires interactive desktop):
+These hotkeys work even when the app is minimized:
 
-### S07 — Export Workflows (Save, Save As, Copy)
+| Hotkey | Action |
+|--------|--------|
+| `Print Screen` | Capture current monitor |
+| `Win + Print Screen` | Capture active window |
+| `Shift + Print Screen` | Capture full desktop |
+| `Win + Shift + Print Screen` | Capture rectangular region |
 
-```powershell
-# Build + capture-library export tests + UI export wiring + clipboard tests + CapturePreviewService regression + S06/S05 regressions
-powershell -ExecutionPolicy Bypass -File scripts/verify-s07-build.ps1
-```
+## 💻 Using the CLI
 
-**Export architecture:**
-- **Filename template expander** (`ExportFilenameTemplate`) — expands `{date}`, `{time}`, `{title}`, `{seq}` placeholders with filesystem-safe sanitization. Default template: `{date}_{time}`.
-- **PNG export** (`PngExportService`) — encodes `ContiguousBitmap` BGRA data via `System.Drawing.Common`, creates directories, reports timing and phase-labeled failures.
-- **Default save location** — `Pictures\captcho\` under the user profile, with auto-incrementing sequence collision resolution.
-- **Clipboard copy** (`ClipboardExportService`) — copies PNG bytes via `IClipboardAdapter` abstraction; production uses `DataPackage`, tests use fakes.
-- **Status feedback** (`ExportStatusFormatter`) — pure-logic formatting of `ExportResult` status/timing into user-visible strings; fully testable without WinUI.
-- **Export buttons** (Save, Save As, Copy) are disabled until a capture succeeds and during export operations, preventing double-export races.
+The `captcho-cli.exe` tool provides headless capture for automation.
 
-**Headless limitations:** The automated tests cover all logic paths using mediator doubles. The following require interactive desktop validation:
-- **FileSavePicker** (Save As) — launches a native file picker dialog that cannot be tested headless.
-- **Clipboard paste verification** — the clipboard adapter is faked in tests; real `DataPackage` interop requires a COM-enabled desktop session.
-
-Manual UAT for export workflows (requires interactive desktop):
-
-### S08 — Global Hotkeys
+### Basic Usage
 
 ```powershell
-# Build + HotkeyRoute/HotkeyManager/HotkeyUiWiring tests + CapturePreviewService + Window/Region/Delayed/Export regression
-powershell -ExecutionPolicy Bypass -File scripts/verify-s08-hotkeys.ps1
+# Capture all monitors
+captcho-cli --full
+
+# Capture current monitor
+captcho-cli --monitor
+
+# Capture active window
+captcho-cli --window-active
+
+# Capture window under cursor
+captcho-cli --window-cursor
+
+# Capture custom region (x,y,width,height)
+captcho-cli --region 100,200,800,600
 ```
-
-**Hotkey architecture:**
-- **HotkeyRoute** — pure enum and spec mapping (Print Screen → Current Monitor, Win+Print → Active Window, Shift+Print → Full Desktop, Win+Shift+Print → Rectangular Region). No WinUI/Win32 dependencies — fully headless-testable.
-- **HotkeyManager** — registration manager with `IHotkeyRegistrar` abstraction; production uses `WindowsHotkeyRegistrar` (P/Invoke), tests use fakes. Tracks successful registrations, unregisters idempotently.
-- **MainWindow wiring** — registers all four hotkeys on startup, subclasses WndProc for `WM_HOTKEY`, dispatches to existing capture workflows via `RunDelayedCaptureAsync`/`RunDelayedRegionCaptureAsync`. Reports conflicts in status text. Unregisters on window close.
-- **Overlap guard** — hotkey triggers during active capture/export are silently ignored, preventing the 10x breakpoint from repeated Print Screen presses.
-
-**Headless tests:** 76 tests (20 HotkeyRoute + 31 HotkeyManager + 25 HotkeyUiWiring) verify mapping, registration, cleanup, dispatch routing, operation guard, and conflict reporting.
-
-**Manual UAT for global hotkeys (requires interactive desktop):**
-
-### S09 — Production CLI
-
-```powershell
-# Build + CLI unit tests + help/invalid smoke + documentation consistency + optional capture
-powershell -ExecutionPolicy Bypass -File scripts/verify-s09-cli.ps1
-```
-
-### S10 — Configuration Persistence
-
-```powershell
-# Build + config persistence tests + UI wiring tests + CapturePreviewService regression + ExportUiWiring regression
-powershell -ExecutionPolicy Bypass -File scripts/verify-s10-configuration.ps1
-```
-
-**Configuration architecture:**
-- **Settings file** — `%LOCALAPPDATA%\captcho\settings.json`. Created automatically on first save. Uses camelCase JSON with unknown-property preservation for forward compatibility.
-- **AppSettings model** — Two nullable properties: `saveLocation` (default save directory) and `filenameTemplate` (filename pattern). Computed `EffectiveSaveLocation`/`EffectiveFilenameTemplate` properties fall back to defaults when unset.
-- **ConfigurationService** — Loads/saves settings with constructor-injected config path. Production default: `%LOCALAPPDATA%\captcho\`. Tests inject temp directories. Returns structured `ConfigurationLoadResult`/`ConfigurationSaveResult` with phase, sanitized error message, and metadata — never throws for expected failures.
-- **Atomic save** — Writes to a temp file first, then moves into place. Corrupted JSON files are renamed to `.backup` (with incremental suffixes) before falling back to defaults.
-- **Startup wiring** — `App.OnLaunched` loads settings and passes them to `MainWindow`. Missing file → defaults (no error). Corrupted file → defaults + status warning + backup file created.
-- **Save/SaveAs integration** — Save uses `settings.EffectiveSaveLocation` and `settings.EffectiveFilenameTemplate`. SaveAs persists the chosen directory only after successful save. Cancel/failure does not modify settings.
-- **Defaults** — Save location: `Pictures\captcho\` under user profile. Filename template: `captcho_<yyyy>-<MM>-<dd>_<hh><mm><ss>`.
-
-**Settings file example:**
-```json
-{
-  "saveLocation": "C:\\Users\\example\\Pictures\\Screenshots",
-  "filenameTemplate": "Capture_<yyyy>-<MM>-<dd>_<hh><mm><ss>"
-}
-```
-
-An empty JSON object `{}` is valid — it means "use all defaults". Omitting either property also falls back to the default.
-
-**Corrupted config behavior:**
-1. App detects malformed JSON in `settings.json`.
-2. The corrupted file is renamed to `settings.json.backup` (or `.backup.1`, `.backup.2`, etc. if backups already exist).
-3. App falls back to default settings and shows a configuration warning in the status bar.
-4. On next successful save, a new `settings.json` is written with valid JSON.
-
-**Headless tests:** 56 tests (32 capture-library config + 24 UI wiring) cover round-trip persistence, corruption backup, defaults on missing file, empty JSON, unknown properties, validation, save to unwritable directory, Save/SaveAs settings awareness, persistence failure non-fatality, and cancel/failure not persisting. Plus CapturePreviewService and ExportUiWiring regressions.
-
-**Manual UAT for configuration persistence (requires interactive desktop):**
-
-1. **Restart persistence**: Launch the app → capture a screenshot → click **Save As** → choose a different directory and save → close the app → relaunch → capture again → click **Save** → verify it saves to the previously chosen directory (not the default `Pictures\captcho\`).
-2. **Missing config**: Delete `%LOCALAPPDATA%\captcho\settings.json` if it exists → launch the app → verify it starts normally with no error. Capture and Save → verify file goes to default `Pictures\captcho\`.
-3. **Corrupted config recovery**: Edit `%LOCALAPPDATA%\captcho\settings.json` to contain invalid JSON (e.g., `{bad`) → launch the app → verify it starts with defaults and shows a config warning → check that `settings.json.backup` was created → the original corrupted content is preserved in the backup file.
-4. **Save As cancel does not persist**: Launch the app → capture → click **Save As** → cancel the picker → verify status shows "Save cancelled" → close and relaunch → capture → click **Save** → verify it still uses the previous directory (not any cancelled location).
-
-## Production CLI
-
-The `captcho-cli` project provides headless screen capture from the command line — no WinUI preview window is shown. It supports all five capture modes, writes PNG files, and returns deterministic exit codes plus structured diagnostics for automation.
-
-### Usage
-
-```
-captcho-cli <mode> [options]
-```
-
-### Capture Modes (exactly one required)
-
-| Flag | Description |
-|------|-------------|
-| `--full` | Capture all monitors (full virtual desktop) |
-| `--monitor [index]` | Capture a monitor by 0-based index. Without index, captures the current monitor |
-| `--window-active` | Capture the currently active (foreground) window |
-| `--window-cursor` | Capture the top-level window under the cursor |
-| `--region <x,y,width,height>` | Capture a rectangular region of the virtual desktop using coordinates |
-
-**Note:** Scripted `--region` uses virtual-desktop coordinates and does not show the interactive overlay selector.
 
 ### Output Options
 
-| Flag | Description |
-|------|-------------|
-| `--output <path>` | Output file path or directory. If path ends in `.png`, treated as full file path. Otherwise treated as a directory. Default: `%USERPROFILE%\Pictures\captcho\` |
-| `--filename <template>` | Filename template with placeholders: `<yyyy>` `<MM>` `<dd>` `<hh>` `<mm>` `<ss>` `<#>`. Default: `captcho_<yyyy>-<MM>-<dd>_<hh><mm><ss>.png` |
-
-### General Options
-
-| Flag | Description |
-|------|-------------|
-| `--verbose`, `-v` | Print detailed diagnostics (timings, dimensions) |
-| `--help`, `-h` | Show help message |
-
-### Examples
-
 ```powershell
-# Capture all monitors, save to default directory
-captcho-cli --full
+# Save to specific directory
+captcho-cli --full --output C:\Screenshots
 
-# Capture second monitor (index 1), save to custom directory
-captcho-cli --monitor 1 --output C:\captures
-
-# Capture current monitor with custom filename
-captcho-cli --monitor --filename my_<yyyy><MM><dd>.png
-
-# Capture active window, save as specific file
+# Save to specific file
 captcho-cli --window-active --output screenshot.png
 
-# Capture 800x600 region at (100,200) with verbose diagnostics
-captcho-cli --region 100,200,800,600 --output C:\out --verbose
+# Custom filename template
+captcho-cli --full --filename "screenshot_<yyyy>-<MM>-<dd>_<hh><mm><ss>.png"
+```
 
-# Capture window under cursor
-captcho-cli --window-cursor --output C:\captures
+### Filename Template Placeholders
+
+| Placeholder | Description | Example |
+|-------------|-------------|---------|
+| `<yyyy>` | 4-digit year | 2026 |
+| `<yy>` | 2-digit year | 26 |
+| `<MM>` | Month (01-12) | 05 |
+| `<dd>` | Day (01-31) | 10 |
+| `<hh>` | Hour (00-23) | 14 |
+| `<mm>` | Minute (00-59) | 30 |
+| `<ss>` | Second (00-59) | 45 |
+| `<title>` | Window title | Notepad |
+| `<#>` | Sequence number | 001 |
+
+Default template: `captcho_<yyyy>-<MM>-<dd>_<hh><mm><ss>.png`
+
+### Verbose Mode
+
+```powershell
+captcho-cli --full --verbose
+```
+
+Output:
+```
+CaptureMode=full Status=success OutputPath=C:\Users\...\captcho_2026-05-10_143045.png Dimensions=3840x1080 CaptureMs=12.3 BitmapMs=0.4 ExportMs=8.1 TotalMs=21.5 ExitCode=0
 ```
 
 ### Exit Codes
 
-| Code | Name | Description |
-|------|------|-------------|
-| 0 | Success | Capture completed and PNG written |
-| 1 | InvalidArguments | Bad mode, malformed values, missing required options |
-| 2 | CaptureFailed | Native capture returned non-OK status (graphics pipeline error, WGC unavailable) |
-| 3 | ExportFailed | Filesystem write or PNG encoding error |
-| 4 | InternalError | Unexpected exception |
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Invalid arguments |
+| 2 | Capture failed |
+| 3 | Export failed |
+| 4 | Internal error |
 
-### Diagnostics
-
-All output is printed as `key=value` pairs to stdout. Use `--verbose` for a capture/bitmap/export/total timing breakdown. Errors are printed to stderr with the offending option identified.
-
-Example success output:
-```
-CaptureMode=full Status=success OutputPath=C:\Users\...\captcho_2026-05-01_224800.png Dimensions=3840x1080 ExitCode=0
-```
-
-Example verbose output:
-```
-CaptureMode=region Status=success OutputPath=C:\out\capture.png Dimensions=800x600 CaptureMs=12.3 BitmapMs=0.4 ExportMs=8.1 TotalMs=21.5 ExitCode=0
-```
-
-Example failure output (stderr):
-```
-Error: Phase=capture Message=Status=CaptureUnavailable
-```
-
-### Headless and Non-Interactive Sessions
-
-The CLI is designed for automation. In non-interactive environments (CI, RDP without desktop, headless), Windows Graphics Capture may return `CaptureUnavailable`. The CLI reports this as exit code 2 with `Status=failed` diagnostics — it does not crash or hang. The `verify-s09-cli.ps1` script treats `CaptureUnavailable` as an environment limitation rather than a test failure.
-
-1. **Delay 0 — immediate capture**: Set the Delay (sec) spinner to 0, click any capture button → preview appears immediately with no countdown. Behavior matches the pre-S06 capture experience.
-2. **Delay 5 — countdown then capture**: Set Delay (sec) to 5, click any capture button → window title shows "Capturing in X…", status text counts down each second, progress bar fills deterministically. At zero, capture triggers and preview/timing appear as normal.
-3. **Cancel before zero**: Start a delayed capture with any non-zero delay, click Cancel during countdown → countdown stops, progress resets, window title/status return to idle. No capture occurs.
-4. **Max delay sanity**: Set Delay (sec) to 60 (the maximum) → verify the spinner clamps at 60. Start capture → countdown runs 60 seconds, then captures. Verify the progress bar reaches 100% at the end.
-
-1. **Save (default location)**: Capture any screenshot → click **Save** → status text shows "Saved — <filename> (<dimensions>)" and timing shows export milliseconds. Verify the PNG file exists in `Pictures\captcho\` under your user profile with a timestamped filename.
-2. **Save As (custom location)**: Capture any screenshot → click **Save As** → FileSavePicker opens → navigate to a different folder, enter a filename, click Save → status shows "Saved — <filename> (<dimensions>)". Verify the file is at the chosen location.
-3. **Save As cancelled**: Capture any screenshot → click **Save As** → dismiss the picker without saving → status shows "Save cancelled". Export buttons should remain enabled.
-4. **Copy to clipboard**: Capture any screenshot → click **Copy** → status shows "Copied to clipboard (<dimensions>)" with timing. Paste into Paint or another application → the screenshot image should appear.
-5. **Copy failure**: If clipboard is unavailable (unlikely on interactive desktop), status shows "Clipboard failed" with sanitized message.
-6. **No capture guard**: Before any capture, all three export buttons (Save, Save As, Copy) are disabled. Clicking them does nothing. Status shows "No capture available".
-7. **Button state during export**: While an export is in progress, all three export buttons are disabled. They re-enable after the export completes (success, failure, or cancellation).
-8. **Service failure handling**: If the export service fails (e.g., directory not writable), status shows a sanitized failure message without exposing internal paths or stack traces.
-
-## Manual UAT
-
-### WinUI Preview App
-
-The e2e script verifies the WinUI project compiles. Runtime UI testing is manual:
-
-1. Stage the Rust DLL:
-   ```powershell
-   Copy-Item rust-dll/target/release/captcho_capture.dll captcho-ui/bin/Debug/net8.0-windows10.0.19041.0/win-x64/ -Force
-   ```
-   (Adjust output path if needed — the DLL must be beside the app executable.)
-
-2. Launch the app:
-   ```powershell
-   dotnet run --project captcho-ui
-   ```
-
-3. Expected behavior:
-   - Window opens at ~1000×700 with title "captcho — Screen Capture Preview"
-   - Click **Full Desktop** → captures all monitors stitched, displays preview
-   - Click **Current Monitor** → captures the monitor under cursor, displays preview
-   - Click **Active Window** → captures the foreground window, displays preview
-   - Click **Window Under Cursor** → captures the top-level window under the cursor, displays preview
-   - Status text shows mode + dimensions (e.g., "Full Desktop — 3840×1080")
-   - Timing text shows capture/display/total milliseconds
-
-## CLI Tester Commands
+### Examples
 
 ```powershell
-# Stage DLL first:
-Copy-Item rust-dll/target/release/captcho_capture.dll cs-tester/bin/Debug/net8.0-windows/ -Force
+# Capture all monitors to default location
+captcho-cli --full
 
-# Run specific captures:
-dotnet run --project cs-tester -- --capture
-dotnet run --project cs-tester -- --capture-full
-dotnet run --project cs-tester -- --capture-monitor 0
+# Capture second monitor to custom directory
+captcho-cli --monitor 1 --output D:\Screenshots
 
-# Window capture (S03):
-dotnet run --project cs-tester -- --capture-active-window
-dotnet run --project cs-tester -- --capture-window-under-cursor
-dotnet run --project cs-tester -- --capture-window-handle 0x12345   # decimal or 0x hex
+# Capture active window with custom filename
+captcho-cli --window-active --filename "snap_<yyyy><MM><dd>_<hh><mm><ss>.png" --output .
 
-# Run verification:
-dotnet run --project cs-tester -- --verify      # S01
-dotnet run --project cs-tester -- --verify-s02  # S02
-dotnet run --project cs-tester -- --verify-s03  # S03 (active window + cursor + zero-HWND negative test)
+# Capture region with verbose diagnostics
+captcho-cli --region 100,100,1920,1080 --output capture.png --verbose
+
+# Capture window under cursor for automation
+captcho-cli --window-cursor --output %TEMP%\screenshot.png
+if ($LASTEXITCODE -eq 0) {
+    # Success - file saved
+    Write-Host "Screenshot saved successfully"
+}
 ```
 
-## Manual UAT — S03 Window Capture
+## ⚙️ Configuration
 
-### Automated (Headless) Verification
+Configuration is stored in `%LOCALAPPDATA%\captcho\settings.json`.
 
-The `verify-s03-e2e.ps1` script handles non-interactive sessions gracefully. When WGC is unavailable (CI, RDP without desktop, headless), both window capture modes report `CaptureUnavailable` and the script exits cleanly with a warning. The zero-HWND negative test passes regardless of session type.
+### Default Settings
 
-### Interactive UAT — Two Windows
+```json
+{
+  "saveLocation": null,
+  "filenameTemplate": null
+}
+```
 
-1. Open two visible windows side-by-side (e.g., Notepad and a browser).
-2. Launch the WinUI app:
-   ```powershell
-   dotnet run --project captcho-ui
-   ```
-3. **Active Window capture**: Click "Active Window" button → preview shows the captcho window itself (it was the foreground window when clicked).
-4. **Window Under Cursor**: Move cursor over a different window (e.g., Notepad), press the "Window Under Cursor" button → preview shows Notepad.
-5. Verify status text shows mode + dimensions (e.g., "Active Window — 800×600").
-6. Verify timing text shows capture/display/total milliseconds.
+Both `null` values mean "use defaults":
+- Default save location: `Pictures\captcho\`
+- Default filename template: `captcho_<yyyy>-<MM>-<dd>_<hh><mm><ss>.png`
 
-### Cursor Target Switching
+### Custom Configuration Example
 
-1. Position the cursor over Window A, trigger "Window Under Cursor" → Window A captured.
-2. Move cursor to Window B (different size/position), trigger again → Window B captured.
-3. Verify dimensions change between captures if windows differ in size.
+```json
+{
+  "saveLocation": "C:\\Users\\YourName\\Pictures\\Screenshots",
+  "filenameTemplate": "Screenshot_<yyyy>-<MM>-<dd>_<hh><mm><ss>.png"
+}
+```
 
-### Window Decorations
+### Configuration Recovery
 
-Window captures include title bars and window borders (decorations) as rendered by the Windows Desktop Window Manager. This matches the WGC default behavior and user expectations for "capture this window". No separate decoration toggle is provided in M001.
+If the settings file becomes corrupted, captcho automatically:
+1. Renames the corrupted file to `settings.json.backup`
+2. Falls back to default settings
+3. Shows a warning in the status bar
+4. Creates a fresh `settings.json` on next save
 
-### Minimized / Closed Window Behavior
+## 🏗️ Building from Source
 
-- **Minimized window**: WGC may return `CaptureUnavailable` or capture a blank/minimal frame. This is expected — minimized windows are not composited.
-- **Closed/invalid HWND**: `--capture-window-handle` with an invalid handle returns a phase-labeled error, not a crash.
+### Prerequisites
 
-### Multi-Monitor / Spanning Windows
+- **Rust toolchain** — `cargo` on PATH (stable, MSVC target)
+- **.NET 8 SDK** — `dotnet` on PATH
+- **Windows 10 1903+** or Windows 11
 
-- A window spanning two monitors is captured as a single frame covering the full window extent.
-- Active Window and Window Under Cursor capture the logical window regardless of which monitor(s) it spans.
-- Test by dragging a window across monitor boundaries and capturing.
+### Build Steps
+
+```powershell
+# Clone the repository
+git clone https://github.com/yourusername/captcho.git
+cd captcho
+
+# Build Rust capture engine
+cargo build --manifest-path rust-dll/Cargo.toml --release
+
+# Build .NET solution
+dotnet build captcho.sln --configuration Release
+
+# Run the GUI
+dotnet run --project captcho-ui --configuration Release
+
+# Run the CLI
+dotnet run --project captcho-cli --configuration Release -- --full
+```
+
+### Running Tests
+
+```powershell
+# Run all tests
+dotnet test captcho.sln
+
+# Run Rust tests
+cargo test --manifest-path rust-dll/Cargo.toml
+
+# Run verification scripts
+powershell -ExecutionPolicy Bypass -File scripts\verify-s02-e2e.ps1
+```
+
+## 📁 Project Structure
+
+```
+captcho/
+├── rust-dll/           # Native capture engine (Rust)
+├── captcho-capture/    # Managed interop library (C#)
+├── captcho-ui/         # WinUI 3 desktop application
+├── captcho-cli/        # Command-line interface
+├── captcho-ui.Tests/   # UI tests
+├── captcho-cli.Tests/  # CLI tests
+├── scripts/            # Verification and build scripts
+└── docs/               # Additional documentation
+```
+
+## 🏛️ Architecture
+
+captcho uses a hybrid architecture for optimal performance:
+
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| **Capture Engine** | Rust + windows-crate | High-performance Windows Graphics Capture API calls |
+| **Interop Layer** | .NET 8 | P/Invoke bindings and managed data structures |
+| **UI Layer** | WinUI 3 | Modern, native Windows desktop interface |
+| **CLI Layer** | .NET 8 Console | Headless automation and scripting support |
+
+## 🐛 Known Limitations
+
+- **Interactive session required** — Windows Graphics Capture API requires a visible desktop session. RDP sessions without a desktop may fail.
+- **Minimized windows** — Capturing minimized windows may return empty frames (WGC limitation).
+- **WinAppDriver tests** — Automated UI tests are not yet implemented (planned for future release).
+
+## 📄 License
+
+[Your License Here] — See LICENSE file for details.
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## 🙏 Acknowledgments
+
+Built with:
+- [windows-capture](https://github.com/robberphex/windows-capture) — Fast Windows Graphics Capture API bindings
+- [WinUI 3](https://github.com/microsoft/microsoft-ui-xaml) — Modern Windows UI framework
+- [.NET 8](https://dotnet.microsoft.com/download/dotnet/8.0) — Developer platform
+
+---
+
+**captcho** — Fast screen capture for Windows
