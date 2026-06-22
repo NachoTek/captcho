@@ -54,6 +54,12 @@ public sealed partial class MainWindow : Window
     private readonly CapturePreviewService _captureService = new();
 
     /// <summary>
+    /// Coordinates singleton settings window lifecycle.
+    /// Ensures only one settings dialog is open at a time.
+    /// </summary>
+    private SettingsWindowCoordinator? _settingsCoordinator;
+
+    /// <summary>
     /// Tracks whether a capture has succeeded and the cached bitmap is available for export.
     /// Export buttons are only enabled when this is true and no operation is running.
     /// </summary>
@@ -148,6 +154,16 @@ public sealed partial class MainWindow : Window
         // Initialize hotkeys after the window has an HWND.
         // In WinUI 3, the HWND is available immediately after construction.
         InitializeHotkeys();
+
+        // Initialize settings coordinator with production delegates
+        if (_configService != null)
+        {
+            _settingsCoordinator = new SettingsWindowCoordinator(
+                _configService,
+                CreateSettingsWindow,
+                ActivateSettingsWindow,
+                SubscribeToWindowClosed);
+        }
 
         // Ensure cleanup on window close
         this.Closed += OnWindowClosed;
@@ -283,10 +299,18 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Handles window close event — ensures hotkeys are unregistered exactly once.
+    /// Handles window close event — ensures hotkeys are unregistered exactly once
+    /// and any open settings window is closed cleanly.
     /// </summary>
     private void OnWindowClosed(object sender, WindowEventArgs args)
     {
+        // Close settings window if open (lets it save its own placement)
+        if (_settingsCoordinator != null && _settingsCoordinator.IsWindowOpen)
+        {
+            var currentWindow = _settingsCoordinator.CurrentWindow as SettingsWindow;
+            currentWindow?.Close();
+        }
+
         CleanupHotkeys();
         this.Closed -= OnWindowClosed;
     }
@@ -791,6 +815,100 @@ public sealed partial class MainWindow : Window
         if (newline > 0)
             msg = msg[..newline];
         return msg;
+    }
+
+    // ── Menu handlers ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Handles Settings menu item click — opens the settings dialog using the coordinator.
+    /// </summary>
+    private void Settings_Click(object sender, RoutedEventArgs e)
+    {
+        if (_settingsCoordinator == null)
+        {
+            StatusText.Text = "Settings not available in this context.";
+            return;
+        }
+
+        _settingsCoordinator.CreateOrActivate();
+    }
+
+    /// <summary>
+    /// Handles Exit menu item click — closes the main window.
+    /// </summary>
+    private void Exit_Click(object sender, RoutedEventArgs e)
+    {
+        Close();
+    }
+
+    /// <summary>
+    /// Handles About menu item click — shows a simple about dialog.
+    /// </summary>
+    private void About_Click(object sender, RoutedEventArgs e)
+    {
+        StatusText.Text = "captcho — Screen Capture Tool v1.0";
+    }
+
+    // ── Settings window coordinator delegates ─────────────────────────
+
+    /// <summary>
+    /// Factory delegate for creating a new settings window.
+    /// </summary>
+    private object? CreateSettingsWindow()
+    {
+        if (_configService == null)
+            return null;
+
+        var settings = _settings ?? AppSettings.WithDefaults();
+        var window = new SettingsWindow(settings, _configService);
+        return window;
+    }
+
+    /// <summary>
+    /// Activation delegate for bringing the settings window to the foreground.
+    /// </summary>
+    private void ActivateSettingsWindow(object windowHandle)
+    {
+        if (windowHandle is SettingsWindow window)
+        {
+            // Activate by bringing to foreground (WinUI 3 Window has no Activate method directly)
+            // Use WinRT interop to bring window to front
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
+            if (hwnd != IntPtr.Zero)
+            {
+                // Show and bring to foreground using Win32 SetForegroundWindow
+                NativeMethods.SetForegroundWindow(hwnd);
+                NativeMethods.ShowWindow(hwnd, NativeMethods.SW_RESTORE);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Subscription delegate for tracking when the settings window closes.
+    /// </summary>
+    private void SubscribeToWindowClosed(object windowHandle, Action onClosed)
+    {
+        if (windowHandle is SettingsWindow window)
+        {
+            // We already hook Closed in SettingsWindow, so the coordinator's callback
+            // is not directly used. The coordinator's OnWindowClosed clears the reference,
+            // but SettingsWindow doesn't call back to coordinator.
+            // Instead, we hook the Closed event here to invoke the coordinator's cleanup.
+            window.Closed += (s, e) => onClosed();
+        }
+    }
+
+    // ── Native methods for window activation ───────────────────────────
+
+    private static class NativeMethods
+    {
+        [DllImport("user32.dll")]
+        public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        public const int SW_RESTORE = 9;
     }
 }
 

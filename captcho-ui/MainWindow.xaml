@@ -20,12 +20,32 @@ Layout:
     <Grid RowSpacing="0" Padding="0">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
+        <!-- MenuBar row -->
+        <MenuBar Grid.Row="0" Padding="8,6" Background="{ThemeResource LayerFillColorDefaultBrush}"
+                 BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
+            <MenuBarItem Title="File">
+                <MenuFlyoutItem Text="Exit" Click="Exit_Click"/>
+            </MenuBarItem>
+            <MenuBarItem Title="Options">
+                <MenuFlyoutItem Text="Settings…" Click="Settings_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Key="F4" Modifiers="None"/>
+                        <KeyboardAccelerator Key="Comma" Modifiers="Control"/>
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+            </MenuBarItem>
+            <MenuBarItem Title="Help">
+                <MenuFlyoutItem Text="About" Click="About_Click"/>
+            </MenuBarItem>
+        </MenuBar>
+
         <!-- Toolbar row -->
-        <Grid Grid.Row="0" Padding="12,10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+        <Grid Grid.Row="1" Padding="12,10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
               BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
@@ -163,7 +183,7 @@ Layout:
         </Grid>
 
         <!-- Preview image row -->
-        <ScrollViewer Grid.Row="1"
+        <ScrollViewer Grid.Row="2"
                       HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Auto"
                       Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
@@ -175,7 +195,7 @@ Layout:
         </ScrollViewer>
 
         <!-- Status / diagnostics bar -->
-        <Grid Grid.Row="2" Padding="12,8" Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+        <Grid Grid.Row="3" Padding="12,8" Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
               BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
