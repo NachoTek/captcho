@@ -100,6 +100,13 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private bool _hotkeyCleanedUp;
 
+    // ── Keyboard shortcut fields ───────────────────────────────────────
+
+    /// <summary>
+    /// Tracks whether settings window keyboard shortcut (F4 or Ctrl+,) is being pressed.
+    /// </summary>
+    private bool _isSettingsShortcutPressed;
+
     // ── P/Invoke for window subclassing ───────────────────────────────
 
     /// <summary>
@@ -117,6 +124,11 @@ public sealed partial class MainWindow : Window
     private static extern IntPtr CallWindowProc(IntPtr lpPrevWndFunc, IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
     private const int GWLP_WNDPROC = -4;
+    private const int WM_KEYDOWN = 0x0100;
+    private const int WM_KEYUP = 0x0101;
+    private const int VK_CONTROL = 0x11;
+    private const int VK_F4 = 0x73;
+    private const int VK_OEM_COMMA = 0xBC;
 
     /// <summary>
     /// Keeps the managed delegate alive (prevents GC collection while subclassed).
@@ -211,8 +223,8 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Subclassed window procedure that intercepts WM_HOTKEY and delegates all other
-    /// messages to the original window proc. Unknown hotkey ids are silently ignored.
+    /// Subclassed window procedure that intercepts WM_HOTKEY and WM_KEYDOWN/WM_KEYUP messages.
+    /// Handles settings shortcuts (F4 and Ctrl+,) and delegates other messages to the original proc.
     /// </summary>
     private IntPtr SubclassedWndProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
@@ -227,9 +239,39 @@ public sealed partial class MainWindow : Window
             // Unknown hotkey ids are silently ignored — not an error.
             // Still call original WndProc for WM_HOTKEY to maintain default handling.
         }
+        else if (msg == WM_KEYDOWN)
+        {
+            int vk = wParam.ToInt32();
+            bool isCtrlPressed = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+
+            // Handle F4 or Ctrl+, for settings
+            if (vk == VK_F4 || (isCtrlPressed && vk == VK_OEM_COMMA))
+            {
+                if (!_isSettingsShortcutPressed)
+                {
+                    _isSettingsShortcutPressed = true;
+                    DispatcherQueue.TryEnqueue(() => Settings_Click(null, null!));
+                }
+                return IntPtr.Zero;
+            }
+        }
+        else if (msg == WM_KEYUP)
+        {
+            int vk = wParam.ToInt32();
+            if (vk == VK_F4 || vk == VK_OEM_COMMA)
+            {
+                _isSettingsShortcutPressed = false;
+            }
+        }
 
         return CallWindowProc(_originalWndProc, hwnd, msg, wParam, lParam);
     }
+
+    /// <summary>
+    /// Gets the current key state for a virtual key.
+    /// </summary>
+    [DllImport("user32.dll")]
+    private static extern short GetKeyState(int nVirtKey);
 
     /// <summary>
     /// Dispatches a hotkey route to the appropriate capture workflow.
@@ -817,10 +859,11 @@ public sealed partial class MainWindow : Window
         return msg;
     }
 
-    // ── Menu handlers ─────────────────────────────────────────────────
+    // ── Button handlers ───────────────────────────────────────────────
 
     /// <summary>
-    /// Handles Settings menu item click — opens the settings dialog using the coordinator.
+    /// Handles Settings button click — opens the settings dialog using the coordinator.
+    /// Also invoked by F4 or Ctrl+, keyboard shortcuts.
     /// </summary>
     private void Settings_Click(object sender, RoutedEventArgs e)
     {
