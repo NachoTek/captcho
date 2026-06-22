@@ -5,7 +5,11 @@
 // and enable headless testing. Mirrors MainWindow settings window logic.
 
 using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using captcho.Capture;
+
+[assembly: InternalsVisibleTo("captcho-ui.Tests")]
 
 namespace captcho.UI;
 
@@ -184,8 +188,9 @@ public sealed class SettingsWindowCoordinator
     /// <summary>
     /// Formats a save failure message for UI display.
     /// Keeps sanitized error messages visible without throwing.
+    /// Internal for testability.
     /// </summary>
-    private static string FormatSaveFailureMessage(ConfigurationSaveResult result)
+    internal static string FormatSaveFailureMessage(ConfigurationSaveResult result)
     {
         var parts = new List<string>();
 
