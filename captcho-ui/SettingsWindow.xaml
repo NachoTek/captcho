@@ -1,0 +1,122 @@
+<!-- SettingsWindow.xaml — Settings dialog with tabbed configuration pages.
+
+Layout:
+  ┌─────────────────────────────────────────┐
+  │  TabView: General, Hotkeys, Export,    │
+  │            Interface                    │
+  ├─────────────────────────────────────────┤
+  │  [OK] [Cancel] [Apply]   [Save status] │
+  └─────────────────────────────────────────┘
+-->
+<Window
+    x:Class="captcho.UI.SettingsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="captcho Settings">
+
+    <Grid RowSpacing="0" Padding="0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- TabView row -->
+        <TabView Grid.Row="0" Padding="16,16">
+            <TabViewItem Header="General">
+                <StackPanel Spacing="12" Padding="20">
+                    <TextBlock Text="General settings are not implemented yet."
+                               TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               FontSize="14"/>
+                    <TextBlock Text="This tab will contain application-wide settings."
+                               TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               FontSize="13"/>
+                </StackPanel>
+            </TabViewItem>
+
+            <TabViewItem Header="Hotkeys">
+                <StackPanel Spacing="12" Padding="20">
+                    <TextBlock Text="Hotkey configuration is not implemented yet."
+                               TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               FontSize="14"/>
+                    <TextBlock Text="This tab will allow you to customize global keyboard shortcuts."
+                               TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               FontSize="13"/>
+                </StackPanel>
+            </TabViewItem>
+
+            <TabViewItem Header="Export">
+                <StackPanel Spacing="12" Padding="20">
+                    <TextBlock Text="Export settings are not implemented yet."
+                               TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               FontSize="14"/>
+                    <TextBlock Text="This tab will contain save location and filename template options."
+                               TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               FontSize="13"/>
+                </StackPanel>
+            </TabViewItem>
+
+            <TabViewItem Header="Interface">
+                <StackPanel Spacing="12" Padding="20">
+                    <TextBlock Text="Interface settings are not implemented yet."
+                               TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               FontSize="14"/>
+                    <TextBlock Text="This tab will contain UI customization options."
+                               TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               FontSize="13"/>
+                </StackPanel>
+            </TabViewItem>
+        </TabView>
+
+        <!-- Command buttons and status row -->
+        <Grid Grid.Row="1" Padding="16,12" Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+              BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <Button x:Name="OKButton"
+                    Grid.Column="0"
+                    Content="OK"
+                    MinWidth="80" MinHeight="36"
+                    Margin="0,0,8,0"
+                    Click="OK_Click"
+                    CornerRadius="6"/>
+
+            <Button x:Name="CancelButton"
+                    Grid.Column="1"
+                    Content="Cancel"
+                    MinWidth="80" MinHeight="36"
+                    Margin="0,0,8,0"
+                    Click="Cancel_Click"
+                    CornerRadius="6"/>
+
+            <Button x:Name="ApplyButton"
+                    Grid.Column="2"
+                    Content="Apply"
+                    MinWidth="80" MinHeight="36"
+                    Margin="0,0,16,0"
+                    Click="Apply_Click"
+                    CornerRadius="6"/>
+
+            <TextBlock x:Name="SaveStatusText"
+                       Grid.Column="4"
+                       Text=""
+                       TextTrimming="CharacterEllipsis"
+                       VerticalAlignment="Center"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       FontSize="13"/>
+        </Grid>
+    </Grid>
+</Window>
