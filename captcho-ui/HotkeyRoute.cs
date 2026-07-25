@@ -7,6 +7,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using captcho.Capture;
 
 namespace captcho.UI;
 
@@ -188,5 +189,24 @@ public static class HotkeyRouteMap
                 return spec;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Computes the set of enabled hotkey ids from persisted settings. A null
+    /// states map (settings predating per-hotkey toggles) or a missing entry means
+    /// the hotkey is enabled, matching <see cref="AppSettings.IsHotkeyEnabled"/>. The
+    /// single source of truth for "which hotkeys should be active right now", used by
+    /// both startup registration and the Hotkeys tab reconcile.
+    /// </summary>
+    public static IReadOnlySet<int> EnabledHotkeyIds(AppSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var ids = new HashSet<int>();
+        foreach (var spec in AllSpecs)
+        {
+            if (settings.IsHotkeyEnabled(spec.Id))
+                ids.Add(spec.Id);
+        }
+        return ids;
     }
 }

@@ -205,7 +205,10 @@ public sealed partial class MainWindow : Window
             }
 
             _hotkeyManager = new HotkeyManager(new WindowsHotkeyRegistrar());
-            var results = _hotkeyManager.RegisterAll(_hwnd);
+            // Register only the hotkeys the user has enabled, so disabled Global
+            // Hotkeys are not active on launch. Hotkeys disabled in settings are
+            // skipped; the rest register just like RegisterAll would.
+            var results = _hotkeyManager.Reconcile(_hwnd, HotkeyRouteMap.EnabledHotkeyIds(_settings));
 
             // Install WndProc subclass to intercept WM_HOTKEY messages.
             // Keep the delegate alive to prevent GC collection while subclassed.
@@ -903,7 +906,14 @@ public sealed partial class MainWindow : Window
             return null;
 
         var settings = _settings ?? AppSettings.WithDefaults();
-        var window = new SettingsWindow(settings, _configService);
+        // Hand the settings window an adapter bound to the live hotkey manager so the
+        // Hotkeys tab can read current registration status and reconcile registration
+        // on Apply/OK. When hotkeys could not be initialized, a no-op adapter keeps the
+        // tab rendering without crashing.
+        IGlobalHotkeyAdapter adapter = _hotkeyManager is not null
+            ? new HotkeyManagerAdapter(_hotkeyManager, _hwnd)
+            : new NullGlobalHotkeyAdapter();
+        var window = new SettingsWindow(settings, _configService, adapter);
         return window;
     }
 

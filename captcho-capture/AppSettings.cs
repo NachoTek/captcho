@@ -2,6 +2,7 @@
 // Defaults are sourced from ExportDefaults to keep a single source of truth.
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json.Serialization;
 
@@ -24,6 +25,16 @@ public sealed class AppSettings
     /// When null or empty/whitespace, falls back to <see cref="ExportDefaults.DefaultFilenameTemplate"/>.
     /// </summary>
     public string? FilenameTemplate { get; set; }
+
+    /// <summary>
+    /// Per-Global-Hotkey enabled states, keyed by the hotkey's stable id (1–4).
+    /// Null (or an absent id) means the hotkey is enabled — the default, matching
+    /// the pre-existing "every global hotkey on" behavior. When non-null, only ids
+    /// mapped to <c>true</c> are enabled. The ids match <c>HotkeyRouteMap</c> but
+    /// are kept here as plain integers so this persistence model stays free of UI
+    /// and Win32 dependencies.
+    /// </summary>
+    public Dictionary<int, bool>? HotkeyEnabledStates { get; set; }
 
     // Future properties can be added here. System.Text.Json will ignore
     // unknown properties on read and only serialize declared ones.
@@ -57,6 +68,17 @@ public sealed class AppSettings
             : FilenameTemplate;
 
     /// <summary>
+    /// Resolves whether the global hotkey with the given stable id is enabled.
+    /// A null states map (settings file predates per-hotkey toggles) or a missing
+    /// entry means enabled, matching the pre-existing "every global hotkey on"
+    /// behavior. An explicit <c>false</c> disables the hotkey.
+    /// </summary>
+    public bool IsHotkeyEnabled(int hotkeyId) =>
+        HotkeyEnabledStates is null
+        || !HotkeyEnabledStates.TryGetValue(hotkeyId, out bool enabled)
+        || enabled;
+
+    /// <summary>
     /// Validates the settings, returning a list of issues found.
     /// An empty list means the settings are valid.
     /// </summary>
@@ -86,10 +108,15 @@ public sealed class AppSettings
 
     /// <summary>
     /// Returns a sanitized copy with null/empty/whitespace fields replaced by defaults.
+    /// The hotkey enabled-states dictionary is deep-copied (or kept null) so the
+    /// returned copy is fully independent of this instance.
     /// </summary>
     public AppSettings Normalized() => new()
     {
         SaveLocation = EffectiveSaveLocation,
         FilenameTemplate = EffectiveFilenameTemplate,
+        HotkeyEnabledStates = HotkeyEnabledStates is null
+            ? null
+            : new Dictionary<int, bool>(HotkeyEnabledStates),
     };
 }

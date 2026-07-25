@@ -3,20 +3,23 @@
 // Provides a Window subclass (not ContentDialog) with TabView containing four tabs:
 // General, Hotkeys, Export, and Interface. The General tab edits the Save Location
 // (text or Windows folder picker) and the Filename Template through the pure C#
-// GeneralTabSettings seam (preview, validation, Apply/OK/Cancel). Saved values are
-// written back to the live in-memory settings so the export flow picks them up
-// without a restart. The Export and Interface tabs render read-only content
-// through the ExportTabSettings and InterfaceTabSettings seams (current PNG format
-// and a not-yet-available interface message). The Hotkeys tab remains a placeholder
-// for a later slice.
-// The bottom row has OK (save+close on success), Cancel (discard+close), and Apply
-// (save, stay open). Window position and size are persisted to
+// GeneralTabSettings seam (preview, validation, Apply/OK/Cancel). The Hotkeys tab
+// lists every Global Hotkey with its binding, behavior, and registration status,
+// and enables/disables each through the HotkeysTabSettings seam (Apply/OK persist
+// enabled states and reconcile runtime registration via the Global Hotkey adapter;
+// Cancel reverts). Both tabs persist through the shared in-memory settings so the
+// export flow and hotkey runtime pick up changes without a restart. The Export and
+// Interface tabs render read-only content through their own seams. The bottom row
+// has OK (save+close on success), Cancel (discard+close), and Apply (save, stay
+// open). Window position and size are persisted to
 // ApplicationData.Current.LocalSettings.
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using captcho.Capture;
 
 namespace captcho.UI;
@@ -39,6 +42,27 @@ public sealed partial class SettingsWindow : Window
     private GeneralTabSettings? _generalTab;
 
     /// <summary>
+    /// Pure C# editing seam for the Hotkeys tab. Lists every Global Hotkey with its
+    /// binding, behavior, and registration status, and enables/disables each hotkey.
+    /// Apply/OK persist enabled states and reconcile runtime registration; Cancel
+    /// reverts. Null only when the window fails to initialize.
+    /// </summary>
+    private HotkeysTabSettings? _hotkeysTab;
+
+    /// <summary>
+    /// Runtime Global Hotkey adapter used by the Hotkeys tab to read registration
+    /// status and reconcile registration on Apply/OK. Stored so the row builder can
+    /// refresh status after a save.
+    /// </summary>
+    private readonly IGlobalHotkeyAdapter _hotkeyAdapter;
+
+    /// <summary>
+    /// Status TextBlock per hotkey id, kept so a toggle can refresh one row's status
+    /// without rebuilding the whole list (which would lose focus and re-fire toggles).
+    /// </summary>
+    private readonly Dictionary<int, TextBlock> _hotkeyStatusCells = new();
+
+    /// <summary>
     /// Read-only display seam for the Export tab. Surfaces the current export format
     /// (PNG) and supporting text. Null only when the window fails to initialize.
     /// </summary>
@@ -53,14 +77,18 @@ public sealed partial class SettingsWindow : Window
     private const string WindowPlacementKey = "SettingsWindowPlacement";
 
     /// <summary>
-    /// Production constructor that receives current settings and optional configuration service.
+    /// Production constructor that receives current settings, an optional configuration
+    /// service, and the Global Hotkey adapter used to read registration status and
+    /// reconcile runtime registration on the Hotkeys tab.
     /// </summary>
-    /// <param name="settings">Current application settings (snapshotted by the General tab; never mutated).</param>
+    /// <param name="settings">Current application settings (snapshotted by each tab; never mutated).</param>
     /// <param name="configService">Optional configuration service for persisting settings (nullable for design-time).</param>
-    public SettingsWindow(AppSettings settings, ConfigurationService? configService)
+    /// <param name="hotkeyAdapter">Global Hotkey adapter for registration status and runtime reconcile.</param>
+    public SettingsWindow(AppSettings settings, ConfigurationService? configService, IGlobalHotkeyAdapter hotkeyAdapter)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _configService = configService;
+        _hotkeyAdapter = hotkeyAdapter ?? throw new ArgumentNullException(nameof(hotkeyAdapter));
         _localSettings = Windows.Storage.ApplicationData.Current.LocalSettings;
 
         InitializeComponent();
@@ -74,6 +102,9 @@ public sealed partial class SettingsWindow : Window
 
         // Wire the General tab editing seam (snapshots settings; never mutates the active settings)
         InitializeGeneralTab();
+
+        // Wire the Hotkeys tab editing seam (snapshots settings; reads registration status).
+        InitializeHotkeysTab();
 
         // Wire the read-only Export and Interface tab seams (display content only).
         InitializeExportTab();
@@ -91,26 +122,26 @@ public sealed partial class SettingsWindow : Window
     /// </summary>
     private void InitializeGeneralTab()
     {
-        // When no ConfigurationService is available (design-time), surface that as a save
-        // failure rather than crashing; the seam still drives validation and preview.
+        // The save delegate merges this tab's slice onto the shared in-memory settings
+        // before persisting, so a General Apply does not clobber Hotkey-tab changes
+        // already applied to (or snapshotted into) _settings. Design-time (no
+        // ConfigurationService) surfaces as a save failure rather than crashing; the
+        // seam still drives validation and preview.
         SaveSettingsDelegate save = s =>
         {
+            var merged = MergeSettingsSlice(_settings, saveLocation: s.SaveLocation, filenameTemplate: s.FilenameTemplate);
             var result = _configService is not null
-                ? _configService.Save(s)
-                : new ConfigurationSaveResult
-                {
-                    Success = false,
-                    Phase = "DesignTime",
-                    ErrorMessage = "ConfigurationService not available (design-time).",
-                };
+                ? _configService.Save(merged)
+                : DesignTimeSaveFailure();
 
             if (result.Success)
             {
-                // Propagate the persisted values onto the live in-memory settings so the
-                // export flow picks up the new Save Location (and Filename Template)
-                // without requiring an application restart.
-                _settings.SaveLocation = s.SaveLocation;
-                _settings.FilenameTemplate = s.FilenameTemplate;
+                // Propagate the persisted General slice onto the live in-memory settings
+                // so the export flow picks up the new Save Location (and Filename Template)
+                // without requiring an application restart, and so the Hotkeys tab's merge
+                // sees the latest General values.
+                _settings.SaveLocation = merged.SaveLocation;
+                _settings.FilenameTemplate = merged.FilenameTemplate;
             }
 
             return result;
@@ -128,6 +159,180 @@ public sealed partial class SettingsWindow : Window
         FilenameTemplateInput.Text = _generalTab.FilenameTemplate;
         RefreshGeneralTabState();
     }
+
+    // ── Hotkeys tab seam wiring ──────────────────────────────────────────
+
+    /// <summary>
+    /// Constructs the Hotkeys tab editing seam from a snapshot of the current
+    /// settings and the runtime Global Hotkey adapter, then renders one row per
+    /// Global Hotkey (binding, behavior, registration status, enable toggle).
+    /// </summary>
+    private void InitializeHotkeysTab()
+    {
+        // Same merge pattern as the General tab: overlay this tab's slice onto the
+        // shared in-memory settings before persisting, so a Hotkeys Apply does not
+        // clobber General-tab changes.
+        SaveSettingsDelegate save = s =>
+        {
+            var merged = MergeSettingsSlice(_settings, hotkeyEnabledStates: s.HotkeyEnabledStates);
+            var result = _configService is not null
+                ? _configService.Save(merged)
+                : DesignTimeSaveFailure();
+
+            if (result.Success)
+            {
+                _settings.HotkeyEnabledStates = merged.HotkeyEnabledStates is null
+                    ? null
+                    : new Dictionary<int, bool>(merged.HotkeyEnabledStates);
+            }
+
+            return result;
+        };
+
+        _hotkeysTab = new HotkeysTabSettings(_settings, save, _hotkeyAdapter);
+        RebuildHotkeyRows();
+    }
+
+    /// <summary>
+    /// Clears and rebuilds the Hotkeys tab rows from the coordinator's current
+    /// display state. Toggle switches are populated before their Toggled handler is
+    /// attached so the initial value does not fire as an edit.
+    /// </summary>
+    private void RebuildHotkeyRows()
+    {
+        if (_hotkeysTab is null)
+            return;
+
+        HotkeysRowsPanel.Children.Clear();
+        _hotkeyStatusCells.Clear();
+
+        foreach (var row in _hotkeysTab.GetRows())
+        {
+            var statusText = new TextBlock
+            {
+                Text = StatusDisplay(row.Status, row.StatusDetail),
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = StatusBrush(row.Status),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            _hotkeyStatusCells[row.Id] = statusText;
+
+            // Toggle is set to the working enabled state BEFORE the handler is
+            // attached, so populating it does not register as a user edit.
+            var toggle = new ToggleSwitch
+            {
+                OnContent = "On",
+                OffContent = "Off",
+                IsOn = row.IsEnabled,
+                MinWidth = 90,
+                VerticalAlignment = VerticalAlignment.Center,
+                Tag = row.Id,
+            };
+            toggle.Toggled += HotkeyToggle_Toggled;
+
+            var info = new StackPanel { Spacing = 2 };
+            info.Children.Add(new TextBlock
+            {
+                Text = row.Binding,
+                FontSize = 14,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            });
+            info.Children.Add(new TextBlock
+            {
+                Text = row.Behavior,
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+            });
+
+            var grid = new Grid { ColumnSpacing = 16 };
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            Grid.SetColumn(info, 0);
+            Grid.SetColumn(statusText, 1);
+            Grid.SetColumn(toggle, 2);
+            grid.Children.Add(info);
+            grid.Children.Add(statusText);
+            grid.Children.Add(toggle);
+
+            HotkeysRowsPanel.Children.Add(new Border
+            {
+                Child = grid,
+                Padding = new Thickness(12),
+                CornerRadius = new CornerRadius(6),
+                Background = (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"],
+                BorderBrush = (Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
+                BorderThickness = new Thickness(1),
+            });
+        }
+    }
+
+    /// <summary>
+    /// Pushes a toggle change into the seam and refreshes that row's registration
+    /// status without rebuilding the whole list (which would lose focus and re-fire
+    /// toggles).
+    /// </summary>
+    private void HotkeyToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_hotkeysTab is null || sender is not ToggleSwitch toggle || toggle.Tag is not int id)
+            return;
+
+        _hotkeysTab.EditEnabled(id, toggle.IsOn);
+
+        if (_hotkeyStatusCells.TryGetValue(id, out var cell))
+        {
+            var row = _hotkeysTab.GetRows().Single(r => r.Id == id);
+            cell.Text = StatusDisplay(row.Status, row.StatusDetail);
+            cell.Foreground = StatusBrush(row.Status);
+        }
+    }
+
+    private static string StatusDisplay(HotkeyRegistrationStatus status, string detail) => status switch
+    {
+        HotkeyRegistrationStatus.Registered => "Active",
+        HotkeyRegistrationStatus.Failed => string.IsNullOrWhiteSpace(detail) ? "Registration failed" : $"Registration failed: {detail}",
+        HotkeyRegistrationStatus.Disabled => "Disabled",
+        _ => "Status unavailable",
+    };
+
+    private static Brush StatusBrush(HotkeyRegistrationStatus status) => status switch
+    {
+        HotkeyRegistrationStatus.Registered => (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"],
+        HotkeyRegistrationStatus.Failed => (Brush)Application.Current.Resources["TextFillColorCriticalBrush"],
+        HotkeyRegistrationStatus.Disabled => (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
+        _ => (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+    };
+
+    /// <summary>
+    /// Builds a settings instance for persistence by overlaying one tab's slice onto
+    /// the shared in-memory settings. Each slice argument is applied only when non-null,
+    /// so a tab persists only its own values while inheriting the other tab's latest
+    /// applied values from <paramref name="source"/>.
+    /// </summary>
+    private static AppSettings MergeSettingsSlice(
+        AppSettings source,
+        string? saveLocation = null,
+        string? filenameTemplate = null,
+        Dictionary<int, bool>? hotkeyEnabledStates = null)
+    {
+        var merged = source.Normalized();
+        if (saveLocation is not null)
+            merged.SaveLocation = saveLocation;
+        if (filenameTemplate is not null)
+            merged.FilenameTemplate = filenameTemplate;
+        if (hotkeyEnabledStates is not null)
+            merged.HotkeyEnabledStates = new Dictionary<int, bool>(hotkeyEnabledStates);
+        return merged;
+    }
+
+    private static ConfigurationSaveResult DesignTimeSaveFailure() => new()
+    {
+        Success = false,
+        Phase = "DesignTime",
+        ErrorMessage = "ConfigurationService not available (design-time).",
+    };
 
     // ── Export tab seam wiring ───────────────────────────────────────────
 
@@ -257,49 +462,87 @@ public sealed partial class SettingsWindow : Window
     // ── Command buttons ──────────────────────────────────────────────────
 
     /// <summary>
-    /// Handles OK button click — persists via the seam and closes only after a
-    /// successful save. Save failures are shown inline and the window stays open.
+    /// Handles OK button click — persists via both the General and Hotkeys seams and
+    /// closes only after every tab saves successfully. General is confirmed first (it
+    /// can fail validation); on any failure the window stays open with an inline
+    /// message and runtime/persisted state is left consistent. Save failures are
+    /// shown inline and the window stays open.
     /// </summary>
     private void OK_Click(object sender, RoutedEventArgs e)
     {
-        if (_generalTab is null)
+        // General first (it can fail validation); short-circuit on failure so a
+        // General validation error does not trigger a Hotkeys save.
+        if (_generalTab is not null)
         {
-            Close();
-            return;
+            var generalResult = _generalTab.Confirm();
+            if (!generalResult.Success)
+            {
+                ShowStatus(false, generalResult.Message);
+                return;
+            }
         }
 
-        var result = _generalTab.Confirm();
-        ShowStatus(result.Success, result.Message);
-
-        if (result.ShouldClose)
+        if (_hotkeysTab is not null)
         {
-            SaveWindowPlacement();
-            Close();
+            var hotkeysResult = _hotkeysTab.Confirm();
+            RebuildHotkeyRows();
+            if (!hotkeysResult.Success)
+            {
+                ShowStatus(false, hotkeysResult.Message);
+                return;
+            }
         }
-    }
 
-    /// <summary>
-    /// Handles Cancel button click — discards edits since the last Apply and closes.
-    /// Persisted settings are left unchanged.
-    /// </summary>
-    private void Cancel_Click(object sender, RoutedEventArgs e)
-    {
-        _generalTab?.Cancel();
+        ShowStatus(true, SettingsWindowCoordinator.SavedMessage);
         SaveWindowPlacement();
         Close();
     }
 
     /// <summary>
-    /// Handles Apply button click — persists via the seam and keeps the window open.
-    /// Save failures are shown inline without reporting success.
+    /// Handles Cancel button click — discards edits since the last Apply on every tab
+    /// and closes. Persisted settings and runtime registration are left unchanged.
+    /// </summary>
+    private void Cancel_Click(object sender, RoutedEventArgs e)
+    {
+        _generalTab?.Cancel();
+        if (_hotkeysTab is not null)
+        {
+            _hotkeysTab.Cancel();
+            RebuildHotkeyRows();
+        }
+        SaveWindowPlacement();
+        Close();
+    }
+
+    /// <summary>
+    /// Handles Apply button click — persists via both the General and Hotkeys seams
+    /// and keeps the window open. Save failures are shown inline without reporting
+    /// success; the Hotkeys tab reconciles runtime registration on a successful save.
     /// </summary>
     private void Apply_Click(object sender, RoutedEventArgs e)
     {
-        if (_generalTab is null)
-            return;
+        if (_generalTab is not null)
+        {
+            var generalResult = _generalTab.Apply();
+            if (!generalResult.Success)
+            {
+                ShowStatus(false, generalResult.Message);
+                return;
+            }
+        }
 
-        var result = _generalTab.Apply();
-        ShowStatus(result.Success, result.Message);
+        if (_hotkeysTab is not null)
+        {
+            var hotkeysResult = _hotkeysTab.Apply();
+            RebuildHotkeyRows();
+            if (!hotkeysResult.Success)
+            {
+                ShowStatus(false, hotkeysResult.Message);
+                return;
+            }
+        }
+
+        ShowStatus(true, SettingsWindowCoordinator.SavedMessage);
     }
 
     /// <summary>

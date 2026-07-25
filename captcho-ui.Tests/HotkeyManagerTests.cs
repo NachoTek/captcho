@@ -297,4 +297,120 @@ public class HotkeyManagerTests
             }
         }
     }
+
+    // ── Reconcile (register enabled / unregister disabled) ──────────────
+
+    [Fact]
+    public void Reconcile_AllEnabledOnFreshManager_RegistersAllFour()
+    {
+        var manager = new HotkeyManager(_fake);
+        var enabled = new HashSet<int> { 1, 2, 3, 4 };
+
+        var results = manager.Reconcile(IntPtr.Zero, enabled);
+
+        Assert.Equal(4, results.Count);
+        Assert.All(results, r => Assert.True(r.Succeeded));
+        Assert.Equal(4, _fake.RegisterCalls.Count);
+        Assert.Empty(_fake.UnregisterCalls);
+    }
+
+    [Fact]
+    public void Reconcile_DisabledIds_AreNotRegistered()
+    {
+        var manager = new HotkeyManager(_fake);
+        var enabled = new HashSet<int> { 1, 3 };
+
+        var results = manager.Reconcile(IntPtr.Zero, enabled);
+
+        // Only the enabled ids produce registration results.
+        Assert.Equal(2, results.Count);
+        Assert.All(results, r => Assert.Contains(r.Spec.Id, enabled));
+        Assert.Equal(2, _fake.RegisterCalls.Count);
+        var registeredIds = _fake.RegisterCalls.Select(c => c.id).ToHashSet();
+        Assert.Equal(enabled, registeredIds);
+    }
+
+    [Fact]
+    public void Reconcile_OnActiveManager_UnregistersNewlyDisabled()
+    {
+        var manager = new HotkeyManager(_fake);
+        manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2, 3, 4 });
+
+        var results = manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 3 });
+
+        // Id 2 and 4 should be unregistered.
+        Assert.Contains(2, _fake.UnregisterCalls);
+        Assert.Contains(4, _fake.UnregisterCalls);
+        // Remaining results cover only the still-enabled ids.
+        Assert.Equal(2, results.Count);
+        Assert.DoesNotContain(results, r => r.Spec.Id == 2 || r.Spec.Id == 4);
+    }
+
+    [Fact]
+    public void Reconcile_RegistersNewlyEnabledWithoutReRegisteringExisting()
+    {
+        var manager = new HotkeyManager(_fake);
+        manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2 });
+        int registerCountAfterFirst = _fake.RegisterCalls.Count;
+
+        manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2, 3, 4 });
+
+        // Only the two newly-enabled ids (3, 4) should be newly registered;
+        // already-registered ids (1, 2) must not be registered again.
+        int newRegistrations = _fake.RegisterCalls.Count - registerCountAfterFirst;
+        Assert.Equal(2, newRegistrations);
+        var newlyRegistered = _fake.RegisterCalls
+            .Skip(registerCountAfterFirst)
+            .Select(c => c.id)
+            .ToHashSet();
+        Assert.Equal(new HashSet<int> { 3, 4 }, newlyRegistered);
+    }
+
+    [Fact]
+    public void Reconcile_PartialFailure_RecordsFailureForThatIdOnly()
+    {
+        _fake.SetFailingIds(HotkeyRouteMap.IdWinPrintScreen);
+        var manager = new HotkeyManager(_fake);
+
+        var results = manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2, 3, 4 });
+
+        Assert.Equal(4, results.Count);
+        Assert.Equal(3, results.Count(r => r.Succeeded));
+        var failure = results.Single(r => !r.Succeeded);
+        Assert.Equal(HotkeyRouteMap.IdWinPrintScreen, failure.Spec.Id);
+        Assert.Equal("RegisterHotKey", failure.Phase);
+    }
+
+    [Fact]
+    public void Reconcile_EmptyEnabledSet_UnregistersEverythingAndReportsNone()
+    {
+        var manager = new HotkeyManager(_fake);
+        manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2, 3, 4 });
+
+        var results = manager.Reconcile(IntPtr.Zero, new HashSet<int>());
+
+        Assert.Empty(results);
+        Assert.Equal(4, _fake.UnregisterCalls.Count);
+    }
+
+    [Fact]
+    public void Reconcile_NullEnabledIds_Throws()
+    {
+        var manager = new HotkeyManager(_fake);
+        Assert.Throws<ArgumentNullException>(() => manager.Reconcile(IntPtr.Zero, null!));
+    }
+
+    [Fact]
+    public void GetRegistrationSummary_AfterReconcileWithDisabled_HasNoSpuriousConflicts()
+    {
+        var manager = new HotkeyManager(_fake);
+        // Three enabled, one intentionally disabled.
+        manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2, 3 });
+
+        var summary = manager.GetRegistrationSummary();
+
+        // All enabled ones registered — no conflict wording.
+        Assert.Contains("All 3 hotkeys registered", summary);
+        Assert.DoesNotContain("Conflicts", summary);
+    }
 }

@@ -190,6 +190,91 @@ public sealed class HotkeyManager
             }
         }
         _registeredIds.Clear();
+        _registrationResults.Clear();
+    }
+
+    /// <summary>
+    /// Reconciles runtime registration so that exactly the hotkeys in
+    /// <paramref name="enabledIds"/> are registered: any enabled id that is not yet
+    /// registered is registered, and any currently-registered id that is no longer
+    /// enabled is unregistered. Idempotent and partial-failure tolerant — enabled
+    /// hotkeys that fail to register are recorded with sanitized conflict details,
+    /// and the remaining enabled hotkeys stay registered.
+    /// </summary>
+    /// <param name="hwnd">Window handle to receive WM_HOTKEY messages.</param>
+    /// <param name="enabledIds">Stable ids of the hotkeys that should be active.</param>
+    /// <returns>
+    /// Registration results for the enabled hotkeys only. Disabled hotkeys are
+    /// intentionally omitted so callers can distinguish "off by choice" from
+    /// "attempted but failed".
+    /// </returns>
+    public IReadOnlyList<HotkeyRegistrationResult> Reconcile(IntPtr hwnd, IReadOnlySet<int> enabledIds)
+    {
+        ArgumentNullException.ThrowIfNull(enabledIds);
+        _hwnd = hwnd;
+
+        // Unregister anything currently registered that is no longer enabled.
+        foreach (var id in _registeredIds.ToArray())
+        {
+            if (enabledIds.Contains(id))
+                continue;
+            try { _registrar.UnregisterHotKey(hwnd, id); }
+            catch { /* unregister failure is non-fatal */ }
+            _registeredIds.Remove(id);
+        }
+
+        // Drop any stale results for now-disabled ids.
+        for (int i = _registrationResults.Count - 1; i >= 0; i--)
+        {
+            if (!_registrationResults[i].Succeeded || !enabledIds.Contains(_registrationResults[i].Spec.Id))
+                _registrationResults.RemoveAt(i);
+        }
+
+        var results = new List<HotkeyRegistrationResult>();
+
+        foreach (var spec in HotkeyRouteMap.AllSpecs)
+        {
+            if (!enabledIds.Contains(spec.Id))
+                continue;
+
+            if (_registeredIds.Contains(spec.Id))
+            {
+                // Already registered — reuse the prior success result if present.
+                var existing = _registrationResults.FirstOrDefault(r => r.Spec.Id == spec.Id);
+                results.Add(existing ?? HotkeyRegistrationResult.Success(spec));
+                continue;
+            }
+
+            bool success = false;
+            string errorMessage = "";
+            try
+            {
+                success = _registrar.RegisterHotKey(hwnd, spec.Id, spec.Modifiers, spec.VirtualKey);
+                if (!success)
+                {
+                    errorMessage = _registrar is WindowsHotkeyRegistrar winRegistrar
+                        ? WindowsHotkeyRegistrar.GetLastErrorMessage()
+                        : "Registration failed";
+                }
+            }
+            catch (Exception ex)
+            {
+                success = false;
+                errorMessage = ex.Message;
+            }
+
+            var result = success
+                ? HotkeyRegistrationResult.Success(spec)
+                : HotkeyRegistrationResult.Fail(spec, "RegisterHotKey", errorMessage);
+
+            results.Add(result);
+            if (success)
+                _registeredIds.Add(spec.Id);
+        }
+
+        _registrationResults.Clear();
+        _registrationResults.AddRange(results);
+        return RegistrationResults;
     }
 
     /// <summary>
