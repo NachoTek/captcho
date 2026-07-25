@@ -1,8 +1,8 @@
-// HotkeyManagerTests.cs — Fake-registrar tests for HotkeyManager.
+// GlobalHotkeyManagerTests.cs — Fake-registrar tests for GlobalHotkeyManager.
 //
 // Tests registration success, partial failure, idempotent cleanup,
 // duplicate registration prevention, unknown id dispatch, and structured error output.
-// Uses a FakeHotkeyRegistrar to avoid Win32 dependencies — fully headless.
+// Uses a FakeGlobalHotkeyRegistrar to avoid Win32 dependencies — fully headless.
 
 using System;
 using System.Collections.Generic;
@@ -12,17 +12,17 @@ using Xunit;
 namespace captcho.UI.Tests;
 
 /// <summary>
-/// Fake registrar that tracks calls and simulates success/failure per hotkey id.
+/// Fake registrar that tracks calls and simulates success/failure per Global Hotkey id.
 /// Allows tests to control which ids succeed or fail without Win32.
 /// </summary>
-internal sealed class FakeHotkeyRegistrar : IHotkeyRegistrar
+internal sealed class FakeGlobalHotkeyRegistrar : IGlobalHotkeyRegistrar
 {
     private readonly HashSet<int> _registeredIds = new();
     private readonly HashSet<int> _idsThatFail = new();
     private readonly List<(int id, int modifiers, int vk)> _registerCalls = new();
     private readonly List<int> _unregisterCalls = new();
 
-    /// <summary>Set of hotkey ids that should fail registration.</summary>
+    /// <summary>Set of Global Hotkey ids that should fail registration.</summary>
     public void SetFailingIds(params int[] ids)
     {
         foreach (var id in ids)
@@ -51,16 +51,16 @@ internal sealed class FakeHotkeyRegistrar : IHotkeyRegistrar
     }
 }
 
-public class HotkeyManagerTests
+public class GlobalHotkeyManagerTests
 {
-    private readonly FakeHotkeyRegistrar _fake = new();
+    private readonly FakeGlobalHotkeyRegistrar _fake = new();
 
     // ── Full success ────────────────────────────────────────────────────
 
     [Fact]
     public void RegisterAll_AllSucceed_AllRegistered()
     {
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         var results = manager.RegisterAll(IntPtr.Zero);
 
         Assert.Equal(4, results.Count);
@@ -71,7 +71,7 @@ public class HotkeyManagerTests
     [Fact]
     public void RegisterAll_AllSucceed_RegistrarReceivedFourCalls()
     {
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         manager.RegisterAll(IntPtr.Zero);
 
         Assert.Equal(4, _fake.RegisterCalls.Count);
@@ -80,11 +80,11 @@ public class HotkeyManagerTests
     [Fact]
     public void RegisterAll_CallsRegistrarWithCorrectSpecs()
     {
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         manager.RegisterAll(IntPtr.Zero);
 
         // Verify each spec was passed correctly to the registrar
-        foreach (var spec in HotkeyRouteMap.AllSpecs)
+        foreach (var spec in GlobalHotkeyRouteMap.AllSpecs)
         {
             var call = _fake.RegisterCalls.FirstOrDefault(c => c.id == spec.Id);
             Assert.NotEqual(default, call);
@@ -98,8 +98,8 @@ public class HotkeyManagerTests
     [Fact]
     public void RegisterAll_OneFails_ThreeSucceed()
     {
-        _fake.SetFailingIds(HotkeyRouteMap.IdWinPrintScreen);
-        var manager = new HotkeyManager(_fake);
+        _fake.SetFailingIds(GlobalHotkeyRouteMap.IdWinPrintScreen);
+        var manager = new GlobalHotkeyManager(_fake);
         var results = manager.RegisterAll(IntPtr.Zero);
 
         Assert.Equal(4, results.Count);
@@ -111,12 +111,12 @@ public class HotkeyManagerTests
     [Fact]
     public void RegisterAll_OneFails_FailureHasCorrectSpec()
     {
-        _fake.SetFailingIds(HotkeyRouteMap.IdWinPrintScreen);
-        var manager = new HotkeyManager(_fake);
+        _fake.SetFailingIds(GlobalHotkeyRouteMap.IdWinPrintScreen);
+        var manager = new GlobalHotkeyManager(_fake);
         var results = manager.RegisterAll(IntPtr.Zero);
 
         var failure = results.First(r => !r.Succeeded);
-        Assert.Equal(HotkeyRouteMap.IdWinPrintScreen, failure.Spec.Id);
+        Assert.Equal(GlobalHotkeyRouteMap.IdWinPrintScreen, failure.Spec.Id);
         Assert.Equal("RegisterHotKey", failure.Phase);
         Assert.NotEmpty(failure.Error);
     }
@@ -125,7 +125,7 @@ public class HotkeyManagerTests
     public void RegisterAll_AllFail_NoneRegistered()
     {
         _fake.SetFailingIds(1, 2, 3, 4);
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         var results = manager.RegisterAll(IntPtr.Zero);
 
         Assert.Equal(4, results.Count);
@@ -138,7 +138,7 @@ public class HotkeyManagerTests
     [Fact]
     public void UnregisterAll_AfterSuccess_UnregistersAllFour()
     {
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         manager.RegisterAll(IntPtr.Zero);
         manager.UnregisterAll();
 
@@ -149,7 +149,7 @@ public class HotkeyManagerTests
     [Fact]
     public void UnregisterAll_Idempotent_DoesNotThrowOnDoubleCall()
     {
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         manager.RegisterAll(IntPtr.Zero);
         manager.UnregisterAll();
         manager.UnregisterAll(); // second call should be safe
@@ -161,14 +161,14 @@ public class HotkeyManagerTests
     [Fact]
     public void UnregisterAll_AfterPartialFailure_OnlyUnregistersSuccessful()
     {
-        _fake.SetFailingIds(HotkeyRouteMap.IdWinPrintScreen);
-        var manager = new HotkeyManager(_fake);
+        _fake.SetFailingIds(GlobalHotkeyRouteMap.IdWinPrintScreen);
+        var manager = new GlobalHotkeyManager(_fake);
         manager.RegisterAll(IntPtr.Zero);
         manager.UnregisterAll();
 
         // Only 3 were successfully registered, so only 3 should be unregistered
         Assert.Equal(3, _fake.UnregisterCalls.Count);
-        Assert.DoesNotContain(HotkeyRouteMap.IdWinPrintScreen, _fake.UnregisterCalls);
+        Assert.DoesNotContain(GlobalHotkeyRouteMap.IdWinPrintScreen, _fake.UnregisterCalls);
     }
 
     // ── Idempotent registration ─────────────────────────────────────────
@@ -176,7 +176,7 @@ public class HotkeyManagerTests
     [Fact]
     public void RegisterAll_CalledTwice_Idempotent()
     {
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         manager.RegisterAll(IntPtr.Zero);
         var secondResults = manager.RegisterAll(IntPtr.Zero);
 
@@ -190,13 +190,13 @@ public class HotkeyManagerTests
     // ── Route resolution ────────────────────────────────────────────────
 
     [Theory]
-    [InlineData(HotkeyRouteMap.IdPrintScreen, HotkeyRoute.CurrentMonitor)]
-    [InlineData(HotkeyRouteMap.IdWinPrintScreen, HotkeyRoute.ActiveWindow)]
-    [InlineData(HotkeyRouteMap.IdShiftPrintScreen, HotkeyRoute.FullDesktop)]
-    [InlineData(HotkeyRouteMap.IdWinShiftPrintScreen, HotkeyRoute.RectangularRegion)]
-    public void TryResolveRoute_ReturnsCorrectRoute(int id, HotkeyRoute expected)
+    [InlineData(GlobalHotkeyRouteMap.IdPrintScreen, GlobalHotkeyRoute.CurrentMonitor)]
+    [InlineData(GlobalHotkeyRouteMap.IdWinPrintScreen, GlobalHotkeyRoute.ActiveWindow)]
+    [InlineData(GlobalHotkeyRouteMap.IdShiftPrintScreen, GlobalHotkeyRoute.FullDesktop)]
+    [InlineData(GlobalHotkeyRouteMap.IdWinShiftPrintScreen, GlobalHotkeyRoute.RectangularRegion)]
+    public void TryResolveRoute_ReturnsCorrectRoute(int id, GlobalHotkeyRoute expected)
     {
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         Assert.True(manager.TryResolveRoute(id, out var route));
         Assert.Equal(expected, route);
     }
@@ -208,9 +208,9 @@ public class HotkeyManagerTests
     [InlineData(999)]
     public void TryResolveRoute_UnknownId_ReturnsFalse(int unknownId)
     {
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         Assert.False(manager.TryResolveRoute(unknownId, out var route));
-        Assert.Equal(default(HotkeyRoute), route);
+        Assert.Equal(default(GlobalHotkeyRoute), route);
     }
 
     // ── Registration summary ────────────────────────────────────────────
@@ -218,7 +218,7 @@ public class HotkeyManagerTests
     [Fact]
     public void GetRegistrationSummary_BeforeRegistration_ReportsNotRegistered()
     {
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         var summary = manager.GetRegistrationSummary();
         Assert.Contains("not registered", summary);
     }
@@ -226,17 +226,17 @@ public class HotkeyManagerTests
     [Fact]
     public void GetRegistrationSummary_AllSuccess_ReportsAllRegistered()
     {
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         manager.RegisterAll(IntPtr.Zero);
         var summary = manager.GetRegistrationSummary();
-        Assert.Contains("All 4 hotkeys registered", summary);
+        Assert.Contains("All 4 global hotkeys registered", summary);
     }
 
     [Fact]
     public void GetRegistrationSummary_PartialFailure_ReportsConflicts()
     {
-        _fake.SetFailingIds(HotkeyRouteMap.IdWinPrintScreen);
-        var manager = new HotkeyManager(_fake);
+        _fake.SetFailingIds(GlobalHotkeyRouteMap.IdWinPrintScreen);
+        var manager = new GlobalHotkeyManager(_fake);
         manager.RegisterAll(IntPtr.Zero);
         var summary = manager.GetRegistrationSummary();
 
@@ -250,20 +250,20 @@ public class HotkeyManagerTests
     [Fact]
     public void Constructor_NullRegistrar_Throws()
     {
-        Assert.Throws<ArgumentNullException>(() => new HotkeyManager(null!));
+        Assert.Throws<ArgumentNullException>(() => new GlobalHotkeyManager(null!));
     }
 
     // ── WM_HOTKEY dispatch simulation ───────────────────────────────────
 
     [Fact]
-    public void SimulatedWmHotkey_KnownId_ResolveRoute()
+    public void SimulatedWmGlobalHotkey_KnownId_ResolveRoute()
     {
         // Simulates what MainWindow will do: receive WM_HOTKEY, extract id, resolve route
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         manager.RegisterAll(IntPtr.Zero);
 
-        // Simulate each hotkey being pressed
-        foreach (var spec in HotkeyRouteMap.AllSpecs)
+        // Simulate each Global Hotkey being pressed
+        foreach (var spec in GlobalHotkeyRouteMap.AllSpecs)
         {
             Assert.True(manager.TryResolveRoute(spec.Id, out var route));
             Assert.Equal(spec.Route, route);
@@ -271,9 +271,9 @@ public class HotkeyManagerTests
     }
 
     [Fact]
-    public void SimulatedWmHotkey_UnknownId_DoesNotTriggerRoute()
+    public void SimulatedWmGlobalHotkey_UnknownId_DoesNotTriggerRoute()
     {
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         manager.RegisterAll(IntPtr.Zero);
 
         // Simulate a random WM_HOTKEY with id 999
@@ -285,8 +285,8 @@ public class HotkeyManagerTests
     [Fact]
     public void RegistrationResults_NoStackTracesInErrors()
     {
-        _fake.SetFailingIds(HotkeyRouteMap.IdPrintScreen);
-        var manager = new HotkeyManager(_fake);
+        _fake.SetFailingIds(GlobalHotkeyRouteMap.IdPrintScreen);
+        var manager = new GlobalHotkeyManager(_fake);
         var results = manager.RegisterAll(IntPtr.Zero);
 
         foreach (var result in results)
@@ -303,7 +303,7 @@ public class HotkeyManagerTests
     [Fact]
     public void Reconcile_AllEnabledOnFreshManager_RegistersAllFour()
     {
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         var enabled = new HashSet<int> { 1, 2, 3, 4 };
 
         var results = manager.Reconcile(IntPtr.Zero, enabled);
@@ -317,7 +317,7 @@ public class HotkeyManagerTests
     [Fact]
     public void Reconcile_DisabledIds_AreNotRegistered()
     {
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         var enabled = new HashSet<int> { 1, 3 };
 
         var results = manager.Reconcile(IntPtr.Zero, enabled);
@@ -333,7 +333,7 @@ public class HotkeyManagerTests
     [Fact]
     public void Reconcile_OnActiveManager_UnregistersNewlyDisabled()
     {
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2, 3, 4 });
 
         var results = manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 3 });
@@ -349,7 +349,7 @@ public class HotkeyManagerTests
     [Fact]
     public void Reconcile_RegistersNewlyEnabledWithoutReRegisteringExisting()
     {
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2 });
         int registerCountAfterFirst = _fake.RegisterCalls.Count;
 
@@ -369,22 +369,22 @@ public class HotkeyManagerTests
     [Fact]
     public void Reconcile_PartialFailure_RecordsFailureForThatIdOnly()
     {
-        _fake.SetFailingIds(HotkeyRouteMap.IdWinPrintScreen);
-        var manager = new HotkeyManager(_fake);
+        _fake.SetFailingIds(GlobalHotkeyRouteMap.IdWinPrintScreen);
+        var manager = new GlobalHotkeyManager(_fake);
 
         var results = manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2, 3, 4 });
 
         Assert.Equal(4, results.Count);
         Assert.Equal(3, results.Count(r => r.Succeeded));
         var failure = results.Single(r => !r.Succeeded);
-        Assert.Equal(HotkeyRouteMap.IdWinPrintScreen, failure.Spec.Id);
+        Assert.Equal(GlobalHotkeyRouteMap.IdWinPrintScreen, failure.Spec.Id);
         Assert.Equal("RegisterHotKey", failure.Phase);
     }
 
     [Fact]
     public void Reconcile_EmptyEnabledSet_UnregistersEverythingAndReportsNone()
     {
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2, 3, 4 });
 
         var results = manager.Reconcile(IntPtr.Zero, new HashSet<int>());
@@ -396,21 +396,21 @@ public class HotkeyManagerTests
     [Fact]
     public void Reconcile_NullEnabledIds_Throws()
     {
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         Assert.Throws<ArgumentNullException>(() => manager.Reconcile(IntPtr.Zero, null!));
     }
 
     [Fact]
     public void GetRegistrationSummary_AfterReconcileWithDisabled_HasNoSpuriousConflicts()
     {
-        var manager = new HotkeyManager(_fake);
+        var manager = new GlobalHotkeyManager(_fake);
         // Three enabled, one intentionally disabled.
         manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2, 3 });
 
         var summary = manager.GetRegistrationSummary();
 
         // All enabled ones registered — no conflict wording.
-        Assert.Contains("All 3 hotkeys registered", summary);
+        Assert.Contains("All 3 global hotkeys registered", summary);
         Assert.DoesNotContain("Conflicts", summary);
     }
 }

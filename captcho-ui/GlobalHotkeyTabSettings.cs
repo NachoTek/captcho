@@ -1,4 +1,4 @@
-// HotkeysTabSettings.cs — Pure C# editing seam for the Hotkeys settings tab.
+// GlobalHotkeyTabSettings.cs — Pure C# editing seam for the Global Hotkeys settings tab.
 //
 // Owns the editable per-Global-Hotkey enabled states: a working snapshot of the
 // persisted settings, the display rows (binding, behavior description, registration
@@ -9,7 +9,7 @@
 // and advances its baseline via Commit at the SettingsSession's direction, which also
 // owns the runtime reconcile through the Global Hotkey adapter. Registration status is
 // read live from the adapter so rows reflect the latest reconcile. Global Hotkey
-// remapping and capture-mode routing are out of scope — only enable/disable per hotkey.
+// remapping and capture-mode routing are out of scope — only enable/disable per Global Hotkey.
 
 using System;
 using System.Collections.Generic;
@@ -19,45 +19,45 @@ using captcho.Capture;
 namespace captcho.UI;
 
 /// <summary>
-/// Current registration status of a Global Hotkey as displayed on the Hotkeys tab.
+/// Current registration status of a Global Hotkey as displayed on the Global Hotkeys tab.
 /// Combines the user's enabled choice with the latest runtime registration result.
 /// </summary>
-public enum HotkeyRegistrationStatus
+public enum GlobalHotkeyRegistrationStatus
 {
-    /// <summary>The hotkey is enabled and registered successfully.</summary>
+    /// <summary>The Global Hotkey is enabled and registered successfully.</summary>
     Registered,
-    /// <summary>The hotkey is enabled but registration failed (e.g. a conflict).</summary>
+    /// <summary>The Global Hotkey is enabled but registration failed (e.g. a conflict).</summary>
     Failed,
-    /// <summary>The user has disabled the hotkey; it is intentionally not registered.</summary>
+    /// <summary>The user has disabled the Global Hotkey; it is intentionally not registered.</summary>
     Disabled,
-    /// <summary>No registration result is available (e.g. hotkeys never initialized).</summary>
+    /// <summary>No registration result is available (e.g. Global Hotkeys never initialized).</summary>
     Unknown,
 }
 
 /// <summary>
-/// One row on the Hotkeys tab: the shortcut binding, what it captures, whether it
+/// One row on the Global Hotkeys tab: the Global Hotkey binding, what it captures, whether it
 /// is currently enabled, and its registration status with any sanitized detail.
 /// </summary>
-public sealed record HotkeyRow(
+public sealed record GlobalHotkeyRow(
     int Id,
     string Binding,
     string Behavior,
     bool IsEnabled,
-    HotkeyRegistrationStatus Status,
+    GlobalHotkeyRegistrationStatus Status,
     string StatusDetail);
 
 /// <summary>
-/// Pure C# editing seam for the Hotkeys settings tab. Holds a working snapshot of
-/// the persisted per-hotkey enabled states, exposes the four Global Hotkeys with
+/// Pure C# editing seam for the Global Hotkeys settings tab. Holds a working snapshot of
+/// the persisted per-Global-Hotkey enabled states, exposes the four Global Hotkeys with
 /// their bindings and behavior descriptions, and reflects the current runtime
-/// registration status per hotkey (read live from the adapter so a reconcile by the
+/// registration status per global hotkey (read live from the adapter so a reconcile by the
 /// <see cref="SettingsSession"/> is visible without rebuilding the tab). Never
 /// persists or mutates the active/persisted Settings on open or edit; the session
 /// orchestrates persistence and runtime registration across all tabs.
 /// </summary>
-public sealed class HotkeysTabSettings : IEditableSettingsTab
+public sealed class GlobalHotkeyTabSettings : IEditableSettingsTab
 {
-    private readonly IGlobalHotkeyAdapter _hotkeys;
+    private readonly IGlobalHotkeyAdapter _globalHotkeys;
 
     private AppSettings _working;
     private AppSettings _baseline;
@@ -68,12 +68,12 @@ public sealed class HotkeysTabSettings : IEditableSettingsTab
     /// current registration results. The <paramref name="persisted"/> object is never
     /// mutated by this instance.
     /// </summary>
-    public HotkeysTabSettings(AppSettings persisted, IGlobalHotkeyAdapter hotkeys)
+    public GlobalHotkeyTabSettings(AppSettings persisted, IGlobalHotkeyAdapter globalHotkeys)
     {
         ArgumentNullException.ThrowIfNull(persisted);
-        ArgumentNullException.ThrowIfNull(hotkeys);
+        ArgumentNullException.ThrowIfNull(globalHotkeys);
 
-        _hotkeys = hotkeys;
+        _globalHotkeys = globalHotkeys;
         // Normalized() yields independent deep copies, so the active and persisted
         // settings are never mutated by opening or editing.
         _working = persisted.Normalized();
@@ -83,40 +83,40 @@ public sealed class HotkeysTabSettings : IEditableSettingsTab
     // ── Working editable state ──────────────────────────────────────────
 
     /// <summary>
-    /// Whether the hotkey with the given stable id is currently enabled in the
+    /// Whether the Global Hotkey with the given stable id is currently enabled in the
     /// working (editable) state.
     /// </summary>
-    public bool IsEnabled(int hotkeyId) => _working.IsHotkeyEnabled(hotkeyId);
+    public bool IsEnabled(int globalHotkeyId) => _working.IsGlobalHotkeyEnabled(globalHotkeyId);
 
     /// <summary>
-    /// Sets the working enabled state for a hotkey from user input. Never persists
-    /// or mutates the original persisted settings. Toggling a hotkey off marks it
+    /// Sets the working enabled state for a Global Hotkey from user input. Never persists
+    /// or mutates the original persisted settings. Toggling a Global Hotkey off marks it
     /// disabled in the displayed rows immediately, before Apply.
     /// </summary>
-    public void EditEnabled(int hotkeyId, bool enabled)
+    public void EditEnabled(int globalHotkeyId, bool enabled)
     {
-        _working.HotkeyEnabledStates ??= new Dictionary<int, bool>();
-        _working.HotkeyEnabledStates[hotkeyId] = enabled;
+        _working.GlobalHotkeyEnabledStates ??= new Dictionary<int, bool>();
+        _working.GlobalHotkeyEnabledStates[globalHotkeyId] = enabled;
     }
 
     // ── Display rows ────────────────────────────────────────────────────
 
     /// <summary>
     /// Builds the display rows for all four Global Hotkeys in stable-id order.
-    /// Each row carries the shortcut binding, the capture-mode behavior, the
+    /// Each row carries the Global Hotkey binding, the capture-mode behavior, the
     /// working enabled state, and the registration status derived live from the
-    /// adapter's latest results. A disabled hotkey always reads as Disabled regardless
+    /// adapter's latest results. A disabled Global Hotkey always reads as Disabled regardless
     /// of its registration result.
     /// </summary>
-    public IReadOnlyList<HotkeyRow> GetRows()
+    public IReadOnlyList<GlobalHotkeyRow> GetRows()
     {
-        var results = _hotkeys.RegistrationResults;
-        var rows = new List<HotkeyRow>(HotkeyRouteMap.AllSpecs.Count);
-        foreach (var spec in HotkeyRouteMap.AllSpecs)
+        var results = _globalHotkeys.RegistrationResults;
+        var rows = new List<GlobalHotkeyRow>(GlobalHotkeyRouteMap.AllSpecs.Count);
+        foreach (var spec in GlobalHotkeyRouteMap.AllSpecs)
         {
             bool enabled = IsEnabled(spec.Id);
             var (status, detail) = StatusFor(spec, enabled, results);
-            rows.Add(new HotkeyRow(
+            rows.Add(new GlobalHotkeyRow(
                 Id: spec.Id,
                 Binding: spec.Name,
                 Behavior: BehaviorFor(spec.Route),
@@ -127,41 +127,41 @@ public sealed class HotkeysTabSettings : IEditableSettingsTab
         return rows;
     }
 
-    private static (HotkeyRegistrationStatus status, string detail) StatusFor(
-        HotkeySpec spec,
+    private static (GlobalHotkeyRegistrationStatus status, string detail) StatusFor(
+        GlobalHotkeySpec spec,
         bool enabled,
-        IReadOnlyList<HotkeyRegistrationResult> results)
+        IReadOnlyList<GlobalHotkeyRegistrationResult> results)
     {
         if (!enabled)
-            return (HotkeyRegistrationStatus.Disabled, string.Empty);
+            return (GlobalHotkeyRegistrationStatus.Disabled, string.Empty);
 
         var match = results.FirstOrDefault(r => r.Spec.Id == spec.Id);
         if (match is null)
-            return (HotkeyRegistrationStatus.Unknown, string.Empty);
+            return (GlobalHotkeyRegistrationStatus.Unknown, string.Empty);
 
         return match.Succeeded
-            ? (HotkeyRegistrationStatus.Registered, string.Empty)
-            : (HotkeyRegistrationStatus.Failed, match.Error);
+            ? (GlobalHotkeyRegistrationStatus.Registered, string.Empty)
+            : (GlobalHotkeyRegistrationStatus.Failed, match.Error);
     }
 
     /// <summary>
     /// Accurate behavior description for each capture route, phrased in the
     /// Capture-pipeline terminology from CONTEXT.md. Keep in sync with the routes
-    /// the hotkeys actually trigger (see MainWindow.DispatchHotkeyRoute).
+    /// the global hotkeys actually trigger (see MainWindow.DispatchGlobalHotkeyRoute).
     /// </summary>
-    private static string BehaviorFor(HotkeyRoute route) => route switch
+    private static string BehaviorFor(GlobalHotkeyRoute route) => route switch
     {
-        HotkeyRoute.CurrentMonitor => "Captures the monitor the cursor is on.",
-        HotkeyRoute.ActiveWindow => "Captures the active (foreground) window.",
-        HotkeyRoute.FullDesktop => "Captures the full virtual desktop across all monitors.",
-        HotkeyRoute.RectangularRegion => "Opens the Selection overlay to draw a region on the screen and capture it.",
+        GlobalHotkeyRoute.CurrentMonitor => "Captures the monitor the cursor is on.",
+        GlobalHotkeyRoute.ActiveWindow => "Captures the active (foreground) window.",
+        GlobalHotkeyRoute.FullDesktop => "Captures the full virtual desktop across all monitors.",
+        GlobalHotkeyRoute.RectangularRegion => "Opens the Selection overlay to draw a region on the screen and capture it.",
         _ => string.Empty,
     };
 
     // ── Validation, gating, dirty tracking ──────────────────────────────
 
     /// <summary>
-    /// Always valid: per-hotkey enabled states are booleans with no invalid value.
+    /// Always valid: per-Global-Hotkey enabled states are booleans with no invalid value.
     /// </summary>
     public bool IsValid => true;
 
@@ -173,9 +173,9 @@ public sealed class HotkeysTabSettings : IEditableSettingsTab
     {
         get
         {
-            foreach (var spec in HotkeyRouteMap.AllSpecs)
+            foreach (var spec in GlobalHotkeyRouteMap.AllSpecs)
             {
-                if (_working.IsHotkeyEnabled(spec.Id) != _baseline.IsHotkeyEnabled(spec.Id))
+                if (_working.IsGlobalHotkeyEnabled(spec.Id) != _baseline.IsGlobalHotkeyEnabled(spec.Id))
                     return true;
             }
             return false;
@@ -185,9 +185,9 @@ public sealed class HotkeysTabSettings : IEditableSettingsTab
     // ── IEditableSettingsTab: merge, commit, revert, reset ──────────────
 
     /// <summary>
-    /// Writes this tab's working per-hotkey enabled states into <paramref name="target"/>,
+    /// Writes this tab's working per-Global-Hotkey enabled states into <paramref name="target"/>,
     /// collapsing an all-enabled map back to null so persisted JSON stays clean (the
-    /// hotkey field is omitted entirely when no hotkey is disabled), and deep-copying the
+    /// Global Hotkey field is omitted entirely when no Global Hotkey is disabled), and deep-copying the
     /// map so the target never aliases this tab's working state (the session writes into
     /// the live runtime with the same call). Leaves other tabs' slices untouched so the
     /// session can merge every tab and persist once.
@@ -195,8 +195,8 @@ public sealed class HotkeysTabSettings : IEditableSettingsTab
     public void WriteInto(AppSettings target)
     {
         ArgumentNullException.ThrowIfNull(target);
-        var normalized = NormalizeForPersistence(_working.HotkeyEnabledStates);
-        target.HotkeyEnabledStates = normalized is null
+        var normalized = NormalizeForPersistence(_working.GlobalHotkeyEnabledStates);
+        target.GlobalHotkeyEnabledStates = normalized is null
             ? null
             : new Dictionary<int, bool>(normalized);
     }
@@ -231,9 +231,9 @@ public sealed class HotkeysTabSettings : IEditableSettingsTab
     public void Reset()
     {
         // A null states map means every Global Hotkey is enabled — exactly the
-        // default (and reset) state. Only this tab's slice is reset so a Hotkeys
+        // default (and reset) state. Only this tab's slice is reset so a Global Hotkeys
         // Reset cannot leak into the General tab's fields in the working snapshot.
-        _working.HotkeyEnabledStates = null;
+        _working.GlobalHotkeyEnabledStates = null;
     }
 
     private static Dictionary<int, bool>? NormalizeForPersistence(Dictionary<int, bool>? states)
@@ -241,7 +241,7 @@ public sealed class HotkeysTabSettings : IEditableSettingsTab
         if (states is null)
             return null;
 
-        bool allEnabled = HotkeyRouteMap.AllSpecs.All(s => states.TryGetValue(s.Id, out var v) && v);
+        bool allEnabled = GlobalHotkeyRouteMap.AllSpecs.All(s => states.TryGetValue(s.Id, out var v) && v);
         return allEnabled ? null : states;
     }
 }

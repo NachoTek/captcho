@@ -1,10 +1,10 @@
-// HotkeysTabSettingsTests.cs — Headless tests for the Hotkeys tab editing seam.
+// GlobalHotkeyTabSettingsTests.cs — Headless tests for the Global Hotkeys tab editing seam.
 //
-// Verifies the pure C# HotkeysTabSettings collaborator: it loads the persisted
-// per-hotkey enabled states into a working snapshot (never mutating the source),
+// Verifies the pure C# GlobalHotkeyTabSettings collaborator: it loads the persisted
+// per-Global-Hotkey enabled states into a working snapshot (never mutating the source),
 // lists all four Global Hotkeys with their bindings, behavior descriptions, and
 // current registration status (read live from the adapter), and lets the user
-// enable/disable each hotkey independently. Persistence and runtime reconcile are
+// enable/disable each Global Hotkey independently. Persistence and runtime reconcile are
 // no longer this tab's job — it writes its working slice via WriteInto and advances
 // its baseline via Commit at the SettingsSession's direction, so the composed
 // Apply/OK flow (including runtime registration reconcile) is covered in
@@ -18,7 +18,7 @@ using Xunit;
 
 namespace captcho.UI.Tests;
 
-public class HotkeysTabSettingsTests
+public class GlobalHotkeyTabSettingsTests
 {
     // ── Constructor guards ──────────────────────────────────────────────
 
@@ -26,20 +26,20 @@ public class HotkeysTabSettingsTests
     public void Constructor_NullSettings_Throws()
     {
         Assert.Throws<ArgumentNullException>(() =>
-            new HotkeysTabSettings(null!, new RecordingHotkeyAdapter()));
+            new GlobalHotkeyTabSettings(null!, new RecordingGlobalHotkeyAdapter()));
     }
 
     [Fact]
     public void Constructor_NullAdapter_Throws()
     {
         Assert.Throws<ArgumentNullException>(() =>
-            new HotkeysTabSettings(new AppSettings(), null!));
+            new GlobalHotkeyTabSettings(new AppSettings(), null!));
     }
 
-    // ── Display: all four hotkeys with bindings and behavior ────────────
+    // ── Display: all four global hotkeys with bindings and behavior ────────────
 
     [Fact]
-    public void GetRows_ListsAllFourHotkeysInStableIdOrder()
+    public void GetRows_ListsAllFourGlobalHotkeysInStableIdOrder()
     {
         var tab = NewTab(new AppSettings());
 
@@ -50,13 +50,13 @@ public class HotkeysTabSettingsTests
     }
 
     [Fact]
-    public void GetRows_BindingMatchesTheHotkeyShortcutName()
+    public void GetRows_BindingMatchesTheGlobalHotkeyBindingName()
     {
         var tab = NewTab(new AppSettings());
 
         var rows = tab.GetRows();
 
-        foreach (var spec in HotkeyRouteMap.AllSpecs)
+        foreach (var spec in GlobalHotkeyRouteMap.AllSpecs)
             Assert.Equal(spec.Name, rows.Single(r => r.Id == spec.Id).Binding);
     }
 
@@ -72,110 +72,110 @@ public class HotkeysTabSettingsTests
     }
 
     [Theory]
-    [InlineData(HotkeyRoute.CurrentMonitor, "monitor the cursor is on")]
-    [InlineData(HotkeyRoute.ActiveWindow, "active")]
-    [InlineData(HotkeyRoute.FullDesktop, "full virtual desktop")]
-    [InlineData(HotkeyRoute.RectangularRegion, "Selection")]
-    public void GetRows_BehaviorDescribesTheCaptureMode(HotkeyRoute route, string expectedFragment)
+    [InlineData(GlobalHotkeyRoute.CurrentMonitor, "monitor the cursor is on")]
+    [InlineData(GlobalHotkeyRoute.ActiveWindow, "active")]
+    [InlineData(GlobalHotkeyRoute.FullDesktop, "full virtual desktop")]
+    [InlineData(GlobalHotkeyRoute.RectangularRegion, "Selection")]
+    public void GetRows_BehaviorDescribesTheCaptureMode(GlobalHotkeyRoute route, string expectedFragment)
     {
         var tab = NewTab(new AppSettings());
-        var spec = HotkeyRouteMap.AllSpecs.Single(s => s.Route == route);
+        var spec = GlobalHotkeyRouteMap.AllSpecs.Single(s => s.Route == route);
 
         var row = tab.GetRows().Single(r => r.Id == spec.Id);
 
         Assert.Contains(expectedFragment, row.Behavior, StringComparison.OrdinalIgnoreCase);
     }
 
-    // ── Default enabled state (settings predating per-hotkey toggles) ───
+    // ── Default enabled state (settings predating per-Global-Hotkey toggles) ───
 
     [Fact]
-    public void Constructor_NullHotkeyStates_AllHotkeysEnabledByDefault()
+    public void Constructor_NullGlobalHotkeyStates_AllGlobalHotkeysEnabledByDefault()
     {
         var tab = NewTab(new AppSettings());
 
-        foreach (var spec in HotkeyRouteMap.AllSpecs)
+        foreach (var spec in GlobalHotkeyRouteMap.AllSpecs)
             Assert.True(tab.IsEnabled(spec.Id));
     }
 
     [Fact]
     public void Constructor_DoesNotMutateSourceSettings()
     {
-        var source = new AppSettings(); // HotkeyEnabledStates stays null
+        var source = new AppSettings(); // GlobalHotkeyEnabledStates stays null
 
         var tab = NewTab(source);
 
-        Assert.Null(source.HotkeyEnabledStates);
+        Assert.Null(source.GlobalHotkeyEnabledStates);
         Assert.True(tab.IsEnabled(1));
     }
 
     [Fact]
-    public void Constructor_PersistedDisabledHotkey_IsDisabledInWorkingState()
+    public void Constructor_PersistedDisabledGlobalHotkey_IsDisabledInWorkingState()
     {
         var source = new AppSettings
         {
-            HotkeyEnabledStates = new Dictionary<int, bool> { [HotkeyRouteMap.IdPrintScreen] = false },
+            GlobalHotkeyEnabledStates = new Dictionary<int, bool> { [GlobalHotkeyRouteMap.IdPrintScreen] = false },
         };
 
         var tab = NewTab(source);
 
-        Assert.False(tab.IsEnabled(HotkeyRouteMap.IdPrintScreen));
-        Assert.True(tab.IsEnabled(HotkeyRouteMap.IdWinPrintScreen));
+        Assert.False(tab.IsEnabled(GlobalHotkeyRouteMap.IdPrintScreen));
+        Assert.True(tab.IsEnabled(GlobalHotkeyRouteMap.IdWinPrintScreen));
     }
 
     // ── Registration status display (read live from the adapter) ───────
 
     [Fact]
-    public void GetRows_RegisteredHotkey_ShowsRegisteredStatus()
+    public void GetRows_RegisteredGlobalHotkey_ShowsRegisteredStatus()
     {
-        var adapter = new RecordingHotkeyAdapter();
-        adapter.SetResults(HotkeyRegistrationResult.Success(SpecForId(HotkeyRouteMap.IdPrintScreen)));
+        var adapter = new RecordingGlobalHotkeyAdapter();
+        adapter.SetResults(GlobalHotkeyRegistrationResult.Success(SpecForId(GlobalHotkeyRouteMap.IdPrintScreen)));
 
-        var tab = new HotkeysTabSettings(new AppSettings(), adapter);
+        var tab = new GlobalHotkeyTabSettings(new AppSettings(), adapter);
 
-        var row = tab.GetRows().Single(r => r.Id == HotkeyRouteMap.IdPrintScreen);
-        Assert.Equal(HotkeyRegistrationStatus.Registered, row.Status);
+        var row = tab.GetRows().Single(r => r.Id == GlobalHotkeyRouteMap.IdPrintScreen);
+        Assert.Equal(GlobalHotkeyRegistrationStatus.Registered, row.Status);
     }
 
     [Fact]
     public void GetRows_FailedRegistration_ShowsFailedStatusWithSanitizedError()
     {
-        var adapter = new RecordingHotkeyAdapter();
-        var failure = HotkeyRegistrationResult.Fail(
-            SpecForId(HotkeyRouteMap.IdWinPrintScreen), "RegisterHotKey", "Win32 error 1409");
+        var adapter = new RecordingGlobalHotkeyAdapter();
+        var failure = GlobalHotkeyRegistrationResult.Fail(
+            SpecForId(GlobalHotkeyRouteMap.IdWinPrintScreen), "RegisterHotKey", "Win32 error 1409");
         adapter.SetResults(failure);
 
-        var tab = new HotkeysTabSettings(new AppSettings(), adapter);
+        var tab = new GlobalHotkeyTabSettings(new AppSettings(), adapter);
 
-        var row = tab.GetRows().Single(r => r.Id == HotkeyRouteMap.IdWinPrintScreen);
-        Assert.Equal(HotkeyRegistrationStatus.Failed, row.Status);
+        var row = tab.GetRows().Single(r => r.Id == GlobalHotkeyRouteMap.IdWinPrintScreen);
+        Assert.Equal(GlobalHotkeyRegistrationStatus.Failed, row.Status);
         Assert.Contains("1409", row.StatusDetail);
     }
 
     [Fact]
-    public void GetRows_EnabledHotkeyWithNoRegistrationResult_ShowsUnknownStatus()
+    public void GetRows_EnabledGlobalHotkeyWithNoRegistrationResult_ShowsUnknownStatus()
     {
-        var adapter = new RecordingHotkeyAdapter();
+        var adapter = new RecordingGlobalHotkeyAdapter();
 
-        var tab = new HotkeysTabSettings(new AppSettings(), adapter);
+        var tab = new GlobalHotkeyTabSettings(new AppSettings(), adapter);
 
-        var row = tab.GetRows().Single(r => r.Id == HotkeyRouteMap.IdShiftPrintScreen);
-        Assert.Equal(HotkeyRegistrationStatus.Unknown, row.Status);
+        var row = tab.GetRows().Single(r => r.Id == GlobalHotkeyRouteMap.IdShiftPrintScreen);
+        Assert.Equal(GlobalHotkeyRegistrationStatus.Unknown, row.Status);
     }
 
     [Fact]
-    public void GetRows_DisabledHotkey_ShowsDisabledStatusRegardlessOfRegistration()
+    public void GetRows_DisabledGlobalHotkey_ShowsDisabledStatusRegardlessOfRegistration()
     {
-        var adapter = new RecordingHotkeyAdapter();
-        adapter.SetResults(HotkeyRegistrationResult.Success(SpecForId(HotkeyRouteMap.IdPrintScreen)));
+        var adapter = new RecordingGlobalHotkeyAdapter();
+        adapter.SetResults(GlobalHotkeyRegistrationResult.Success(SpecForId(GlobalHotkeyRouteMap.IdPrintScreen)));
 
         var source = new AppSettings
         {
-            HotkeyEnabledStates = new Dictionary<int, bool> { [HotkeyRouteMap.IdPrintScreen] = false },
+            GlobalHotkeyEnabledStates = new Dictionary<int, bool> { [GlobalHotkeyRouteMap.IdPrintScreen] = false },
         };
-        var tab = new HotkeysTabSettings(source, adapter);
+        var tab = new GlobalHotkeyTabSettings(source, adapter);
 
-        var row = tab.GetRows().Single(r => r.Id == HotkeyRouteMap.IdPrintScreen);
-        Assert.Equal(HotkeyRegistrationStatus.Disabled, row.Status);
+        var row = tab.GetRows().Single(r => r.Id == GlobalHotkeyRouteMap.IdPrintScreen);
+        Assert.Equal(GlobalHotkeyRegistrationStatus.Disabled, row.Status);
     }
 
     [Fact]
@@ -184,31 +184,31 @@ public class HotkeysTabSettingsTests
         // The tab reads registration status live from the adapter, so after an external
         // reconcile (driven by the session) the next GetRows reflects the new results
         // without the tab itself being touched.
-        var adapter = new RecordingHotkeyAdapter();
-        var tab = new HotkeysTabSettings(new AppSettings(), adapter);
+        var adapter = new RecordingGlobalHotkeyAdapter();
+        var tab = new GlobalHotkeyTabSettings(new AppSettings(), adapter);
 
         // Initially no results -> Unknown.
-        Assert.Equal(HotkeyRegistrationStatus.Unknown,
-            tab.GetRows().Single(r => r.Id == HotkeyRouteMap.IdPrintScreen).Status);
+        Assert.Equal(GlobalHotkeyRegistrationStatus.Unknown,
+            tab.GetRows().Single(r => r.Id == GlobalHotkeyRouteMap.IdPrintScreen).Status);
 
-        adapter.SetResults(HotkeyRegistrationResult.Success(SpecForId(HotkeyRouteMap.IdPrintScreen)));
+        adapter.SetResults(GlobalHotkeyRegistrationResult.Success(SpecForId(GlobalHotkeyRouteMap.IdPrintScreen)));
 
-        Assert.Equal(HotkeyRegistrationStatus.Registered,
-            tab.GetRows().Single(r => r.Id == HotkeyRouteMap.IdPrintScreen).Status);
+        Assert.Equal(GlobalHotkeyRegistrationStatus.Registered,
+            tab.GetRows().Single(r => r.Id == GlobalHotkeyRouteMap.IdPrintScreen).Status);
     }
 
     // ── Editing ─────────────────────────────────────────────────────────
 
     [Fact]
-    public void EditEnabled_TogglingOff_DisablesTheHotkeyImmediately()
+    public void EditEnabled_TogglingOff_DisablesTheGlobalHotkeyImmediately()
     {
         var tab = NewTab(new AppSettings());
 
-        tab.EditEnabled(HotkeyRouteMap.IdPrintScreen, enabled: false);
+        tab.EditEnabled(GlobalHotkeyRouteMap.IdPrintScreen, enabled: false);
 
-        Assert.False(tab.IsEnabled(HotkeyRouteMap.IdPrintScreen));
-        var row = tab.GetRows().Single(r => r.Id == HotkeyRouteMap.IdPrintScreen);
-        Assert.Equal(HotkeyRegistrationStatus.Disabled, row.Status);
+        Assert.False(tab.IsEnabled(GlobalHotkeyRouteMap.IdPrintScreen));
+        var row = tab.GetRows().Single(r => r.Id == GlobalHotkeyRouteMap.IdPrintScreen);
+        Assert.Equal(GlobalHotkeyRegistrationStatus.Disabled, row.Status);
     }
 
     [Fact]
@@ -217,9 +217,9 @@ public class HotkeysTabSettingsTests
         var source = new AppSettings();
         var tab = NewTab(source);
 
-        tab.EditEnabled(HotkeyRouteMap.IdWinPrintScreen, enabled: false);
+        tab.EditEnabled(GlobalHotkeyRouteMap.IdWinPrintScreen, enabled: false);
 
-        Assert.Null(source.HotkeyEnabledStates);
+        Assert.Null(source.GlobalHotkeyEnabledStates);
     }
 
     [Fact]
@@ -227,13 +227,13 @@ public class HotkeysTabSettingsTests
     {
         var source = new AppSettings
         {
-            HotkeyEnabledStates = new Dictionary<int, bool> { [HotkeyRouteMap.IdPrintScreen] = false },
+            GlobalHotkeyEnabledStates = new Dictionary<int, bool> { [GlobalHotkeyRouteMap.IdPrintScreen] = false },
         };
         var tab = NewTab(source);
 
-        tab.EditEnabled(HotkeyRouteMap.IdPrintScreen, enabled: true);
+        tab.EditEnabled(GlobalHotkeyRouteMap.IdPrintScreen, enabled: true);
 
-        Assert.True(tab.IsEnabled(HotkeyRouteMap.IdPrintScreen));
+        Assert.True(tab.IsEnabled(GlobalHotkeyRouteMap.IdPrintScreen));
     }
 
     // ── Dirty tracking ──────────────────────────────────────────────────
@@ -251,7 +251,7 @@ public class HotkeysTabSettingsTests
     {
         var tab = NewTab(new AppSettings());
 
-        tab.EditEnabled(HotkeyRouteMap.IdPrintScreen, enabled: false);
+        tab.EditEnabled(GlobalHotkeyRouteMap.IdPrintScreen, enabled: false);
 
         Assert.True(tab.IsDirty);
     }
@@ -261,8 +261,8 @@ public class HotkeysTabSettingsTests
     {
         var tab = NewTab(new AppSettings());
 
-        tab.EditEnabled(HotkeyRouteMap.IdPrintScreen, enabled: false);
-        tab.EditEnabled(HotkeyRouteMap.IdPrintScreen, enabled: true);
+        tab.EditEnabled(GlobalHotkeyRouteMap.IdPrintScreen, enabled: false);
+        tab.EditEnabled(GlobalHotkeyRouteMap.IdPrintScreen, enabled: true);
 
         Assert.False(tab.IsDirty);
     }
@@ -281,17 +281,17 @@ public class HotkeysTabSettingsTests
     // ── WriteInto merges only this tab's slice ──────────────────────────
 
     [Fact]
-    public void WriteInto_DisabledHotkey_WritesExplicitDisabledState()
+    public void WriteInto_DisabledGlobalHotkey_WritesExplicitDisabledState()
     {
         var tab = NewTab(new AppSettings());
-        tab.EditEnabled(HotkeyRouteMap.IdPrintScreen, enabled: false);
+        tab.EditEnabled(GlobalHotkeyRouteMap.IdPrintScreen, enabled: false);
 
         var target = AppSettings.WithDefaults();
 
         tab.WriteInto(target);
 
-        Assert.False(target.IsHotkeyEnabled(HotkeyRouteMap.IdPrintScreen));
-        Assert.True(target.IsHotkeyEnabled(HotkeyRouteMap.IdWinPrintScreen));
+        Assert.False(target.IsGlobalHotkeyEnabled(GlobalHotkeyRouteMap.IdPrintScreen));
+        Assert.True(target.IsGlobalHotkeyEnabled(GlobalHotkeyRouteMap.IdWinPrintScreen));
     }
 
     [Fact]
@@ -304,14 +304,14 @@ public class HotkeysTabSettingsTests
         tab.WriteInto(target);
 
         // Nothing disabled -> persist as null (clean default, omitted from JSON).
-        Assert.Null(target.HotkeyEnabledStates);
+        Assert.Null(target.GlobalHotkeyEnabledStates);
     }
 
     [Fact]
     public void WriteInto_PreservesOtherTabsSlices()
     {
         var tab = NewTab(new AppSettings());
-        tab.EditEnabled(HotkeyRouteMap.IdPrintScreen, enabled: false);
+        tab.EditEnabled(GlobalHotkeyRouteMap.IdPrintScreen, enabled: false);
 
         var target = new AppSettings
         {
@@ -340,11 +340,11 @@ public class HotkeysTabSettingsTests
     {
         var tab = NewTab(new AppSettings());
 
-        tab.EditEnabled(HotkeyRouteMap.IdPrintScreen, enabled: false);
+        tab.EditEnabled(GlobalHotkeyRouteMap.IdPrintScreen, enabled: false);
         tab.Commit();
         tab.Cancel();
 
-        Assert.False(tab.IsEnabled(HotkeyRouteMap.IdPrintScreen));
+        Assert.False(tab.IsEnabled(GlobalHotkeyRouteMap.IdPrintScreen));
         Assert.False(tab.IsDirty);
     }
 
@@ -355,12 +355,12 @@ public class HotkeysTabSettingsTests
     {
         var tab = NewTab(new AppSettings());
 
-        tab.EditEnabled(HotkeyRouteMap.IdPrintScreen, enabled: false);
+        tab.EditEnabled(GlobalHotkeyRouteMap.IdPrintScreen, enabled: false);
         Assert.True(tab.IsDirty);
 
         tab.Cancel();
 
-        Assert.True(tab.IsEnabled(HotkeyRouteMap.IdPrintScreen));
+        Assert.True(tab.IsEnabled(GlobalHotkeyRouteMap.IdPrintScreen));
         Assert.False(tab.IsDirty);
     }
 
@@ -371,38 +371,38 @@ public class HotkeysTabSettingsTests
     {
         var source = new AppSettings
         {
-            HotkeyEnabledStates = new Dictionary<int, bool>
+            GlobalHotkeyEnabledStates = new Dictionary<int, bool>
             {
-                [HotkeyRouteMap.IdPrintScreen] = false,
-                [HotkeyRouteMap.IdWinPrintScreen] = false,
+                [GlobalHotkeyRouteMap.IdPrintScreen] = false,
+                [GlobalHotkeyRouteMap.IdWinPrintScreen] = false,
             },
         };
         var tab = NewTab(source);
 
         tab.Reset();
 
-        foreach (var spec in HotkeyRouteMap.AllSpecs)
+        foreach (var spec in GlobalHotkeyRouteMap.AllSpecs)
             Assert.True(tab.IsEnabled(spec.Id));
     }
 
     [Fact]
-    public void Reset_RowsShowEveryHotkeyAsEnabledNotDisabled()
+    public void Reset_RowsShowEveryGlobalHotkeyAsEnabledNotDisabled()
     {
         var source = new AppSettings
         {
-            HotkeyEnabledStates = new Dictionary<int, bool>
+            GlobalHotkeyEnabledStates = new Dictionary<int, bool>
             {
-                [HotkeyRouteMap.IdPrintScreen] = false,
+                [GlobalHotkeyRouteMap.IdPrintScreen] = false,
             },
         };
         var tab = NewTab(source);
 
-        Assert.Equal(HotkeyRegistrationStatus.Disabled,
-            tab.GetRows().Single(r => r.Id == HotkeyRouteMap.IdPrintScreen).Status);
+        Assert.Equal(GlobalHotkeyRegistrationStatus.Disabled,
+            tab.GetRows().Single(r => r.Id == GlobalHotkeyRouteMap.IdPrintScreen).Status);
 
         tab.Reset();
 
-        Assert.All(tab.GetRows(), r => Assert.NotEqual(HotkeyRegistrationStatus.Disabled, r.Status));
+        Assert.All(tab.GetRows(), r => Assert.NotEqual(GlobalHotkeyRegistrationStatus.Disabled, r.Status));
     }
 
     [Fact]
@@ -410,16 +410,16 @@ public class HotkeysTabSettingsTests
     {
         var source = new AppSettings
         {
-            HotkeyEnabledStates = new Dictionary<int, bool>
+            GlobalHotkeyEnabledStates = new Dictionary<int, bool>
             {
-                [HotkeyRouteMap.IdPrintScreen] = false,
+                [GlobalHotkeyRouteMap.IdPrintScreen] = false,
             },
         };
         var tab = NewTab(source);
 
         tab.Reset();
 
-        Assert.False(source.IsHotkeyEnabled(HotkeyRouteMap.IdPrintScreen));
+        Assert.False(source.IsGlobalHotkeyEnabled(GlobalHotkeyRouteMap.IdPrintScreen));
     }
 
     [Fact]
@@ -427,9 +427,9 @@ public class HotkeysTabSettingsTests
     {
         var source = new AppSettings
         {
-            HotkeyEnabledStates = new Dictionary<int, bool>
+            GlobalHotkeyEnabledStates = new Dictionary<int, bool>
             {
-                [HotkeyRouteMap.IdPrintScreen] = false,
+                [GlobalHotkeyRouteMap.IdPrintScreen] = false,
             },
         };
         var tab = NewTab(source);
@@ -455,9 +455,9 @@ public class HotkeysTabSettingsTests
     {
         var source = new AppSettings
         {
-            HotkeyEnabledStates = new Dictionary<int, bool>
+            GlobalHotkeyEnabledStates = new Dictionary<int, bool>
             {
-                [HotkeyRouteMap.IdPrintScreen] = false,
+                [GlobalHotkeyRouteMap.IdPrintScreen] = false,
             },
         };
         var tab = NewTab(source);
@@ -465,7 +465,7 @@ public class HotkeysTabSettingsTests
         tab.Reset();
         tab.Cancel();
 
-        Assert.False(tab.IsEnabled(HotkeyRouteMap.IdPrintScreen));
+        Assert.False(tab.IsEnabled(GlobalHotkeyRouteMap.IdPrintScreen));
         Assert.False(tab.IsDirty);
     }
 
@@ -474,10 +474,10 @@ public class HotkeysTabSettingsTests
     {
         var source = new AppSettings
         {
-            HotkeyEnabledStates = new Dictionary<int, bool>
+            GlobalHotkeyEnabledStates = new Dictionary<int, bool>
             {
-                [HotkeyRouteMap.IdPrintScreen] = false,
-                [HotkeyRouteMap.IdWinShiftPrintScreen] = false,
+                [GlobalHotkeyRouteMap.IdPrintScreen] = false,
+                [GlobalHotkeyRouteMap.IdWinShiftPrintScreen] = false,
             },
         };
         var tab = NewTab(source);
@@ -486,34 +486,34 @@ public class HotkeysTabSettingsTests
         tab.Reset();
         tab.Reset();
 
-        foreach (var spec in HotkeyRouteMap.AllSpecs)
+        foreach (var spec in GlobalHotkeyRouteMap.AllSpecs)
             Assert.True(tab.IsEnabled(spec.Id));
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────
 
-    private static HotkeysTabSettings NewTab(AppSettings source)
-        => new HotkeysTabSettings(source, new RecordingHotkeyAdapter());
+    private static GlobalHotkeyTabSettings NewTab(AppSettings source)
+        => new GlobalHotkeyTabSettings(source, new RecordingGlobalHotkeyAdapter());
 
-    private static HotkeySpec SpecForId(int id) => HotkeyRouteMap.AllSpecs.Single(s => s.Id == id);
+    private static GlobalHotkeySpec SpecForId(int id) => GlobalHotkeyRouteMap.AllSpecs.Single(s => s.Id == id);
 
     /// <summary>
     /// Fake Global Hotkey adapter that serves configurable registration results, so
-    /// display behavior can be verified without a Win32 hotkey manager.
+    /// display behavior can be verified without a Win32 Global Hotkey manager.
     /// </summary>
-    private sealed class RecordingHotkeyAdapter : IGlobalHotkeyAdapter
+    private sealed class RecordingGlobalHotkeyAdapter : IGlobalHotkeyAdapter
     {
-        private readonly List<HotkeyRegistrationResult> _results = new();
+        private readonly List<GlobalHotkeyRegistrationResult> _results = new();
 
-        public IReadOnlyList<HotkeyRegistrationResult> RegistrationResults => _results;
+        public IReadOnlyList<GlobalHotkeyRegistrationResult> RegistrationResults => _results;
 
-        public void SetResults(params HotkeyRegistrationResult[] results)
+        public void SetResults(params GlobalHotkeyRegistrationResult[] results)
         {
             _results.Clear();
             _results.AddRange(results);
         }
 
-        public IReadOnlyList<HotkeyRegistrationResult> ApplyEnabledStates(IReadOnlySet<int> enabledIds)
+        public IReadOnlyList<GlobalHotkeyRegistrationResult> ApplyEnabledStates(IReadOnlySet<int> enabledIds)
             => RegistrationResults;
     }
 }

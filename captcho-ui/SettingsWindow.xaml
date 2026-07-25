@@ -2,7 +2,7 @@
 
 Layout:
   ┌─────────────────────────────────────────┐
-  │  TabView: General, Hotkeys, Export,    │
+  │  TabView: General, Global Hotkeys, Export,    │
   │            Interface                    │
   ├─────────────────────────────────────────┤
   │ [Reset to Defaults] [OK] [Cancel] [Apply]   [Save status] │
@@ -83,7 +83,7 @@ Layout:
                 </ScrollViewer>
             </TabViewItem>
 
-            <TabViewItem Header="Hotkeys">
+            <TabViewItem Header="Global Hotkeys">
                 <ScrollViewer Padding="20" VerticalScrollBarVisibility="Auto">
                     <StackPanel Spacing="12">
                         <TextBlock Text="Global Hotkeys"
@@ -93,7 +93,7 @@ Layout:
                                    FontSize="13"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                    Text="Toggle which Global Hotkeys are active. Changes take effect on Apply or OK and persist for future launches. Global Hotkey bindings cannot be remapped."/>
-                        <StackPanel x:Name="HotkeysRowsPanel" Spacing="8"/>
+                        <StackPanel x:Name="GlobalHotkeysRowsPanel" Spacing="8"/>
                     </StackPanel>
                 </ScrollViewer>
             </TabViewItem>

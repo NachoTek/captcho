@@ -1,7 +1,7 @@
-// HotkeyManager.cs — Registration/cleanup manager with injectable Win32 registrar abstraction.
+// GlobalHotkeyManager.cs — Registration/cleanup manager with injectable Win32 registrar abstraction.
 //
-// Provides IHotkeyRegistrar for testability (fake in tests, P/Invoke in production),
-// and HotkeyManager which registers all four specs, tracks successful registrations,
+// Provides IGlobalHotkeyRegistrar for testability (fake in tests, P/Invoke in production),
+// and GlobalHotkeyManager which registers all four specs, tracks successful registrations,
 // unregisters idempotently, and exposes route resolution for WM_HOTKEY dispatch.
 
 using System;
@@ -14,21 +14,21 @@ namespace captcho.UI;
 /// Abstraction over Windows RegisterHotKey/UnregisterHotKey.
 /// Injectable for headless testing with a fake registrar.
 /// </summary>
-public interface IHotkeyRegistrar
+public interface IGlobalHotkeyRegistrar
 {
     /// <summary>
     /// Registers a global hotkey. Returns true on success, false on failure
-    /// (e.g. another process owns the hotkey). Must not throw for expected conflicts.
+    /// (e.g. another process owns the global hotkey). Must not throw for expected conflicts.
     /// </summary>
     /// <param name="hwnd">Window handle that will receive WM_HOTKEY messages. IntPtr.Zero uses the calling thread's message queue.</param>
-    /// <param name="id">Hotkey id (0–0xBFFF range, per Win32 docs).</param>
+    /// <param name="id">Global Hotkey id (0–0xBFFF range, per Win32 docs).</param>
     /// <param name="modifiers">Modifier flags (MOD_SHIFT, MOD_WIN, etc.).</param>
     /// <param name="virtualKey">Virtual key code.</param>
     bool RegisterHotKey(IntPtr hwnd, int id, int modifiers, int virtualKey);
 
     /// <summary>
     /// Unregisters a previously registered global hotkey.
-    /// Returns true on success, false if the hotkey was not registered by this process.
+    /// Returns true on success, false if the global hotkey was not registered by this process.
     /// Must not throw for expected failures.
     /// </summary>
     bool UnregisterHotKey(IntPtr hwnd, int id);
@@ -38,7 +38,7 @@ public interface IHotkeyRegistrar
 /// Production P/Invoke wrapper around Windows RegisterHotKey/UnregisterHotKey.
 /// Sanitizes errors into structured strings rather than throwing.
 /// </summary>
-public sealed class WindowsHotkeyRegistrar : IHotkeyRegistrar
+public sealed class WindowsGlobalHotkeyRegistrar : IGlobalHotkeyRegistrar
 {
     // P/Invoke declarations — kept local and explicit
 
@@ -72,21 +72,21 @@ public sealed class WindowsHotkeyRegistrar : IHotkeyRegistrar
 }
 
 /// <summary>
-/// Manages registration and cleanup of all four global capture hotkeys.
+/// Manages registration and cleanup of all four Global Hotkeys.
 /// Records only successful registrations, unregisters idempotently,
 /// and exposes route resolution for WM_HOTKEY message dispatch.
 ///
 /// Usage:
-///   var manager = new HotkeyManager(new WindowsHotkeyRegistrar());
+///   var manager = new GlobalHotkeyManager(new WindowsGlobalHotkeyRegistrar());
 ///   var results = manager.RegisterAll(hwnd);
 ///   // ... on WM_HOTKEY: manager.TryResolveRoute(id, out var route) ...
 ///   manager.UnregisterAll();
 /// </summary>
-public sealed class HotkeyManager
+public sealed class GlobalHotkeyManager
 {
-    private readonly IHotkeyRegistrar _registrar;
+    private readonly IGlobalHotkeyRegistrar _registrar;
     private readonly HashSet<int> _registeredIds = new();
-    private readonly List<HotkeyRegistrationResult> _registrationResults = new();
+    private readonly List<GlobalHotkeyRegistrationResult> _registrationResults = new();
     private IntPtr _hwnd;
     private bool _disposed;
 
@@ -94,46 +94,46 @@ public sealed class HotkeyManager
     /// Results from the most recent RegisterAll call.
     /// Empty before the first call or after UnregisterAll.
     /// </summary>
-    public IReadOnlyList<HotkeyRegistrationResult> RegistrationResults =>
+    public IReadOnlyList<GlobalHotkeyRegistrationResult> RegistrationResults =>
         _registrationResults.AsReadOnly();
 
     /// <summary>
-    /// Whether all four hotkeys registered successfully.
+    /// Whether all four global hotkeys registered successfully.
     /// False before RegisterAll is called or if any failed.
     /// </summary>
     public bool AllRegistered =>
-        _registrationResults.Count == HotkeyRouteMap.AllSpecs.Count &&
+        _registrationResults.Count == GlobalHotkeyRouteMap.AllSpecs.Count &&
         _registrationResults.TrueForAll(r => r.Succeeded);
 
     /// <summary>
-    /// Creates a new HotkeyManager with the given registrar.
-    /// For production use <see cref="WindowsHotkeyRegistrar"/>; for tests use a fake.
+    /// Creates a new GlobalHotkeyManager with the given registrar.
+    /// For production use <see cref="WindowsGlobalHotkeyRegistrar"/>; for tests use a fake.
     /// </summary>
-    public HotkeyManager(IHotkeyRegistrar registrar)
+    public GlobalHotkeyManager(IGlobalHotkeyRegistrar registrar)
     {
         _registrar = registrar ?? throw new ArgumentNullException(nameof(registrar));
     }
 
     /// <summary>
-    /// Registers all four capture hotkeys for the given window handle.
+    /// Registers all four capture Global Hotkeys for the given window handle.
     /// Records successful registrations for later cleanup.
-    /// Partial failure is handled gracefully: successful hotkeys stay registered,
+    /// Partial failure is handled gracefully: successful Global Hotkeys stay registered,
     /// and failures are recorded with sanitized error details for UI display.
     /// Idempotent: calling twice without UnregisterAll is safe — skips already-registered ids.
     /// </summary>
     /// <param name="hwnd">Window handle to receive WM_HOTKEY messages.</param>
     /// <returns>Registration results for all four specs.</returns>
-    public IReadOnlyList<HotkeyRegistrationResult> RegisterAll(IntPtr hwnd)
+    public IReadOnlyList<GlobalHotkeyRegistrationResult> RegisterAll(IntPtr hwnd)
     {
         _hwnd = hwnd;
         _registrationResults.Clear();
 
-        foreach (var spec in HotkeyRouteMap.AllSpecs)
+        foreach (var spec in GlobalHotkeyRouteMap.AllSpecs)
         {
             // Skip if already registered (idempotent)
             if (_registeredIds.Contains(spec.Id))
             {
-                _registrationResults.Add(HotkeyRegistrationResult.Success(spec));
+                _registrationResults.Add(GlobalHotkeyRegistrationResult.Success(spec));
                 continue;
             }
 
@@ -144,8 +144,8 @@ public sealed class HotkeyManager
                 success = _registrar.RegisterHotKey(hwnd, spec.Id, spec.Modifiers, spec.VirtualKey);
                 if (!success)
                 {
-                    errorMessage = _registrar is WindowsHotkeyRegistrar winRegistrar
-                        ? WindowsHotkeyRegistrar.GetLastErrorMessage()
+                    errorMessage = _registrar is WindowsGlobalHotkeyRegistrar winRegistrar
+                        ? WindowsGlobalHotkeyRegistrar.GetLastErrorMessage()
                         : "Registration failed";
                 }
             }
@@ -156,8 +156,8 @@ public sealed class HotkeyManager
             }
 
             var result = success
-                ? HotkeyRegistrationResult.Success(spec)
-                : HotkeyRegistrationResult.Fail(spec, "RegisterHotKey", errorMessage);
+                ? GlobalHotkeyRegistrationResult.Success(spec)
+                : GlobalHotkeyRegistrationResult.Fail(spec, "RegisterHotKey", errorMessage);
 
             _registrationResults.Add(result);
 
@@ -171,7 +171,7 @@ public sealed class HotkeyManager
     }
 
     /// <summary>
-    /// Unregisters all previously registered hotkeys.
+    /// Unregisters all previously registered Global Hotkeys.
     /// Idempotent: safe to call multiple times; skips already-unregistered ids.
     /// Records any unregister failures but does not throw.
     /// </summary>
@@ -186,7 +186,7 @@ public sealed class HotkeyManager
             catch
             {
                 // Unregister failure is non-fatal; log but don't throw.
-                // The hotkey will be released when the process exits.
+                // The global hotkey will be released when the process exits.
             }
         }
         _registeredIds.Clear();
@@ -194,21 +194,21 @@ public sealed class HotkeyManager
     }
 
     /// <summary>
-    /// Reconciles runtime registration so that exactly the hotkeys in
+    /// Reconciles runtime registration so that exactly the Global Hotkeys in
     /// <paramref name="enabledIds"/> are registered: any enabled id that is not yet
     /// registered is registered, and any currently-registered id that is no longer
     /// enabled is unregistered. Idempotent and partial-failure tolerant — enabled
-    /// hotkeys that fail to register are recorded with sanitized conflict details,
-    /// and the remaining enabled hotkeys stay registered.
+    /// Global Hotkeys that fail to register are recorded with sanitized conflict details,
+    /// and the remaining enabled Global Hotkeys stay registered.
     /// </summary>
     /// <param name="hwnd">Window handle to receive WM_HOTKEY messages.</param>
-    /// <param name="enabledIds">Stable ids of the hotkeys that should be active.</param>
+    /// <param name="enabledIds">Stable ids of the Global Hotkeys that should be active.</param>
     /// <returns>
-    /// Registration results for the enabled hotkeys only. Disabled hotkeys are
+    /// Registration results for the enabled Global Hotkeys only. Disabled Global Hotkeys are
     /// intentionally omitted so callers can distinguish "off by choice" from
     /// "attempted but failed".
     /// </returns>
-    public IReadOnlyList<HotkeyRegistrationResult> Reconcile(IntPtr hwnd, IReadOnlySet<int> enabledIds)
+    public IReadOnlyList<GlobalHotkeyRegistrationResult> Reconcile(IntPtr hwnd, IReadOnlySet<int> enabledIds)
     {
         ArgumentNullException.ThrowIfNull(enabledIds);
         _hwnd = hwnd;
@@ -230,9 +230,9 @@ public sealed class HotkeyManager
                 _registrationResults.RemoveAt(i);
         }
 
-        var results = new List<HotkeyRegistrationResult>();
+        var results = new List<GlobalHotkeyRegistrationResult>();
 
-        foreach (var spec in HotkeyRouteMap.AllSpecs)
+        foreach (var spec in GlobalHotkeyRouteMap.AllSpecs)
         {
             if (!enabledIds.Contains(spec.Id))
                 continue;
@@ -241,7 +241,7 @@ public sealed class HotkeyManager
             {
                 // Already registered — reuse the prior success result if present.
                 var existing = _registrationResults.FirstOrDefault(r => r.Spec.Id == spec.Id);
-                results.Add(existing ?? HotkeyRegistrationResult.Success(spec));
+                results.Add(existing ?? GlobalHotkeyRegistrationResult.Success(spec));
                 continue;
             }
 
@@ -252,8 +252,8 @@ public sealed class HotkeyManager
                 success = _registrar.RegisterHotKey(hwnd, spec.Id, spec.Modifiers, spec.VirtualKey);
                 if (!success)
                 {
-                    errorMessage = _registrar is WindowsHotkeyRegistrar winRegistrar
-                        ? WindowsHotkeyRegistrar.GetLastErrorMessage()
+                    errorMessage = _registrar is WindowsGlobalHotkeyRegistrar winRegistrar
+                        ? WindowsGlobalHotkeyRegistrar.GetLastErrorMessage()
                         : "Registration failed";
                 }
             }
@@ -264,8 +264,8 @@ public sealed class HotkeyManager
             }
 
             var result = success
-                ? HotkeyRegistrationResult.Success(spec)
-                : HotkeyRegistrationResult.Fail(spec, "RegisterHotKey", errorMessage);
+                ? GlobalHotkeyRegistrationResult.Success(spec)
+                : GlobalHotkeyRegistrationResult.Fail(spec, "RegisterHotKey", errorMessage);
 
             results.Add(result);
             if (success)
@@ -282,9 +282,9 @@ public sealed class HotkeyManager
     /// Returns true for known ids; false for unknown (should not trigger capture).
     /// Thread-safe for concurrent reads against the immutable spec list.
     /// </summary>
-    public bool TryResolveRoute(int hotkeyId, out HotkeyRoute route)
+    public bool TryResolveRoute(int globalHotkeyId, out GlobalHotkeyRoute route)
     {
-        return HotkeyRouteMap.TryResolveRoute(hotkeyId, out route);
+        return GlobalHotkeyRouteMap.TryResolveRoute(globalHotkeyId, out route);
     }
 
     /// <summary>
@@ -295,7 +295,7 @@ public sealed class HotkeyManager
     public string GetRegistrationSummary()
     {
         if (_registrationResults.Count == 0)
-            return "Hotkeys not registered.";
+            return "Global Hotkeys not registered.";
 
         int successCount = 0;
         var failures = new List<string>();
@@ -308,10 +308,10 @@ public sealed class HotkeyManager
         }
 
         if (failures.Count == 0)
-            return $"All {successCount} hotkeys registered.";
+            return $"All {successCount} global hotkeys registered.";
 
         return failures.Count == _registrationResults.Count
-            ? $"No hotkeys registered. Conflicts: {string.Join("; ", failures)}"
-            : $"{successCount}/{_registrationResults.Count} hotkeys registered. Conflicts: {string.Join("; ", failures)}";
+            ? $"No global hotkeys registered. Conflicts: {string.Join("; ", failures)}"
+            : $"{successCount}/{_registrationResults.Count} global hotkeys registered. Conflicts: {string.Join("; ", failures)}";
     }
 }

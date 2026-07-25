@@ -1,7 +1,7 @@
-// HotkeyRoute.cs — Pure hotkey contract: route enum, shortcut specs, mapping, and registration results.
+// GlobalHotkeyRoute.cs — Pure global hotkey contract: route enum, Global Hotkey specs, mapping, and registration results.
 //
-// Defines the four global capture shortcuts with stable ids, modifier/VK constants,
-// and the capture route each shortcut triggers. Free of WinUI and Win32 dependencies
+// Defines the four Global Hotkeys with stable ids, modifier/VK constants,
+// and the capture route each Global Hotkey triggers. Free of WinUI and Win32 dependencies
 // so headless xUnit tests can verify the full mapping without a desktop session.
 
 using System;
@@ -15,7 +15,7 @@ namespace captcho.UI;
 /// Capture workflow that a global hotkey triggers.
 /// Maps one-to-one with the capture methods on <see cref="CapturePreviewService"/>.
 /// </summary>
-public enum HotkeyRoute
+public enum GlobalHotkeyRoute
 {
     /// <summary>Print Screen — captures the monitor the cursor is on.</summary>
     CurrentMonitor,
@@ -32,29 +32,29 @@ public enum HotkeyRoute
 /// Includes stable id, human-readable name, Win32 modifier flags, virtual key code,
 /// and the capture route it triggers.
 /// </summary>
-public sealed record HotkeySpec
+public sealed record GlobalHotkeySpec
 {
     /// <summary>Stable numeric id used as the RegisterHotKey id and WM_HOTKEY wParam.</summary>
     public int Id { get; init; }
-    /// <summary>Human-readable shortcut name (e.g. "Print Screen").</summary>
+    /// <summary>Human-readable binding name (e.g. "Print Screen").</summary>
     public string Name { get; init; } = "";
     /// <summary>Win32 modifier flags (MOD_SHIFT, MOD_WIN, etc.). Zero for no modifiers.</summary>
     public int Modifiers { get; init; }
     /// <summary>Virtual key code (e.g. VK_SNAPSHOT = 0x2C).</summary>
     public int VirtualKey { get; init; }
-    /// <summary>Capture workflow this shortcut triggers.</summary>
-    public HotkeyRoute Route { get; init; }
+    /// <summary>Capture workflow this Global Hotkey triggers.</summary>
+    public GlobalHotkeyRoute Route { get; init; }
 }
 
 /// <summary>
-/// Result of registering or attempting to register a single hotkey.
+/// Result of registering or attempting to register a single global hotkey.
 /// Always returned (never thrown) — structured for UI display and diagnostics.
 /// Error messages are sanitized and contain no stack traces or filesystem paths.
 /// </summary>
-public sealed record HotkeyRegistrationResult
+public sealed record GlobalHotkeyRegistrationResult
 {
     /// <summary>The spec that was registered (or failed to register).</summary>
-    public required HotkeySpec Spec { get; init; }
+    public required GlobalHotkeySpec Spec { get; init; }
     /// <summary>Whether registration succeeded.</summary>
     public bool Succeeded { get; init; }
     /// <summary>Sanitized error message on failure, or empty on success.</summary>
@@ -63,10 +63,10 @@ public sealed record HotkeyRegistrationResult
     public string Phase { get; init; } = "";
 
     /// <summary>Creates a success result.</summary>
-    public static HotkeyRegistrationResult Success(HotkeySpec spec) => new() { Spec = spec, Succeeded = true };
+    public static GlobalHotkeyRegistrationResult Success(GlobalHotkeySpec spec) => new() { Spec = spec, Succeeded = true };
 
     /// <summary>Creates a failure result with sanitized error info.</summary>
-    public static HotkeyRegistrationResult Fail(HotkeySpec spec, string phase, string error) =>
+    public static GlobalHotkeyRegistrationResult Fail(GlobalHotkeySpec spec, string phase, string error) =>
         new() { Spec = spec, Succeeded = false, Phase = phase, Error = SanitizeErrorMessage(error) };
 
     /// <summary>
@@ -93,12 +93,12 @@ public sealed record HotkeyRegistrationResult
 }
 
 /// <summary>
-/// Pure mapping between hotkey ids/modifier+VK combinations and capture routes.
+/// Pure mapping between Global Hotkey ids/modifier+VK combinations and capture routes.
 /// No Win32 or WinUI dependencies — fully testable headless.
 /// </summary>
-public static class HotkeyRouteMap
+public static class GlobalHotkeyRouteMap
 {
-    // ── Win32 constants (kept here for mapping, P/Invoke in WindowsHotkeyRegistrar) ──
+    // ── Win32 constants (kept here for mapping, P/Invoke in WindowsGlobalHotkeyRegistrar) ──
 
     /// <summary>WM_HOTKEY message id.</summary>
     public const int WM_HOTKEY = 0x0312;
@@ -109,7 +109,7 @@ public static class HotkeyRouteMap
     /// <summary>MOD_WIN (Meta/Windows key) modifier flag.</summary>
     public const int MOD_WIN = 0x0008;
 
-    // ── Stable hotkey ids ──
+    // ── Stable Global Hotkey ids ──
 
     /// <summary>Print Screen → Current Monitor.</summary>
     public const int IdPrintScreen = 1;
@@ -121,54 +121,54 @@ public static class HotkeyRouteMap
     public const int IdWinShiftPrintScreen = 4;
 
     /// <summary>
-    /// All four hotkey specifications. Stable ids 1–4, all using VK_SNAPSHOT
+    /// All four Global Hotkey specifications. Stable ids 1–4, all using VK_SNAPSHOT
     /// with varying modifier combinations.
     /// </summary>
-    public static IReadOnlyList<HotkeySpec> AllSpecs { get; } = Array.AsReadOnly(new[]
+    public static IReadOnlyList<GlobalHotkeySpec> AllSpecs { get; } = Array.AsReadOnly(new[]
     {
-        new HotkeySpec
+        new GlobalHotkeySpec
         {
             Id = IdPrintScreen,
             Name = "Print Screen",
             Modifiers = 0,                // no modifiers
             VirtualKey = VK_SNAPSHOT,
-            Route = HotkeyRoute.CurrentMonitor,
+            Route = GlobalHotkeyRoute.CurrentMonitor,
         },
-        new HotkeySpec
+        new GlobalHotkeySpec
         {
             Id = IdWinPrintScreen,
             Name = "Win + Print Screen",
             Modifiers = MOD_WIN,
             VirtualKey = VK_SNAPSHOT,
-            Route = HotkeyRoute.ActiveWindow,
+            Route = GlobalHotkeyRoute.ActiveWindow,
         },
-        new HotkeySpec
+        new GlobalHotkeySpec
         {
             Id = IdShiftPrintScreen,
             Name = "Shift + Print Screen",
             Modifiers = MOD_SHIFT,
             VirtualKey = VK_SNAPSHOT,
-            Route = HotkeyRoute.FullDesktop,
+            Route = GlobalHotkeyRoute.FullDesktop,
         },
-        new HotkeySpec
+        new GlobalHotkeySpec
         {
             Id = IdWinShiftPrintScreen,
             Name = "Win + Shift + Print Screen",
             Modifiers = MOD_WIN | MOD_SHIFT,
             VirtualKey = VK_SNAPSHOT,
-            Route = HotkeyRoute.RectangularRegion,
+            Route = GlobalHotkeyRoute.RectangularRegion,
         },
     });
 
     /// <summary>
-    /// Looks up the capture route for a given hotkey id (from WM_HOTKEY wParam).
+    /// Looks up the capture route for a given Global Hotkey id (from WM_HOTKEY wParam).
     /// Returns true and sets <paramref name="route"/> for known ids; false for unknown.
     /// </summary>
-    public static bool TryResolveRoute(int hotkeyId, out HotkeyRoute route)
+    public static bool TryResolveRoute(int globalHotkeyId, out GlobalHotkeyRoute route)
     {
         foreach (var spec in AllSpecs)
         {
-            if (spec.Id == hotkeyId)
+            if (spec.Id == globalHotkeyId)
             {
                 route = spec.Route;
                 return true;
@@ -179,32 +179,32 @@ public static class HotkeyRouteMap
     }
 
     /// <summary>
-    /// Finds the spec for a given hotkey id. Returns null for unknown ids.
+    /// Finds the spec for a given Global Hotkey id. Returns null for unknown ids.
     /// </summary>
-    public static HotkeySpec? FindSpec(int hotkeyId)
+    public static GlobalHotkeySpec? FindSpec(int globalHotkeyId)
     {
         foreach (var spec in AllSpecs)
         {
-            if (spec.Id == hotkeyId)
+            if (spec.Id == globalHotkeyId)
                 return spec;
         }
         return null;
     }
 
     /// <summary>
-    /// Computes the set of enabled hotkey ids from persisted settings. A null
-    /// states map (settings predating per-hotkey toggles) or a missing entry means
-    /// the hotkey is enabled, matching <see cref="AppSettings.IsHotkeyEnabled"/>. The
-    /// single source of truth for "which hotkeys should be active right now", used by
-    /// both startup registration and the Hotkeys tab reconcile.
+    /// Computes the set of enabled Global Hotkey ids from persisted settings. A null
+    /// states map (settings predating per-Global-Hotkey toggles) or a missing entry means
+    /// the global hotkey is enabled, matching <see cref="AppSettings.IsGlobalHotkeyEnabled"/>. The
+    /// single source of truth for "which Global Hotkeys should be active right now", used by
+    /// both startup registration and the Global Hotkeys tab reconcile.
     /// </summary>
-    public static IReadOnlySet<int> EnabledHotkeyIds(AppSettings settings)
+    public static IReadOnlySet<int> EnabledGlobalHotkeyIds(AppSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
         var ids = new HashSet<int>();
         foreach (var spec in AllSpecs)
         {
-            if (settings.IsHotkeyEnabled(spec.Id))
+            if (settings.IsGlobalHotkeyEnabled(spec.Id))
                 ids.Add(spec.Id);
         }
         return ids;

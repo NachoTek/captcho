@@ -17,7 +17,7 @@ namespace captcho.UI;
 /// <summary>
 /// Factory delegate that constructs a fresh <see cref="SettingsSession"/> for a new
 /// window-open. Captures the shared runtime settings, ConfigurationService, and Global
-/// Hotkey adapter so the coordinator stays free of those dependencies.
+/// Global Hotkey adapter so the coordinator stays free of those dependencies.
 /// </summary>
 /// <returns>A new session bound to the live runtime settings.</returns>
 public delegate SettingsSession CreateSettingsSession();

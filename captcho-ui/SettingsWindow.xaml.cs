@@ -28,17 +28,17 @@ public sealed partial class SettingsWindow : Window
     private readonly Windows.Storage.ApplicationDataContainer _localSettings;
 
     /// <summary>
-    /// Status TextBlock per hotkey id, kept so a toggle can refresh one row's status
+    /// Status TextBlock per Global Hotkey id, kept so a toggle can refresh one row's status
     /// without rebuilding the whole list (which would lose focus and re-fire toggles).
     /// </summary>
-    private readonly Dictionary<int, TextBlock> _hotkeyStatusCells = new();
+    private readonly Dictionary<int, TextBlock> _globalHotkeyStatusCells = new();
 
     private const string WindowPlacementKey = "SettingsWindowPlacement";
 
     /// <summary>
     /// Production constructor that receives the composed session (built by the
     /// coordinator from the live runtime settings, ConfigurationService, and Global
-    /// Hotkey adapter).
+    /// Global Hotkey adapter).
     /// </summary>
     /// <param name="session">Composed settings session that owns all tab behavior.</param>
     public SettingsWindow(SettingsSession session)
@@ -78,7 +78,7 @@ public sealed partial class SettingsWindow : Window
         SaveLocationInput.Text = view.SaveLocation;
         FilenameTemplateInput.Text = view.FilenameTemplate;
 
-        RebuildHotkeyRows(view.HotkeyRows);
+        RebuildGlobalHotkeyRows(view.GlobalHotkeyRows);
         ApplyView(view);
 
         // Hook Closed event for coordinator cleanup
@@ -129,23 +129,23 @@ public sealed partial class SettingsWindow : Window
         ApplyView(view);
     }
 
-    // ── Hotkeys tab event routing ───────────────────────────────────────
+    // ── Global Hotkeys tab event routing ───────────────────────────────────────
 
     /// <summary>
     /// Pushes a toggle change into the session and refreshes that row's registration
     /// status without rebuilding the whole list (which would lose focus and re-fire
     /// toggles).
     /// </summary>
-    private void HotkeyToggle_Toggled(object sender, RoutedEventArgs e)
+    private void GlobalHotkeyToggle_Toggled(object sender, RoutedEventArgs e)
     {
         if (sender is not ToggleSwitch toggle || toggle.Tag is not int id)
             return;
 
         var view = _session.EditGlobalHotkeyEnabled(id, toggle.IsOn);
 
-        if (_hotkeyStatusCells.TryGetValue(id, out var cell))
+        if (_globalHotkeyStatusCells.TryGetValue(id, out var cell))
         {
-            var row = view.HotkeyRows.Single(r => r.Id == id);
+            var row = view.GlobalHotkeyRows.Single(r => r.Id == id);
             cell.Text = StatusDisplay(row.Status, row.StatusDetail);
             cell.Foreground = StatusBrush(row.Status);
         }
@@ -163,7 +163,7 @@ public sealed partial class SettingsWindow : Window
     {
         var view = _session.Confirm();
         ApplyView(view);
-        RebuildHotkeyRows(view.HotkeyRows);
+        RebuildGlobalHotkeyRows(view.GlobalHotkeyRows);
         if (view.ShouldClose)
             Close();
     }
@@ -177,7 +177,7 @@ public sealed partial class SettingsWindow : Window
     {
         var view = _session.Cancel();
         ApplyView(view);
-        RebuildHotkeyRows(view.HotkeyRows);
+        RebuildGlobalHotkeyRows(view.GlobalHotkeyRows);
         Close();
     }
 
@@ -185,7 +185,7 @@ public sealed partial class SettingsWindow : Window
     /// Handles Reset to Defaults — asks the session to restore every editable setting to
     /// its default in the editing session. Reset alone does not persist or reconcile
     /// runtime registration; the baseline is left untouched so a later Cancel reverts the
-    /// reset, and Apply/OK persist the defaults. Inputs and Hotkey rows refresh to the
+    /// reset, and Apply/OK persist the defaults. Inputs and Global Hotkey rows refresh to the
     /// reset working state.
     /// </summary>
     private void Reset_Click(object sender, RoutedEventArgs e)
@@ -197,7 +197,7 @@ public sealed partial class SettingsWindow : Window
         // folder-picker outcome.
         SaveLocationInput.Text = view.SaveLocation;
         FilenameTemplateInput.Text = view.FilenameTemplate;
-        RebuildHotkeyRows(view.HotkeyRows);
+        RebuildGlobalHotkeyRows(view.GlobalHotkeyRows);
         ApplyView(view);
     }
 
@@ -210,7 +210,7 @@ public sealed partial class SettingsWindow : Window
     {
         var view = _session.Apply();
         ApplyView(view);
-        RebuildHotkeyRows(view.HotkeyRows);
+        RebuildGlobalHotkeyRows(view.GlobalHotkeyRows);
     }
 
     // ── Rebinding ───────────────────────────────────────────────────────
@@ -218,7 +218,7 @@ public sealed partial class SettingsWindow : Window
     /// <summary>
     /// Reflects a view's preview, inline errors, button gating, and status into the
     /// controls. Each inline error is shown only for its own field. Does not touch input
-    /// Text (owned by the user/program) or hotkey rows (rebuilt explicitly).
+    /// Text (owned by the user/program) or Global Hotkey rows (rebuilt explicitly).
     /// </summary>
     private void ApplyView(SettingsView view)
     {
@@ -248,13 +248,13 @@ public sealed partial class SettingsWindow : Window
     }
 
     /// <summary>
-    /// Clears and rebuilds the Hotkeys tab rows. Toggle switches are populated before
+    /// Clears and rebuilds the Global Hotkeys tab rows. Toggle switches are populated before
     /// their Toggled handler is attached so the initial value does not fire as an edit.
     /// </summary>
-    private void RebuildHotkeyRows(IReadOnlyList<HotkeyRow> rows)
+    private void RebuildGlobalHotkeyRows(IReadOnlyList<GlobalHotkeyRow> rows)
     {
-        HotkeysRowsPanel.Children.Clear();
-        _hotkeyStatusCells.Clear();
+        GlobalHotkeysRowsPanel.Children.Clear();
+        _globalHotkeyStatusCells.Clear();
 
         foreach (var row in rows)
         {
@@ -266,7 +266,7 @@ public sealed partial class SettingsWindow : Window
                 Foreground = StatusBrush(row.Status),
                 VerticalAlignment = VerticalAlignment.Center,
             };
-            _hotkeyStatusCells[row.Id] = statusText;
+            _globalHotkeyStatusCells[row.Id] = statusText;
 
             // Toggle is set to the working enabled state BEFORE the handler is
             // attached, so populating it does not register as a user edit.
@@ -279,7 +279,7 @@ public sealed partial class SettingsWindow : Window
                 VerticalAlignment = VerticalAlignment.Center,
                 Tag = row.Id,
             };
-            toggle.Toggled += HotkeyToggle_Toggled;
+            toggle.Toggled += GlobalHotkeyToggle_Toggled;
 
             var info = new StackPanel { Spacing = 2 };
             info.Children.Add(new TextBlock
@@ -307,7 +307,7 @@ public sealed partial class SettingsWindow : Window
             grid.Children.Add(statusText);
             grid.Children.Add(toggle);
 
-            HotkeysRowsPanel.Children.Add(new Border
+            GlobalHotkeysRowsPanel.Children.Add(new Border
             {
                 Child = grid,
                 Padding = new Thickness(12),
@@ -319,19 +319,19 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
-    private static string StatusDisplay(HotkeyRegistrationStatus status, string detail) => status switch
+    private static string StatusDisplay(GlobalHotkeyRegistrationStatus status, string detail) => status switch
     {
-        HotkeyRegistrationStatus.Registered => "Active",
-        HotkeyRegistrationStatus.Failed => string.IsNullOrWhiteSpace(detail) ? "Registration failed" : $"Registration failed: {detail}",
-        HotkeyRegistrationStatus.Disabled => "Disabled",
+        GlobalHotkeyRegistrationStatus.Registered => "Active",
+        GlobalHotkeyRegistrationStatus.Failed => string.IsNullOrWhiteSpace(detail) ? "Registration failed" : $"Registration failed: {detail}",
+        GlobalHotkeyRegistrationStatus.Disabled => "Disabled",
         _ => "Status unavailable",
     };
 
-    private static Brush StatusBrush(HotkeyRegistrationStatus status) => status switch
+    private static Brush StatusBrush(GlobalHotkeyRegistrationStatus status) => status switch
     {
-        HotkeyRegistrationStatus.Registered => (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"],
-        HotkeyRegistrationStatus.Failed => (Brush)Application.Current.Resources["TextFillColorCriticalBrush"],
-        HotkeyRegistrationStatus.Disabled => (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
+        GlobalHotkeyRegistrationStatus.Registered => (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"],
+        GlobalHotkeyRegistrationStatus.Failed => (Brush)Application.Current.Resources["TextFillColorCriticalBrush"],
+        GlobalHotkeyRegistrationStatus.Disabled => (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
         _ => (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
     };
 

@@ -2,7 +2,7 @@
 //
 // Every SettingsSession action (open, edit, Apply/OK/Cancel/Reset) returns a fresh
 // SettingsView carrying everything the code-behind needs to rebind: the editable
-// General-tab fields (flat, per the #8 design), the Hotkeys rows, nested read-only tab
+// General-tab fields (flat, per the #8 design), the Global Hotkeys rows, nested read-only tab
 // content, composed button gating, and an inline status message. The view is a record so
 // value-equality behaves predictably for callers that want to diff. Read-only tab content
 // is nested so it stays self-contained as it grows; the small, fixed General field set
@@ -46,7 +46,7 @@ public sealed record SettingsView(
     string? FilenameTemplateError,
 
     // ── Global Hotkeys tab (editable) ──
-    IReadOnlyList<HotkeyRow> HotkeyRows,
+    IReadOnlyList<GlobalHotkeyRow> GlobalHotkeyRows,
 
     // ── Read-only tabs ──
     ExportTabContent Export,

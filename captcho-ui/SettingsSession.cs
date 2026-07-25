@@ -6,7 +6,7 @@
 // persists ALL editable tabs atomically with a single ConfigurationService.Save: on
 // success it writes the merged values back into the shared runtime (so the export flow
 // and Global Hotkey runtime pick up changes without an app restart), advances each
-// tab's baseline, and reconciles runtime hotkey registration; on failure nothing moves
+// tab's baseline, and reconciles runtime Global Hotkey registration; on failure nothing moves
 // (all-or-nothing). Every method is non-throwing on user paths — failures surface as
 // StatusMessage + StatusIsError on the returned SettingsView, never as exceptions.
 //
@@ -25,7 +25,7 @@ namespace captcho.UI;
 /// WinUI-free so the entire cross-tab behavior is covered by headless tests. Each edit
 /// or verb returns a fresh <see cref="SettingsView"/> carrying everything the code-behind
 /// binds. Persistence is atomic: one merged <see cref="AppSettings"/> is saved, and on
-/// failure no tab advances its baseline, no runtime value moves, and no hotkey is
+/// failure no tab advances its baseline, no runtime value moves, and no Global Hotkey is
 /// reconciled.
 /// </summary>
 public sealed class SettingsSession
@@ -38,7 +38,7 @@ public sealed class SettingsSession
     private readonly IGlobalHotkeyAdapter _globalHotkeys;
 
     private readonly GeneralTabSettings _general;
-    private readonly HotkeysTabSettings _hotkeys;
+    private readonly GlobalHotkeyTabSettings _globalHotkeyTab;
     private readonly ExportTabSettings _export;
     private readonly InterfaceTabSettings _interface;
 
@@ -69,11 +69,11 @@ public sealed class SettingsSession
         _globalHotkeys = globalHotkeys ?? throw new ArgumentNullException(nameof(globalHotkeys));
 
         _general = new GeneralTabSettings(runtime);
-        _hotkeys = new HotkeysTabSettings(runtime, globalHotkeys);
+        _globalHotkeyTab = new GlobalHotkeyTabSettings(runtime, globalHotkeys);
         _export = new ExportTabSettings();
         _interface = new InterfaceTabSettings();
 
-        _editableTabs = new IEditableSettingsTab[] { _general, _hotkeys };
+        _editableTabs = new IEditableSettingsTab[] { _general, _globalHotkeyTab };
     }
 
     // ── View ────────────────────────────────────────────────────────────
@@ -116,9 +116,9 @@ public sealed class SettingsSession
     /// <summary>
     /// Sets the working enabled state for one Global Hotkey and returns the refreshed view.
     /// </summary>
-    public SettingsView EditGlobalHotkeyEnabled(int hotkeyId, bool enabled)
+    public SettingsView EditGlobalHotkeyEnabled(int globalHotkeyId, bool enabled)
     {
-        _hotkeys.EditEnabled(hotkeyId, enabled);
+        _globalHotkeyTab.EditEnabled(globalHotkeyId, enabled);
         return ClearTransientStatus();
     }
 
@@ -127,7 +127,7 @@ public sealed class SettingsSession
     /// <summary>
     /// Persists ALL editable tabs atomically with one save and keeps the window open. On
     /// success: writes the merged values back into the shared runtime, advances each tab's
-    /// baseline, and reconciles runtime hotkey registration. On failure: nothing moves —
+    /// baseline, and reconciles runtime Global Hotkey registration. On failure: nothing moves —
     /// no baseline advance, no runtime write, no reconcile — and the error surfaces as
     /// status. An invalid tab blocks the save with a validation status message.
     /// </summary>
@@ -176,7 +176,7 @@ public sealed class SettingsSession
         }
 
         // Merge every editable tab's working slice onto a fresh copy of the runtime
-        // settings so disjoint slices (General vs Hotkeys) combine without clobbering,
+        // settings so disjoint slices (General vs Global Hotkeys) combine without clobbering,
         // and future fields not owned by any tab are preserved.
         var merged = _runtime.Normalized();
         foreach (var tab in _editableTabs)
@@ -186,7 +186,7 @@ public sealed class SettingsSession
         if (!result.Success)
         {
             // All-or-nothing: nothing moves on failure. Baselines stay put, the runtime
-            // is untouched, and no hotkey registration is reconciled.
+            // is untouched, and no Global Hotkey registration is reconciled.
             _statusMessage = FormatSaveFailureMessage(result);
             _statusIsError = true;
             _shouldClose = false;
@@ -210,7 +210,7 @@ public sealed class SettingsSession
         // (read live from the adapter) and are summarized in the status so a failed
         // binding is visible, not overclaimed as active.
         var registrationResults = _globalHotkeys.ApplyEnabledStates(
-            HotkeyRouteMap.EnabledHotkeyIds(merged));
+            GlobalHotkeyRouteMap.EnabledGlobalHotkeyIds(merged));
         int failedRegistrations = registrationResults.Count(r => !r.Succeeded);
 
         _statusMessage = failedRegistrations > 0
@@ -242,7 +242,7 @@ public sealed class SettingsSession
         SaveLocationError: _general.SaveLocationError,
         FilenameTemplateError: _general.FilenameTemplateError,
 
-        HotkeyRows: _hotkeys.GetRows(),
+        GlobalHotkeyRows: _globalHotkeyTab.GetRows(),
 
         Export: new ExportTabContent(
             Heading: _export.Heading,

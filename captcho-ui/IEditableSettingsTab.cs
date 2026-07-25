@@ -1,7 +1,7 @@
 // IEditableSettingsTab.cs — Internal seam between SettingsSession and each editable tab.
 //
 // This is an INTERNAL contract shared by SettingsSession and the editable tab
-// collaborators (GeneralTabSettings, HotkeysTabSettings). It is deliberately not a
+// collaborators (GeneralTabSettings, GlobalHotkeyTabSettings). It is deliberately not a
 // public ISettingsTab: per the #8 design, promoting it to a public tab-port is exactly
 // what issue #11 will decide on its own merits (only if a real second use appears).
 // One adapter is a hypothetical seam — keep it internal.

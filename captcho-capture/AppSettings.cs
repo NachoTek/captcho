@@ -27,14 +27,21 @@ public sealed class AppSettings
     public string? FilenameTemplate { get; set; }
 
     /// <summary>
-    /// Per-Global-Hotkey enabled states, keyed by the hotkey's stable id (1–4).
-    /// Null (or an absent id) means the hotkey is enabled — the default, matching
+    /// Per-Global-Hotkey enabled states, keyed by the Global Hotkey's stable id (1–4).
+    /// Null (or an absent id) means the Global Hotkey is enabled — the default, matching
     /// the pre-existing "every global hotkey on" behavior. When non-null, only ids
-    /// mapped to <c>true</c> are enabled. The ids match <c>HotkeyRouteMap</c> but
+    /// mapped to <c>true</c> are enabled. The ids match <c>GlobalHotkeyRouteMap</c> but
     /// are kept here as plain integers so this persistence model stays free of UI
     /// and Win32 dependencies.
     /// </summary>
-    public Dictionary<int, bool>? HotkeyEnabledStates { get; set; }
+    /// <remarks>
+    /// The JSON property name is pinned to the original <c>hotkeyEnabledStates</c> key so
+    /// settings.json files written by earlier builds still load. The C# identifier was
+    /// renamed to the glossary term (Global Hotkey); the on-disk wire format is a
+    /// persistence boundary and is intentionally left unchanged.
+    /// </remarks>
+    [JsonPropertyName("hotkeyEnabledStates")]
+    public Dictionary<int, bool>? GlobalHotkeyEnabledStates { get; set; }
 
     // Future properties can be added here. System.Text.Json will ignore
     // unknown properties on read and only serialize declared ones.
@@ -69,13 +76,13 @@ public sealed class AppSettings
 
     /// <summary>
     /// Resolves whether the global hotkey with the given stable id is enabled.
-    /// A null states map (settings file predates per-hotkey toggles) or a missing
+    /// A null states map (settings file predates per-Global-Hotkey toggles) or a missing
     /// entry means enabled, matching the pre-existing "every global hotkey on"
-    /// behavior. An explicit <c>false</c> disables the hotkey.
+    /// behavior. An explicit <c>false</c> disables the Global Hotkey.
     /// </summary>
-    public bool IsHotkeyEnabled(int hotkeyId) =>
-        HotkeyEnabledStates is null
-        || !HotkeyEnabledStates.TryGetValue(hotkeyId, out bool enabled)
+    public bool IsGlobalHotkeyEnabled(int globalHotkeyId) =>
+        GlobalHotkeyEnabledStates is null
+        || !GlobalHotkeyEnabledStates.TryGetValue(globalHotkeyId, out bool enabled)
         || enabled;
 
     /// <summary>
@@ -108,15 +115,15 @@ public sealed class AppSettings
 
     /// <summary>
     /// Returns a sanitized copy with null/empty/whitespace fields replaced by defaults.
-    /// The hotkey enabled-states dictionary is deep-copied (or kept null) so the
+    /// The Global Hotkey enabled-states dictionary is deep-copied (or kept null) so the
     /// returned copy is fully independent of this instance.
     /// </summary>
     public AppSettings Normalized() => new()
     {
         SaveLocation = EffectiveSaveLocation,
         FilenameTemplate = EffectiveFilenameTemplate,
-        HotkeyEnabledStates = HotkeyEnabledStates is null
+        GlobalHotkeyEnabledStates = GlobalHotkeyEnabledStates is null
             ? null
-            : new Dictionary<int, bool>(HotkeyEnabledStates),
+            : new Dictionary<int, bool>(GlobalHotkeyEnabledStates),
     };
 }

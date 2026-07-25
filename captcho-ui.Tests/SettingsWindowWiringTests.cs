@@ -146,12 +146,12 @@ public sealed class TestSettingsWindowAdapter
 /// </summary>
 internal sealed class NullGlobalHotkeyAdapterForTests : IGlobalHotkeyAdapter
 {
-    private static readonly IReadOnlyList<HotkeyRegistrationResult> Empty =
-        Array.Empty<HotkeyRegistrationResult>();
+    private static readonly IReadOnlyList<GlobalHotkeyRegistrationResult> Empty =
+        Array.Empty<GlobalHotkeyRegistrationResult>();
 
-    public IReadOnlyList<HotkeyRegistrationResult> RegistrationResults => Empty;
+    public IReadOnlyList<GlobalHotkeyRegistrationResult> RegistrationResults => Empty;
 
-    public IReadOnlyList<HotkeyRegistrationResult> ApplyEnabledStates(IReadOnlySet<int> enabledIds)
+    public IReadOnlyList<GlobalHotkeyRegistrationResult> ApplyEnabledStates(IReadOnlySet<int> enabledIds)
         => Empty;
 }
 

@@ -30,10 +30,10 @@ public sealed class ConfigurationLoadResult
     /// <summary>The loaded settings, or defaults if the file was missing/corrupt.</summary>
     public AppSettings Settings { get; init; } = AppSettings.WithDefaults();
 
-    /// <summary>Full path to the configuration file.</summary>
-    public string ConfigPath { get; init; } = string.Empty;
+    /// <summary>Full path to the settings file.</summary>
+    public string ConfigurationPath { get; init; } = string.Empty;
 
-    /// <summary>Full path to the backup file created for a corrupted config, if any.</summary>
+    /// <summary>Full path to the backup file created for a corrupted settings file, if any.</summary>
     public string? BackupPath { get; init; }
 
     /// <summary>Whether the file was missing and defaults were used.</summary>
@@ -55,8 +55,8 @@ public sealed class ConfigurationSaveResult
     /// <summary>Human-readable sanitized error message (no stack traces or secrets).</summary>
     public string? ErrorMessage { get; init; }
 
-    /// <summary>Full path to the configuration file.</summary>
-    public string ConfigPath { get; init; } = string.Empty;
+    /// <summary>Full path to the settings file.</summary>
+    public string ConfigurationPath { get; init; } = string.Empty;
 
     /// <summary>Full path to the temp file used during atomic write.</summary>
     public string? TempPath { get; init; }
@@ -65,7 +65,7 @@ public sealed class ConfigurationSaveResult
 // ── Service ───────────────────────────────────────────────────────────
 
 /// <summary>
-/// Loads and saves <see cref="AppSettings"/> from/to a JSON configuration file.
+/// Loads and saves <see cref="AppSettings"/> from/to a JSON settings file.
 /// Supports path injection for testing via the constructor.
 /// Production default: %LOCALAPPDATA%\captcho\settings.json
 /// Not sealed so tests can substitute a forced save result by overriding
@@ -85,8 +85,8 @@ public class ConfigurationService
         UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Skip,
     };
 
-    private readonly string _configDirectory;
-    private readonly string _configPath;
+    private readonly string _configurationDirectory;
+    private readonly string _configurationPath;
 
     /// <summary>
     /// Creates a ConfigurationService using the production path
@@ -103,17 +103,17 @@ public class ConfigurationService
     /// Creates a ConfigurationService with an explicit configuration directory.
     /// Use this for testing to inject a temporary directory.
     /// </summary>
-    /// <param name="configDirectory">Directory where settings.json will be stored.</param>
-    public ConfigurationService(string configDirectory)
+    /// <param name="configurationDirectory">Directory where settings.json will be stored.</param>
+    public ConfigurationService(string configurationDirectory)
     {
-        _configDirectory = configDirectory;
-        _configPath = Path.Combine(configDirectory, SettingsFileName);
+        _configurationDirectory = configurationDirectory;
+        _configurationPath = Path.Combine(configurationDirectory, SettingsFileName);
     }
 
     /// <summary>
-    /// Full path to the configuration file (exposed for diagnostics).
+    /// Full path to the settings file (exposed for diagnostics).
     /// </summary>
-    public string ConfigPath => _configPath;
+    public string ConfigurationPath => _configurationPath;
 
     /// <summary>
     /// Loads settings from the JSON file. Returns defaults if the file is missing.
@@ -123,13 +123,13 @@ public class ConfigurationService
     public ConfigurationLoadResult Load()
     {
         // 1. Check if file exists
-        if (!File.Exists(_configPath))
+        if (!File.Exists(_configurationPath))
         {
             return new ConfigurationLoadResult
             {
                 Success = true,
                 Settings = AppSettings.WithDefaults(),
-                ConfigPath = _configPath,
+                ConfigurationPath = _configurationPath,
                 UsedDefaults = true,
             };
         }
@@ -138,7 +138,7 @@ public class ConfigurationService
         string json;
         try
         {
-            json = File.ReadAllText(_configPath, Encoding.UTF8);
+            json = File.ReadAllText(_configurationPath, Encoding.UTF8);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -148,7 +148,7 @@ public class ConfigurationService
                 Phase = "ReadFile",
                 ErrorMessage = SanitizeErrorMessage(ex),
                 Settings = AppSettings.WithDefaults(),
-                ConfigPath = _configPath,
+                ConfigurationPath = _configurationPath,
                 UsedDefaults = true,
             };
         }
@@ -167,9 +167,9 @@ public class ConfigurationService
             {
                 Success = true,
                 Phase = "Deserialize",
-                ErrorMessage = "Configuration file contained invalid JSON. A backup was created and defaults were loaded.",
+                ErrorMessage = "Settings file contained invalid JSON. A backup was created and defaults were loaded.",
                 Settings = AppSettings.WithDefaults(),
-                ConfigPath = _configPath,
+                ConfigurationPath = _configurationPath,
                 BackupPath = backupPath,
                 UsedDefaults = true,
             };
@@ -183,9 +183,9 @@ public class ConfigurationService
             {
                 Success = true,
                 Phase = "Deserialize",
-                ErrorMessage = "Configuration file was empty or had unexpected structure. Defaults were loaded.",
+                ErrorMessage = "Settings file was empty or had unexpected structure. Defaults were loaded.",
                 Settings = AppSettings.WithDefaults(),
-                ConfigPath = _configPath,
+                ConfigurationPath = _configurationPath,
                 BackupPath = backupPath,
                 UsedDefaults = true,
             };
@@ -195,7 +195,7 @@ public class ConfigurationService
         {
             Success = true,
             Settings = settings,
-            ConfigPath = _configPath,
+            ConfigurationPath = _configurationPath,
             UsedDefaults = false,
         };
     }
@@ -210,7 +210,7 @@ public class ConfigurationService
         // 1. Ensure directory exists
         try
         {
-            Directory.CreateDirectory(_configDirectory);
+            Directory.CreateDirectory(_configurationDirectory);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -219,7 +219,7 @@ public class ConfigurationService
                 Success = false,
                 Phase = "CreateDirectory",
                 ErrorMessage = SanitizeErrorMessage(ex),
-                ConfigPath = _configPath,
+                ConfigurationPath = _configurationPath,
             };
         }
 
@@ -227,7 +227,7 @@ public class ConfigurationService
         string json = JsonSerializer.Serialize(settings, JsonOptions);
 
         // 3. Write to temp file first
-        string tempPath = _configPath + ".tmp";
+        string tempPath = _configurationPath + ".tmp";
         try
         {
             File.WriteAllText(tempPath, json, Encoding.UTF8);
@@ -240,7 +240,7 @@ public class ConfigurationService
                 Success = false,
                 Phase = "WriteTemp",
                 ErrorMessage = SanitizeErrorMessage(ex),
-                ConfigPath = _configPath,
+                ConfigurationPath = _configurationPath,
                 TempPath = tempPath,
             };
         }
@@ -248,7 +248,7 @@ public class ConfigurationService
         // 4. Replace the original file with the temp file
         try
         {
-            File.Move(tempPath, _configPath, overwrite: true);
+            File.Move(tempPath, _configurationPath, overwrite: true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -258,7 +258,7 @@ public class ConfigurationService
                 Success = false,
                 Phase = "Move",
                 ErrorMessage = SanitizeErrorMessage(ex),
-                ConfigPath = _configPath,
+                ConfigurationPath = _configurationPath,
                 TempPath = tempPath,
             };
         }
@@ -266,13 +266,13 @@ public class ConfigurationService
         return new ConfigurationSaveResult
         {
             Success = true,
-            ConfigPath = _configPath,
+            ConfigurationPath = _configurationPath,
             TempPath = tempPath,
         };
     }
 
     /// <summary>
-    /// Creates a backup of the corrupted config file by renaming it with a .backup extension.
+    /// Creates a backup of the corrupted settings file by renaming it with a .backup extension.
     /// If a .backup already exists, appends a numeric suffix.
     /// Returns the backup path, or null if backup failed.
     /// </summary>
@@ -280,18 +280,18 @@ public class ConfigurationService
     {
         try
         {
-            if (!File.Exists(_configPath))
+            if (!File.Exists(_configurationPath))
                 return null;
 
-            string backupPath = _configPath + BackupExtension;
+            string backupPath = _configurationPath + BackupExtension;
             int suffix = 1;
             while (File.Exists(backupPath))
             {
-                backupPath = $"{_configPath}.{suffix}{BackupExtension}";
+                backupPath = $"{_configurationPath}.{suffix}{BackupExtension}";
                 suffix++;
             }
 
-            File.Move(_configPath, backupPath);
+            File.Move(_configurationPath, backupPath);
             return backupPath;
         }
         catch

@@ -312,7 +312,7 @@ public class GeneralTabSettingsTests
     // ── WriteInto merges only this tab's slice ──────────────────────────
 
     [Fact]
-    public void WriteInto_WritesSaveLocationAndTemplate_WithoutTouchingHotkeys()
+    public void WriteInto_WritesSaveLocationAndTemplate_WithoutTouchingGlobalHotkeys()
     {
         var tab = new GeneralTabSettings(new AppSettings
         {
@@ -320,14 +320,14 @@ public class GeneralTabSettingsTests
             FilenameTemplate = "custom-<title>",
         });
         var target = AppSettings.WithDefaults();
-        target.HotkeyEnabledStates = new Dictionary<int, bool> { [1] = false };
+        target.GlobalHotkeyEnabledStates = new Dictionary<int, bool> { [1] = false };
 
         tab.WriteInto(target);
 
         Assert.Equal(@"D:\Captures", target.SaveLocation);
         Assert.Equal("custom-<title>", target.FilenameTemplate);
-        // Hotkey slice owned by another tab is preserved.
-        Assert.False(target.IsHotkeyEnabled(1));
+        // Global Hotkey slice owned by another tab is preserved.
+        Assert.False(target.IsGlobalHotkeyEnabled(1));
     }
 
     [Fact]

@@ -1,9 +1,9 @@
-// HotkeyUiWiringTests.cs — Headless tests for hotkey WM_HOTKEY routing into capture workflows.
+// GlobalHotkeyUiWiringTests.cs — Headless tests for global hotkey WM_HOTKEY routing into capture workflows.
 //
-// Verifies the hotkey dispatch logic through a testable mediator that mirrors
+// Verifies the Global Hotkey dispatch logic through a testable mediator that mirrors
 // MainWindow's route dispatch without WinUI controls. Covers:
-// - All four hotkey ids route to the correct capture delegates
-// - Unknown hotkey ids do not trigger capture
+// - All four Global Hotkey ids route to the correct capture delegates
+// - Unknown Global Hotkey ids do not trigger capture
 // - Triggers during an active operation are ignored
 // - Cleanup unregisters exactly once
 // - Registration conflicts are reported gracefully
@@ -18,31 +18,31 @@ using Xunit;
 namespace captcho.UI.Tests;
 
 /// <summary>
-/// Testable mediator that mirrors the MainWindow hotkey dispatch logic.
+/// Testable mediator that mirrors the MainWindow Global Hotkey dispatch logic.
 /// Records state transitions and capture calls so tests can assert on routing
 /// without WinUI controls or real Win32 message processing.
 /// </summary>
-public class HotkeyDispatchMediator
+public class GlobalHotkeyDispatchMediator
 {
     // Injected dependencies (test doubles)
-    private readonly Dictionary<HotkeyRoute, Func<Task>> _routeHandlers;
-    private readonly HotkeyManager _hotkeyManager;
+    private readonly Dictionary<GlobalHotkeyRoute, Func<Task>> _routeHandlers;
+    private readonly GlobalHotkeyManager _globalHotkeyManager;
 
     // Recorded state for assertions
     public bool IsOperationRunning { get; private set; }
-    public List<HotkeyRoute> TriggeredRoutes { get; } = new();
+    public List<GlobalHotkeyRoute> TriggeredRoutes { get; } = new();
     public List<int> IgnoredIds { get; } = new();
     public string? StatusText { get; private set; }
 
-    public HotkeyDispatchMediator(
-        HotkeyManager hotkeyManager,
-        Dictionary<HotkeyRoute, Func<Task>>? routeHandlers = null)
+    public GlobalHotkeyDispatchMediator(
+        GlobalHotkeyManager globalHotkeyManager,
+        Dictionary<GlobalHotkeyRoute, Func<Task>>? routeHandlers = null)
     {
-        _hotkeyManager = hotkeyManager ?? throw new ArgumentNullException(nameof(hotkeyManager));
-        _routeHandlers = routeHandlers ?? new Dictionary<HotkeyRoute, Func<Task>>();
+        _globalHotkeyManager = globalHotkeyManager ?? throw new ArgumentNullException(nameof(globalHotkeyManager));
+        _routeHandlers = routeHandlers ?? new Dictionary<GlobalHotkeyRoute, Func<Task>>();
 
         // Fill defaults for missing routes
-        foreach (HotkeyRoute route in Enum.GetValues<HotkeyRoute>())
+        foreach (GlobalHotkeyRoute route in Enum.GetValues<GlobalHotkeyRoute>())
         {
             if (!_routeHandlers.ContainsKey(route))
             {
@@ -53,25 +53,25 @@ public class HotkeyDispatchMediator
 
     /// <summary>
     /// Mirrors MainWindow.WndProc WM_HOTKEY dispatch:
-    /// resolves the hotkey id to a route and dispatches if not blocked.
+    /// resolves the Global Hotkey id to a route and dispatches if not blocked.
     /// </summary>
-    public void OnWmHotkey(int hotkeyId)
+    public void OnWmGlobalHotkey(int globalHotkeyId)
     {
-        if (_hotkeyManager.TryResolveRoute(hotkeyId, out HotkeyRoute route))
+        if (_globalHotkeyManager.TryResolveRoute(globalHotkeyId, out GlobalHotkeyRoute route))
         {
             DispatchRoute(route);
         }
         else
         {
-            IgnoredIds.Add(hotkeyId);
+            IgnoredIds.Add(globalHotkeyId);
         }
     }
 
     /// <summary>
-    /// Mirrors MainWindow.DispatchHotkeyRoute:
+    /// Mirrors MainWindow.DispatchGlobalHotkeyRoute:
     /// checks the operation guard, then invokes the route handler.
     /// </summary>
-    public void DispatchRoute(HotkeyRoute route)
+    public void DispatchRoute(GlobalHotkeyRoute route)
     {
         if (IsOperationRunning)
         {
@@ -102,7 +102,7 @@ public class HotkeyDispatchMediator
     /// </summary>
     public void UpdateStatusFromRegistration()
     {
-        StatusText = _hotkeyManager.GetRegistrationSummary();
+        StatusText = _globalHotkeyManager.GetRegistrationSummary();
     }
 }
 
@@ -110,7 +110,7 @@ public class HotkeyDispatchMediator
 /// Fake registrar for headless UI wiring tests.
 /// Allows controlling which registrations succeed/fail.
 /// </summary>
-public class UiWiringFakeRegistrar : IHotkeyRegistrar
+public class UiWiringFakeRegistrar : IGlobalHotkeyRegistrar
 {
     private readonly HashSet<int> _succeedingIds;
     private readonly HashSet<int> _registeredIds = new();
@@ -140,7 +140,7 @@ public class UiWiringFakeRegistrar : IHotkeyRegistrar
     }
 }
 
-public class HotkeyUiWiringTests
+public class GlobalHotkeyUiWiringTests
 {
     // ── All four routes dispatch correctly ────────────────────────────
 
@@ -148,56 +148,56 @@ public class HotkeyUiWiringTests
     public void PrintScreen_RoutesTo_CurrentMonitor()
     {
         var registrar = new UiWiringFakeRegistrar();
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
 
-        var mediator = new HotkeyDispatchMediator(manager);
-        mediator.OnWmHotkey(HotkeyRouteMap.IdPrintScreen);
+        var mediator = new GlobalHotkeyDispatchMediator(manager);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdPrintScreen);
 
         Assert.Single(mediator.TriggeredRoutes);
-        Assert.Equal(HotkeyRoute.CurrentMonitor, mediator.TriggeredRoutes[0]);
+        Assert.Equal(GlobalHotkeyRoute.CurrentMonitor, mediator.TriggeredRoutes[0]);
     }
 
     [Fact]
     public void WinPrintScreen_RoutesTo_ActiveWindow()
     {
         var registrar = new UiWiringFakeRegistrar();
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
 
-        var mediator = new HotkeyDispatchMediator(manager);
-        mediator.OnWmHotkey(HotkeyRouteMap.IdWinPrintScreen);
+        var mediator = new GlobalHotkeyDispatchMediator(manager);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdWinPrintScreen);
 
         Assert.Single(mediator.TriggeredRoutes);
-        Assert.Equal(HotkeyRoute.ActiveWindow, mediator.TriggeredRoutes[0]);
+        Assert.Equal(GlobalHotkeyRoute.ActiveWindow, mediator.TriggeredRoutes[0]);
     }
 
     [Fact]
     public void ShiftPrintScreen_RoutesTo_FullDesktop()
     {
         var registrar = new UiWiringFakeRegistrar();
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
 
-        var mediator = new HotkeyDispatchMediator(manager);
-        mediator.OnWmHotkey(HotkeyRouteMap.IdShiftPrintScreen);
+        var mediator = new GlobalHotkeyDispatchMediator(manager);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdShiftPrintScreen);
 
         Assert.Single(mediator.TriggeredRoutes);
-        Assert.Equal(HotkeyRoute.FullDesktop, mediator.TriggeredRoutes[0]);
+        Assert.Equal(GlobalHotkeyRoute.FullDesktop, mediator.TriggeredRoutes[0]);
     }
 
     [Fact]
     public void WinShiftPrintScreen_RoutesTo_RectangularRegion()
     {
         var registrar = new UiWiringFakeRegistrar();
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
 
-        var mediator = new HotkeyDispatchMediator(manager);
-        mediator.OnWmHotkey(HotkeyRouteMap.IdWinShiftPrintScreen);
+        var mediator = new GlobalHotkeyDispatchMediator(manager);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdWinShiftPrintScreen);
 
         Assert.Single(mediator.TriggeredRoutes);
-        Assert.Equal(HotkeyRoute.RectangularRegion, mediator.TriggeredRoutes[0]);
+        Assert.Equal(GlobalHotkeyRoute.RectangularRegion, mediator.TriggeredRoutes[0]);
     }
 
     // ── Unknown ids do not trigger capture ────────────────────────────
@@ -212,11 +212,11 @@ public class HotkeyUiWiringTests
     public void UnknownId_DoesNotTriggerCapture(int unknownId)
     {
         var registrar = new UiWiringFakeRegistrar();
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
 
-        var mediator = new HotkeyDispatchMediator(manager);
-        mediator.OnWmHotkey(unknownId);
+        var mediator = new GlobalHotkeyDispatchMediator(manager);
+        mediator.OnWmGlobalHotkey(unknownId);
 
         Assert.Empty(mediator.TriggeredRoutes);
         Assert.Single(mediator.IgnoredIds);
@@ -229,13 +229,13 @@ public class HotkeyUiWiringTests
     public void MultipleUnknownIds_AllIgnored()
     {
         var registrar = new UiWiringFakeRegistrar();
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
 
-        var mediator = new HotkeyDispatchMediator(manager);
-        mediator.OnWmHotkey(0);
-        mediator.OnWmHotkey(-1);
-        mediator.OnWmHotkey(99);
+        var mediator = new GlobalHotkeyDispatchMediator(manager);
+        mediator.OnWmGlobalHotkey(0);
+        mediator.OnWmGlobalHotkey(-1);
+        mediator.OnWmGlobalHotkey(99);
 
         Assert.Empty(mediator.TriggeredRoutes);
         Assert.Equal(3, mediator.IgnoredIds.Count);
@@ -244,60 +244,60 @@ public class HotkeyUiWiringTests
     // ── Active operation guard blocks overlapping triggers ─────────────
 
     [Fact]
-    public void HotkeyDuringActiveOperation_IsIgnored()
+    public void GlobalHotkeyDuringActiveOperation_IsIgnored()
     {
         var registrar = new UiWiringFakeRegistrar();
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
 
-        var mediator = new HotkeyDispatchMediator(manager);
+        var mediator = new GlobalHotkeyDispatchMediator(manager);
         mediator.EnterOperation();
 
-        // All four hotkeys should be ignored during active operation
-        mediator.OnWmHotkey(HotkeyRouteMap.IdPrintScreen);
-        mediator.OnWmHotkey(HotkeyRouteMap.IdWinPrintScreen);
-        mediator.OnWmHotkey(HotkeyRouteMap.IdShiftPrintScreen);
-        mediator.OnWmHotkey(HotkeyRouteMap.IdWinShiftPrintScreen);
+        // All four Global Hotkeys should be ignored during active operation
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdPrintScreen);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdWinPrintScreen);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdShiftPrintScreen);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdWinShiftPrintScreen);
 
         Assert.Empty(mediator.TriggeredRoutes);
     }
 
     [Fact]
-    public void HotkeyAfterOperationCompletes_IsDispatched()
+    public void GlobalHotkeyAfterOperationCompletes_IsDispatched()
     {
         var registrar = new UiWiringFakeRegistrar();
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
 
-        var mediator = new HotkeyDispatchMediator(manager);
+        var mediator = new GlobalHotkeyDispatchMediator(manager);
 
-        // Start operation, try hotkey (ignored), end operation, try again (dispatched)
+        // Start operation, try Global Hotkey (ignored), end operation, try again (dispatched)
         mediator.EnterOperation();
-        mediator.OnWmHotkey(HotkeyRouteMap.IdPrintScreen);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdPrintScreen);
         Assert.Empty(mediator.TriggeredRoutes);
 
         mediator.ExitOperation();
-        mediator.OnWmHotkey(HotkeyRouteMap.IdPrintScreen);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdPrintScreen);
         Assert.Single(mediator.TriggeredRoutes);
-        Assert.Equal(HotkeyRoute.CurrentMonitor, mediator.TriggeredRoutes[0]);
+        Assert.Equal(GlobalHotkeyRoute.CurrentMonitor, mediator.TriggeredRoutes[0]);
     }
 
     [Fact]
-    public void RapidRepeatedHotkeyPresses_OnlyFirstDispatches()
+    public void RapidRepeatedGlobalHotkeyPresses_OnlyFirstDispatches()
     {
         var registrar = new UiWiringFakeRegistrar();
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
 
-        var mediator = new HotkeyDispatchMediator(manager);
+        var mediator = new GlobalHotkeyDispatchMediator(manager);
 
         // Simulate rapid repeated Print Screen presses
         // The first one starts the operation, subsequent ones are ignored
-        mediator.OnWmHotkey(HotkeyRouteMap.IdPrintScreen);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdPrintScreen);
         mediator.EnterOperation();
-        mediator.OnWmHotkey(HotkeyRouteMap.IdPrintScreen);
-        mediator.OnWmHotkey(HotkeyRouteMap.IdPrintScreen);
-        mediator.OnWmHotkey(HotkeyRouteMap.IdPrintScreen);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdPrintScreen);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdPrintScreen);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdPrintScreen);
 
         Assert.Single(mediator.TriggeredRoutes);
     }
@@ -307,39 +307,39 @@ public class HotkeyUiWiringTests
     [Fact]
     public void CurrentMonitorRoute_InvokesCorrectHandler()
     {
-        HotkeyRoute? invokedRoute = null;
-        var handlers = new Dictionary<HotkeyRoute, Func<Task>>
+        GlobalHotkeyRoute? invokedRoute = null;
+        var handlers = new Dictionary<GlobalHotkeyRoute, Func<Task>>
         {
-            [HotkeyRoute.CurrentMonitor] = () => { invokedRoute = HotkeyRoute.CurrentMonitor; return Task.CompletedTask; },
+            [GlobalHotkeyRoute.CurrentMonitor] = () => { invokedRoute = GlobalHotkeyRoute.CurrentMonitor; return Task.CompletedTask; },
         };
 
         var registrar = new UiWiringFakeRegistrar();
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
 
-        var mediator = new HotkeyDispatchMediator(manager, handlers);
-        mediator.OnWmHotkey(HotkeyRouteMap.IdPrintScreen);
+        var mediator = new GlobalHotkeyDispatchMediator(manager, handlers);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdPrintScreen);
 
-        Assert.Equal(HotkeyRoute.CurrentMonitor, invokedRoute);
+        Assert.Equal(GlobalHotkeyRoute.CurrentMonitor, invokedRoute);
     }
 
     [Fact]
     public void RegionRoute_InvokesCorrectHandler()
     {
-        HotkeyRoute? invokedRoute = null;
-        var handlers = new Dictionary<HotkeyRoute, Func<Task>>
+        GlobalHotkeyRoute? invokedRoute = null;
+        var handlers = new Dictionary<GlobalHotkeyRoute, Func<Task>>
         {
-            [HotkeyRoute.RectangularRegion] = () => { invokedRoute = HotkeyRoute.RectangularRegion; return Task.CompletedTask; },
+            [GlobalHotkeyRoute.RectangularRegion] = () => { invokedRoute = GlobalHotkeyRoute.RectangularRegion; return Task.CompletedTask; },
         };
 
         var registrar = new UiWiringFakeRegistrar();
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
 
-        var mediator = new HotkeyDispatchMediator(manager, handlers);
-        mediator.OnWmHotkey(HotkeyRouteMap.IdWinShiftPrintScreen);
+        var mediator = new GlobalHotkeyDispatchMediator(manager, handlers);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdWinShiftPrintScreen);
 
-        Assert.Equal(HotkeyRoute.RectangularRegion, invokedRoute);
+        Assert.Equal(GlobalHotkeyRoute.RectangularRegion, invokedRoute);
     }
 
     // ── All four routes dispatch independently ─────────────────────────
@@ -348,21 +348,21 @@ public class HotkeyUiWiringTests
     public void AllFourRoutes_DispatchInSequence()
     {
         var registrar = new UiWiringFakeRegistrar();
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
 
-        var mediator = new HotkeyDispatchMediator(manager);
+        var mediator = new GlobalHotkeyDispatchMediator(manager);
 
-        mediator.OnWmHotkey(HotkeyRouteMap.IdPrintScreen);
-        mediator.OnWmHotkey(HotkeyRouteMap.IdWinPrintScreen);
-        mediator.OnWmHotkey(HotkeyRouteMap.IdShiftPrintScreen);
-        mediator.OnWmHotkey(HotkeyRouteMap.IdWinShiftPrintScreen);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdPrintScreen);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdWinPrintScreen);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdShiftPrintScreen);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdWinShiftPrintScreen);
 
         Assert.Equal(4, mediator.TriggeredRoutes.Count);
-        Assert.Equal(HotkeyRoute.CurrentMonitor, mediator.TriggeredRoutes[0]);
-        Assert.Equal(HotkeyRoute.ActiveWindow, mediator.TriggeredRoutes[1]);
-        Assert.Equal(HotkeyRoute.FullDesktop, mediator.TriggeredRoutes[2]);
-        Assert.Equal(HotkeyRoute.RectangularRegion, mediator.TriggeredRoutes[3]);
+        Assert.Equal(GlobalHotkeyRoute.CurrentMonitor, mediator.TriggeredRoutes[0]);
+        Assert.Equal(GlobalHotkeyRoute.ActiveWindow, mediator.TriggeredRoutes[1]);
+        Assert.Equal(GlobalHotkeyRoute.FullDesktop, mediator.TriggeredRoutes[2]);
+        Assert.Equal(GlobalHotkeyRoute.RectangularRegion, mediator.TriggeredRoutes[3]);
     }
 
     // ── Cleanup unregisters exactly once ───────────────────────────────
@@ -371,7 +371,7 @@ public class HotkeyUiWiringTests
     public void Cleanup_UnregistersSuccessfully()
     {
         var registrar = new UiWiringFakeRegistrar();
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
         Assert.True(manager.AllRegistered);
 
@@ -387,7 +387,7 @@ public class HotkeyUiWiringTests
     {
         // Only Print Screen (id=1) and Shift+Print (id=3) succeed
         var registrar = new UiWiringFakeRegistrar(new HashSet<int> { 1, 3 });
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
         Assert.False(manager.AllRegistered);
 
@@ -404,23 +404,23 @@ public class HotkeyUiWiringTests
     public void FullRegistration_StatusTextReportsSuccess()
     {
         var registrar = new UiWiringFakeRegistrar();
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
 
-        var mediator = new HotkeyDispatchMediator(manager);
+        var mediator = new GlobalHotkeyDispatchMediator(manager);
         mediator.UpdateStatusFromRegistration();
 
-        Assert.Equal("All 4 hotkeys registered.", mediator.StatusText);
+        Assert.Equal("All 4 global hotkeys registered.", mediator.StatusText);
     }
 
     [Fact]
     public void PartialRegistration_StatusTextReportsConflicts()
     {
         var registrar = new UiWiringFakeRegistrar(new HashSet<int> { 1, 3 });
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
 
-        var mediator = new HotkeyDispatchMediator(manager);
+        var mediator = new GlobalHotkeyDispatchMediator(manager);
         mediator.UpdateStatusFromRegistration();
 
         Assert.Contains("2/4", mediator.StatusText);
@@ -431,13 +431,13 @@ public class HotkeyUiWiringTests
     public void TotalFailure_StatusTextReportsAllFailed()
     {
         var registrar = new UiWiringFakeRegistrar(new HashSet<int>());
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
 
-        var mediator = new HotkeyDispatchMediator(manager);
+        var mediator = new GlobalHotkeyDispatchMediator(manager);
         mediator.UpdateStatusFromRegistration();
 
-        Assert.Contains("No hotkeys registered", mediator.StatusText);
+        Assert.Contains("No global hotkeys registered", mediator.StatusText);
     }
 
     // ── Dispatch after partial registration still works for registered routes ─
@@ -447,18 +447,18 @@ public class HotkeyUiWiringTests
     {
         // Only Print Screen (id=1) succeeds
         var registrar = new UiWiringFakeRegistrar(new HashSet<int> { 1 });
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
 
-        var mediator = new HotkeyDispatchMediator(manager);
+        var mediator = new GlobalHotkeyDispatchMediator(manager);
 
         // Registered route dispatches
-        mediator.OnWmHotkey(HotkeyRouteMap.IdPrintScreen);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdPrintScreen);
         Assert.Single(mediator.TriggeredRoutes);
 
         // Unregistered route also dispatches (route resolution is pure mapping,
         // registration tracking is for OS-level cleanup only)
-        mediator.OnWmHotkey(HotkeyRouteMap.IdWinPrintScreen);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdWinPrintScreen);
         Assert.Equal(2, mediator.TriggeredRoutes.Count);
     }
 
@@ -468,16 +468,16 @@ public class HotkeyUiWiringTests
     public void MixedIds_OnlyValidOnesDispatch()
     {
         var registrar = new UiWiringFakeRegistrar();
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
 
-        var mediator = new HotkeyDispatchMediator(manager);
+        var mediator = new GlobalHotkeyDispatchMediator(manager);
 
-        mediator.OnWmHotkey(HotkeyRouteMap.IdPrintScreen);   // valid
-        mediator.OnWmHotkey(99);                              // invalid
-        mediator.OnWmHotkey(HotkeyRouteMap.IdShiftPrintScreen); // valid
-        mediator.OnWmHotkey(-1);                              // invalid
-        mediator.OnWmHotkey(HotkeyRouteMap.IdWinPrintScreen);   // valid
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdPrintScreen);   // valid
+        mediator.OnWmGlobalHotkey(99);                              // invalid
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdShiftPrintScreen); // valid
+        mediator.OnWmGlobalHotkey(-1);                              // invalid
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdWinPrintScreen);   // valid
 
         Assert.Equal(3, mediator.TriggeredRoutes.Count);
         Assert.Equal(2, mediator.IgnoredIds.Count);
@@ -489,23 +489,23 @@ public class HotkeyUiWiringTests
     public void OperationGuard_ResetsAllowsSequentialCaptures()
     {
         var registrar = new UiWiringFakeRegistrar();
-        var manager = new HotkeyManager(registrar);
+        var manager = new GlobalHotkeyManager(registrar);
         manager.RegisterAll(IntPtr.Zero);
 
-        var mediator = new HotkeyDispatchMediator(manager);
+        var mediator = new GlobalHotkeyDispatchMediator(manager);
 
         // First capture cycle
-        mediator.OnWmHotkey(HotkeyRouteMap.IdPrintScreen);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdPrintScreen);
         mediator.EnterOperation();
         mediator.ExitOperation();
 
         // Second capture cycle
-        mediator.OnWmHotkey(HotkeyRouteMap.IdShiftPrintScreen);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdShiftPrintScreen);
         mediator.EnterOperation();
         mediator.ExitOperation();
 
         Assert.Equal(2, mediator.TriggeredRoutes.Count);
-        Assert.Equal(HotkeyRoute.CurrentMonitor, mediator.TriggeredRoutes[0]);
-        Assert.Equal(HotkeyRoute.FullDesktop, mediator.TriggeredRoutes[1]);
+        Assert.Equal(GlobalHotkeyRoute.CurrentMonitor, mediator.TriggeredRoutes[0]);
+        Assert.Equal(GlobalHotkeyRoute.FullDesktop, mediator.TriggeredRoutes[1]);
     }
 }
