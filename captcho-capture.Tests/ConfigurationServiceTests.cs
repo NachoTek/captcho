@@ -143,6 +143,51 @@ public class ConfigurationServiceTests : IDisposable
         Assert.True(File.Exists(result.ConfigurationPath));
     }
 
+    [Fact]
+    public void Save_WhenMoveFails_LeavesOriginalFileIntactAndCleansTemp()
+    {
+        // Disk-level atomic-write contract: if the final Move phase fails after the temp
+        // file was written, the EXISTING settings file must be left byte-for-byte intact
+        // and the temp file cleaned up. This is the persistence-seam half of the #12
+        // "neither change persisted" guarantee — a save that reports failure never strands a
+        // half-written file, so the session's single-save-all-or-nothing contract holds at
+        // the disk level too, not just in the session's in-memory bookkeeping.
+        var svc = CreateService();
+        var original = new AppSettings
+        {
+            SaveLocation = @"D:\Original",
+            FilenameTemplate = "original-<title>",
+        };
+        Assert.True(svc.Save(original).Success);
+        string configurationPath = svc.ConfigurationPath;
+        string originalJson = File.ReadAllText(configurationPath, Encoding.UTF8);
+
+        var changed = new AppSettings
+        {
+            SaveLocation = @"D:\Changed",
+            FilenameTemplate = "changed-<title>",
+        };
+
+        // Hold an exclusive (FileShare.None) handle on the settings file so the temp write
+        // succeeds but File.Move(overwrite: true) cannot replace the locked destination.
+        using (var lockStream = new FileStream(
+            configurationPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            var result = svc.Save(changed);
+            Assert.False(result.Success);
+            Assert.Equal("Move", result.Phase);
+        }
+
+        // Original file is intact — content unchanged and a reload yields pre-save values.
+        Assert.True(File.Exists(configurationPath));
+        Assert.Equal(originalJson, File.ReadAllText(configurationPath, Encoding.UTF8));
+        var reloaded = svc.Load().Settings;
+        Assert.Equal(@"D:\Original", reloaded.SaveLocation);
+        Assert.Equal("original-<title>", reloaded.FilenameTemplate);
+        // Temp file was cleaned up even though the Move failed.
+        Assert.False(File.Exists(configurationPath + ".tmp"));
+    }
+
     // ── Corruption / Invalid JSON ────────────────────────────────────────
 
     [Fact]
