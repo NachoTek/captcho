@@ -6,6 +6,7 @@
 
 using System;
 using System.Linq;
+using captcho.Capture;
 using Xunit;
 
 namespace captcho.UI.Tests;

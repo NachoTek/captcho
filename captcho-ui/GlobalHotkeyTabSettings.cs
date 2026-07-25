@@ -84,9 +84,11 @@ public sealed class GlobalHotkeyTabSettings : IEditableSettingsTab
 
     /// <summary>
     /// Whether the Global Hotkey with the given stable id is currently enabled in the
-    /// working (editable) state.
+    /// working (editable) state. The id is the UI-layer Win32 hotkey identity (the row
+    /// key); it is translated to the capture-layer route identity here.
     /// </summary>
-    public bool IsEnabled(int globalHotkeyId) => _working.IsGlobalHotkeyEnabled(globalHotkeyId);
+    public bool IsEnabled(int globalHotkeyId) =>
+        _working.IsGlobalHotkeyEnabled(SpecFor(globalHotkeyId).Route);
 
     /// <summary>
     /// Sets the working enabled state for a Global Hotkey from user input. Never persists
@@ -95,9 +97,18 @@ public sealed class GlobalHotkeyTabSettings : IEditableSettingsTab
     /// </summary>
     public void EditEnabled(int globalHotkeyId, bool enabled)
     {
-        _working.GlobalHotkeyEnabledStates ??= new Dictionary<int, bool>();
-        _working.GlobalHotkeyEnabledStates[globalHotkeyId] = enabled;
+        var route = SpecFor(globalHotkeyId).Route;
+        _working.GlobalHotkeyEnabledStates ??= new Dictionary<GlobalHotkeyRoute, bool>();
+        _working.GlobalHotkeyEnabledStates[route] = enabled;
     }
+
+    /// <summary>
+    /// Resolves the UI-layer spec for a Win32 hotkey id. Throws for unknown ids — the tab
+    /// is an internal seam driven by row ids (1–4), so an unknown id is a programmer error.
+    /// </summary>
+    private static GlobalHotkeySpec SpecFor(int globalHotkeyId) =>
+        GlobalHotkeyRouteMap.FindSpec(globalHotkeyId)
+        ?? throw new ArgumentOutOfRangeException(nameof(globalHotkeyId), globalHotkeyId, "Unknown Global Hotkey id.");
 
     // ── Display rows ────────────────────────────────────────────────────
 
@@ -175,7 +186,7 @@ public sealed class GlobalHotkeyTabSettings : IEditableSettingsTab
         {
             foreach (var spec in GlobalHotkeyRouteMap.AllSpecs)
             {
-                if (_working.IsGlobalHotkeyEnabled(spec.Id) != _baseline.IsGlobalHotkeyEnabled(spec.Id))
+                if (_working.IsGlobalHotkeyEnabled(spec.Route) != _baseline.IsGlobalHotkeyEnabled(spec.Route))
                     return true;
             }
             return false;
@@ -198,7 +209,7 @@ public sealed class GlobalHotkeyTabSettings : IEditableSettingsTab
         var normalized = NormalizeForPersistence(_working.GlobalHotkeyEnabledStates);
         target.GlobalHotkeyEnabledStates = normalized is null
             ? null
-            : new Dictionary<int, bool>(normalized);
+            : new Dictionary<GlobalHotkeyRoute, bool>(normalized);
     }
 
     /// <summary>
@@ -236,12 +247,12 @@ public sealed class GlobalHotkeyTabSettings : IEditableSettingsTab
         _working.GlobalHotkeyEnabledStates = null;
     }
 
-    private static Dictionary<int, bool>? NormalizeForPersistence(Dictionary<int, bool>? states)
+    private static Dictionary<GlobalHotkeyRoute, bool>? NormalizeForPersistence(Dictionary<GlobalHotkeyRoute, bool>? states)
     {
         if (states is null)
             return null;
 
-        bool allEnabled = GlobalHotkeyRouteMap.AllSpecs.All(s => states.TryGetValue(s.Id, out var v) && v);
+        bool allEnabled = GlobalHotkeyRouteMap.AllSpecs.All(s => states.TryGetValue(s.Route, out var v) && v);
         return allEnabled ? null : states;
     }
 }

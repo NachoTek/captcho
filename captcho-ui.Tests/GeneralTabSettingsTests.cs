@@ -320,14 +320,14 @@ public class GeneralTabSettingsTests
             FilenameTemplate = "custom-<title>",
         });
         var target = AppSettings.WithDefaults();
-        target.GlobalHotkeyEnabledStates = new Dictionary<int, bool> { [1] = false };
+        target.GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool> { [GlobalHotkeyRoute.CurrentMonitor] = false };
 
         tab.WriteInto(target);
 
         Assert.Equal(@"D:\Captures", target.SaveLocation);
         Assert.Equal("custom-<title>", target.FilenameTemplate);
         // Global Hotkey slice owned by another tab is preserved.
-        Assert.False(target.IsGlobalHotkeyEnabled(1));
+        Assert.False(target.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.CurrentMonitor));
     }
 
     [Fact]

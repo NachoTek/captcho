@@ -113,7 +113,7 @@ public class GlobalHotkeyTabSettingsTests
     {
         var source = new AppSettings
         {
-            GlobalHotkeyEnabledStates = new Dictionary<int, bool> { [GlobalHotkeyRouteMap.IdPrintScreen] = false },
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool> { [GlobalHotkeyRoute.CurrentMonitor] = false },
         };
 
         var tab = NewTab(source);
@@ -170,7 +170,7 @@ public class GlobalHotkeyTabSettingsTests
 
         var source = new AppSettings
         {
-            GlobalHotkeyEnabledStates = new Dictionary<int, bool> { [GlobalHotkeyRouteMap.IdPrintScreen] = false },
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool> { [GlobalHotkeyRoute.CurrentMonitor] = false },
         };
         var tab = new GlobalHotkeyTabSettings(source, adapter);
 
@@ -227,7 +227,7 @@ public class GlobalHotkeyTabSettingsTests
     {
         var source = new AppSettings
         {
-            GlobalHotkeyEnabledStates = new Dictionary<int, bool> { [GlobalHotkeyRouteMap.IdPrintScreen] = false },
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool> { [GlobalHotkeyRoute.CurrentMonitor] = false },
         };
         var tab = NewTab(source);
 
@@ -290,8 +290,8 @@ public class GlobalHotkeyTabSettingsTests
 
         tab.WriteInto(target);
 
-        Assert.False(target.IsGlobalHotkeyEnabled(GlobalHotkeyRouteMap.IdPrintScreen));
-        Assert.True(target.IsGlobalHotkeyEnabled(GlobalHotkeyRouteMap.IdWinPrintScreen));
+        Assert.False(target.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.CurrentMonitor));
+        Assert.True(target.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.ActiveWindow));
     }
 
     [Fact]
@@ -371,10 +371,10 @@ public class GlobalHotkeyTabSettingsTests
     {
         var source = new AppSettings
         {
-            GlobalHotkeyEnabledStates = new Dictionary<int, bool>
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool>
             {
-                [GlobalHotkeyRouteMap.IdPrintScreen] = false,
-                [GlobalHotkeyRouteMap.IdWinPrintScreen] = false,
+                [GlobalHotkeyRoute.CurrentMonitor] = false,
+                [GlobalHotkeyRoute.ActiveWindow] = false,
             },
         };
         var tab = NewTab(source);
@@ -390,9 +390,9 @@ public class GlobalHotkeyTabSettingsTests
     {
         var source = new AppSettings
         {
-            GlobalHotkeyEnabledStates = new Dictionary<int, bool>
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool>
             {
-                [GlobalHotkeyRouteMap.IdPrintScreen] = false,
+                [GlobalHotkeyRoute.CurrentMonitor] = false,
             },
         };
         var tab = NewTab(source);
@@ -410,16 +410,16 @@ public class GlobalHotkeyTabSettingsTests
     {
         var source = new AppSettings
         {
-            GlobalHotkeyEnabledStates = new Dictionary<int, bool>
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool>
             {
-                [GlobalHotkeyRouteMap.IdPrintScreen] = false,
+                [GlobalHotkeyRoute.CurrentMonitor] = false,
             },
         };
         var tab = NewTab(source);
 
         tab.Reset();
 
-        Assert.False(source.IsGlobalHotkeyEnabled(GlobalHotkeyRouteMap.IdPrintScreen));
+        Assert.False(source.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.CurrentMonitor));
     }
 
     [Fact]
@@ -427,9 +427,9 @@ public class GlobalHotkeyTabSettingsTests
     {
         var source = new AppSettings
         {
-            GlobalHotkeyEnabledStates = new Dictionary<int, bool>
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool>
             {
-                [GlobalHotkeyRouteMap.IdPrintScreen] = false,
+                [GlobalHotkeyRoute.CurrentMonitor] = false,
             },
         };
         var tab = NewTab(source);
@@ -455,9 +455,9 @@ public class GlobalHotkeyTabSettingsTests
     {
         var source = new AppSettings
         {
-            GlobalHotkeyEnabledStates = new Dictionary<int, bool>
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool>
             {
-                [GlobalHotkeyRouteMap.IdPrintScreen] = false,
+                [GlobalHotkeyRoute.CurrentMonitor] = false,
             },
         };
         var tab = NewTab(source);
@@ -474,10 +474,10 @@ public class GlobalHotkeyTabSettingsTests
     {
         var source = new AppSettings
         {
-            GlobalHotkeyEnabledStates = new Dictionary<int, bool>
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool>
             {
-                [GlobalHotkeyRouteMap.IdPrintScreen] = false,
-                [GlobalHotkeyRouteMap.IdWinShiftPrintScreen] = false,
+                [GlobalHotkeyRoute.CurrentMonitor] = false,
+                [GlobalHotkeyRoute.RectangularRegion] = false,
             },
         };
         var tab = NewTab(source);

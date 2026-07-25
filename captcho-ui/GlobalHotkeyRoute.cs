@@ -1,8 +1,10 @@
-// GlobalHotkeyRoute.cs — Pure global hotkey contract: route enum, Global Hotkey specs, mapping, and registration results.
+// GlobalHotkeyRoute.cs — Pure global hotkey contract: Global Hotkey specs, mapping, and registration results.
 //
-// Defines the four Global Hotkeys with stable ids, modifier/VK constants,
-// and the capture route each Global Hotkey triggers. Free of WinUI and Win32 dependencies
-// so headless xUnit tests can verify the full mapping without a desktop session.
+// Defines the four Global Hotkeys with stable Win32 ids, modifier/VK constants, and the
+// capture route (defined in captcho.Capture.GlobalHotkeyRoute) each Global Hotkey triggers.
+// Free of WinUI dependencies so headless xUnit tests can verify the full mapping without a
+// desktop session. The capture route identity itself is owned by the capture/persistence
+// layer so AppSettings never depends on this UI-layer map to interpret persisted state.
 
 using System;
 using System.Collections.Generic;
@@ -10,22 +12,6 @@ using System.Linq;
 using captcho.Capture;
 
 namespace captcho.UI;
-
-/// <summary>
-/// Capture workflow that a global hotkey triggers.
-/// Maps one-to-one with the capture methods on <see cref="CapturePreviewService"/>.
-/// </summary>
-public enum GlobalHotkeyRoute
-{
-    /// <summary>Print Screen — captures the monitor the cursor is on.</summary>
-    CurrentMonitor,
-    /// <summary>Meta (Win) + Print Screen — captures the active (foreground) window.</summary>
-    ActiveWindow,
-    /// <summary>Shift + Print Screen — captures the full virtual desktop.</summary>
-    FullDesktop,
-    /// <summary>Meta (Win) + Shift + Print Screen — opens rectangular region selector.</summary>
-    RectangularRegion,
-}
 
 /// <summary>
 /// Immutable specification of a single global hotkey.
@@ -196,7 +182,8 @@ public static class GlobalHotkeyRouteMap
     /// states map (settings predating per-Global-Hotkey toggles) or a missing entry means
     /// the global hotkey is enabled, matching <see cref="AppSettings.IsGlobalHotkeyEnabled"/>. The
     /// single source of truth for "which Global Hotkeys should be active right now", used by
-    /// both startup registration and the Global Hotkeys tab reconcile.
+    /// both startup registration and the Global Hotkeys tab reconcile. Translates the
+    /// capture-layer route identity to the UI-layer Win32 hotkey ids.
     /// </summary>
     public static IReadOnlySet<int> EnabledGlobalHotkeyIds(AppSettings settings)
     {
@@ -204,7 +191,7 @@ public static class GlobalHotkeyRouteMap
         var ids = new HashSet<int>();
         foreach (var spec in AllSpecs)
         {
-            if (settings.IsGlobalHotkeyEnabled(spec.Id))
+            if (settings.IsGlobalHotkeyEnabled(spec.Route))
                 ids.Add(spec.Id);
         }
         return ids;

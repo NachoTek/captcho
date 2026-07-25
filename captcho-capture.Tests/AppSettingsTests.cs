@@ -1,10 +1,12 @@
 // AppSettingsTests.cs — Unit and persistence tests for the per-Global-Hotkey
 // enabled states on AppSettings.
 //
-// Verifies the default (null = every global hotkey enabled), the per-id resolution, the
+// Verifies the default (null = every global hotkey enabled), the per-route resolution, the
 // deep-copy semantics through Normalized(), JSON round-trip through the
 // ConfigurationService, and that settings files created before per-Global-Hotkey enabled
-// states existed continue to load with every global hotkey enabled.
+// states existed continue to load with every global hotkey enabled. Also covers migration
+// of the earlier M002 wire format (keys were the Win32 stable hotkey ids 1–4) to the
+// current route-name-keyed format.
 
 using System;
 using System.Collections.Generic;
@@ -29,17 +31,23 @@ public class AppSettingsTests : IDisposable
         try { Directory.Delete(_tempDir, true); } catch { }
     }
 
+    // All four capture routes, for exhaustive default/enabled assertions.
+    private static readonly GlobalHotkeyRoute[] AllRoutes =
+    {
+        GlobalHotkeyRoute.CurrentMonitor,
+        GlobalHotkeyRoute.ActiveWindow,
+        GlobalHotkeyRoute.FullDesktop,
+        GlobalHotkeyRoute.RectangularRegion,
+    };
+
     // ── Default: null states means every global hotkey is enabled ───────────────
 
     [Fact]
-    public void IsGlobalHotkeyEnabled_NullStates_EnabledForEveryKnownId()
+    public void IsGlobalHotkeyEnabled_NullStates_EnabledForEveryRoute()
     {
         var settings = new AppSettings();
 
-        Assert.True(settings.IsGlobalHotkeyEnabled(1));
-        Assert.True(settings.IsGlobalHotkeyEnabled(2));
-        Assert.True(settings.IsGlobalHotkeyEnabled(3));
-        Assert.True(settings.IsGlobalHotkeyEnabled(4));
+        Assert.All(AllRoutes, route => Assert.True(settings.IsGlobalHotkeyEnabled(route)));
     }
 
     [Fact]
@@ -48,24 +56,27 @@ public class AppSettingsTests : IDisposable
         var settings = AppSettings.WithDefaults();
 
         Assert.Null(settings.GlobalHotkeyEnabledStates);
-        Assert.True(settings.IsGlobalHotkeyEnabled(2));
+        Assert.True(settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.ActiveWindow));
     }
 
-    // ── Per-id resolution ────────────────────────────────────────────────
+    // ── Per-route resolution ────────────────────────────────────────────────
 
     [Fact]
-    public void IsGlobalHotkeyEnabled_MissingIdTreatedAsEnabled()
+    public void IsGlobalHotkeyEnabled_MissingRouteTreatedAsEnabled()
     {
         var settings = new AppSettings
         {
-            GlobalHotkeyEnabledStates = new Dictionary<int, bool> { [2] = false },
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool>
+            {
+                [GlobalHotkeyRoute.ActiveWindow] = false,
+            },
         };
 
-        // Id 2 is explicitly disabled; every other id is absent -> enabled.
-        Assert.True(settings.IsGlobalHotkeyEnabled(1));
-        Assert.False(settings.IsGlobalHotkeyEnabled(2));
-        Assert.True(settings.IsGlobalHotkeyEnabled(3));
-        Assert.True(settings.IsGlobalHotkeyEnabled(4));
+        // ActiveWindow is explicitly disabled; every other route is absent -> enabled.
+        Assert.True(settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.CurrentMonitor));
+        Assert.False(settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.ActiveWindow));
+        Assert.True(settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.FullDesktop));
+        Assert.True(settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.RectangularRegion));
     }
 
     [Fact]
@@ -73,10 +84,13 @@ public class AppSettingsTests : IDisposable
     {
         var settings = new AppSettings
         {
-            GlobalHotkeyEnabledStates = new Dictionary<int, bool> { [3] = true },
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool>
+            {
+                [GlobalHotkeyRoute.FullDesktop] = true,
+            },
         };
 
-        Assert.True(settings.IsGlobalHotkeyEnabled(3));
+        Assert.True(settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.FullDesktop));
     }
 
     // ── Normalized() deep-copies the states dictionary ───────────────────
@@ -86,18 +100,22 @@ public class AppSettingsTests : IDisposable
     {
         var source = new AppSettings
         {
-            GlobalHotkeyEnabledStates = new Dictionary<int, bool> { [1] = false, [4] = false },
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool>
+            {
+                [GlobalHotkeyRoute.CurrentMonitor] = false,
+                [GlobalHotkeyRoute.RectangularRegion] = false,
+            },
         };
 
         var normalized = source.Normalized();
 
         // Mutating the source after Normalized must not affect the copy.
-        source.GlobalHotkeyEnabledStates![1] = true;
-        Assert.False(normalized.IsGlobalHotkeyEnabled(1));
+        source.GlobalHotkeyEnabledStates![GlobalHotkeyRoute.CurrentMonitor] = true;
+        Assert.False(normalized.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.CurrentMonitor));
 
         // Mutating the copy must not affect the source.
-        normalized.GlobalHotkeyEnabledStates![4] = true;
-        Assert.False(source.IsGlobalHotkeyEnabled(4));
+        normalized.GlobalHotkeyEnabledStates![GlobalHotkeyRoute.RectangularRegion] = true;
+        Assert.False(source.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.RectangularRegion));
     }
 
     [Fact]
@@ -110,7 +128,7 @@ public class AppSettingsTests : IDisposable
         Assert.Null(normalized.GlobalHotkeyEnabledStates);
     }
 
-    // ── JSON round-trip through ConfigurationService ─────────────────────
+    // ── JSON round-trip through ConfigurationService (route-name keys) ─────
 
     [Fact]
     public void SaveThenLoad_PreservesGlobalHotkeyEnabledStates()
@@ -120,7 +138,13 @@ public class AppSettingsTests : IDisposable
         {
             SaveLocation = Path.Combine(_tempDir, "Captures"),
             FilenameTemplate = "shot_<#>",
-            GlobalHotkeyEnabledStates = new Dictionary<int, bool> { [1] = true, [2] = false, [3] = true, [4] = false },
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool>
+            {
+                [GlobalHotkeyRoute.CurrentMonitor] = true,
+                [GlobalHotkeyRoute.ActiveWindow] = false,
+                [GlobalHotkeyRoute.FullDesktop] = true,
+                [GlobalHotkeyRoute.RectangularRegion] = false,
+            },
         };
 
         var saveResult = svc.Save(original);
@@ -130,10 +154,10 @@ public class AppSettingsTests : IDisposable
         Assert.True(loaded.Success);
 
         Assert.NotNull(loaded.Settings.GlobalHotkeyEnabledStates);
-        Assert.True(loaded.Settings.IsGlobalHotkeyEnabled(1));
-        Assert.False(loaded.Settings.IsGlobalHotkeyEnabled(2));
-        Assert.True(loaded.Settings.IsGlobalHotkeyEnabled(3));
-        Assert.False(loaded.Settings.IsGlobalHotkeyEnabled(4));
+        Assert.True(loaded.Settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.CurrentMonitor));
+        Assert.False(loaded.Settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.ActiveWindow));
+        Assert.True(loaded.Settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.FullDesktop));
+        Assert.False(loaded.Settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.RectangularRegion));
     }
 
     [Fact]
@@ -142,17 +166,14 @@ public class AppSettingsTests : IDisposable
         var svc = new ConfigurationService(_tempDir);
         var original = new AppSettings
         {
-            GlobalHotkeyEnabledStates = new Dictionary<int, bool> { [1] = true, [2] = true, [3] = true, [4] = true },
+            GlobalHotkeyEnabledStates = AllRoutes.ToDictionary(r => r, _ => true),
         };
 
         svc.Save(original);
         var loaded = svc.Load();
 
         // All enabled round-trips as enabled regardless of representation.
-        Assert.True(loaded.Settings.IsGlobalHotkeyEnabled(1));
-        Assert.True(loaded.Settings.IsGlobalHotkeyEnabled(2));
-        Assert.True(loaded.Settings.IsGlobalHotkeyEnabled(3));
-        Assert.True(loaded.Settings.IsGlobalHotkeyEnabled(4));
+        Assert.All(AllRoutes, route => Assert.True(loaded.Settings.IsGlobalHotkeyEnabled(route)));
     }
 
     // ── Settings files from before per-Global-Hotkey toggles keep loading ───────
@@ -175,28 +196,104 @@ public class AppSettingsTests : IDisposable
 
         Assert.True(loaded.Success);
         Assert.Null(loaded.Settings.GlobalHotkeyEnabledStates);
-        Assert.True(loaded.Settings.IsGlobalHotkeyEnabled(1));
-        Assert.True(loaded.Settings.IsGlobalHotkeyEnabled(2));
-        Assert.True(loaded.Settings.IsGlobalHotkeyEnabled(3));
-        Assert.True(loaded.Settings.IsGlobalHotkeyEnabled(4));
+        Assert.All(AllRoutes, route => Assert.True(loaded.Settings.IsGlobalHotkeyEnabled(route)));
+    }
+
+    // ── Legacy migration: M002 wire format (stable-id keys 1–4) ────────────────
+
+    [Fact]
+    public void Load_LegacyIntIdKeys_MigratesToRoutesPreservingIntent()
+    {
+        // Settings written by M002 keyed enabled state by the Win32 stable hotkey ids
+        // (1=CurrentMonitor, 2=ActiveWindow, 3=FullDesktop, 4=RectangularRegion).
+        // These must load with the user's intent preserved, not reset to defaults.
+        var legacyJson = """
+        {
+          "saveLocation": "C:\\Captures",
+          "hotkeyEnabledStates": {
+            "1": false,
+            "3": false
+          }
+        }
+        """;
+        File.WriteAllText(Path.Combine(_tempDir, "settings.json"), legacyJson);
+
+        var svc = new ConfigurationService(_tempDir);
+        var loaded = svc.Load();
+
+        Assert.True(loaded.Success);
+        Assert.NotNull(loaded.Settings.GlobalHotkeyEnabledStates);
+        // id 1 -> CurrentMonitor, id 3 -> FullDesktop were disabled.
+        Assert.False(loaded.Settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.CurrentMonitor));
+        Assert.True(loaded.Settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.ActiveWindow));
+        Assert.False(loaded.Settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.FullDesktop));
+        Assert.True(loaded.Settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.RectangularRegion));
+    }
+
+    [Fact]
+    public void Load_LegacyIntIdKeys_AllExplicit_RoundTripsAsRouteNames()
+    {
+        // Every legacy id present; after load+save the file is rewritten with route names.
+        var legacyJson = """
+        {
+          "hotkeyEnabledStates": { "1": true, "2": false, "3": true, "4": false }
+        }
+        """;
+        File.WriteAllText(Path.Combine(_tempDir, "settings.json"), legacyJson);
+
+        var svc = new ConfigurationService(_tempDir);
+        var loaded = svc.Load();
+        Assert.True(loaded.Success);
+        svc.Save(loaded.Settings);
+
+        string rewritten = File.ReadAllText(Path.Combine(_tempDir, "settings.json"));
+        Assert.Contains("\"currentMonitor\"", rewritten);
+        Assert.Contains("\"activeWindow\"", rewritten);
+        Assert.Contains("\"fullDesktop\"", rewritten);
+        Assert.Contains("\"rectangularRegion\"", rewritten);
+        // No legacy numeric keys remain after the rewrite.
+        Assert.DoesNotContain("\"1\"", rewritten);
+        Assert.DoesNotContain("\"2\"", rewritten);
+    }
+
+    [Fact]
+    public void Load_RouteNameKeys_CaseInsensitive_LoadsCorrectly()
+    {
+        // The current wire format uses camelCase route names; reading is case-insensitive.
+        var json = """
+        {
+          "hotkeyEnabledStates": { "FullDesktop": false }
+        }
+        """;
+        File.WriteAllText(Path.Combine(_tempDir, "settings.json"), json);
+
+        var svc = new ConfigurationService(_tempDir);
+        var loaded = svc.Load();
+
+        Assert.True(loaded.Success);
+        Assert.False(loaded.Settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.FullDesktop));
+        Assert.True(loaded.Settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.CurrentMonitor));
     }
 
     // ── JSON shape ───────────────────────────────────────────────────────
 
     [Fact]
-    public void Save_WithDisabledGlobalHotkeys_WritesCamelCaseGlobalHotkeyStates()
+    public void Save_WithDisabledGlobalHotkeys_WritesRouteNameKeys()
     {
         var svc = new ConfigurationService(_tempDir);
         svc.Save(new AppSettings
         {
-            GlobalHotkeyEnabledStates = new Dictionary<int, bool> { [2] = false },
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool>
+            {
+                [GlobalHotkeyRoute.FullDesktop] = false,
+            },
         });
 
         string json = File.ReadAllText(Path.Combine(_tempDir, "settings.json"));
 
         Assert.Contains("\"hotkeyEnabledStates\"", json);
-        // Dictionary keys are the stable Global Hotkey ids as JSON string keys.
-        Assert.Contains("\"2\"", json);
+        // Dictionary keys are the route names (camelCase) — the UI-independent identity.
+        Assert.Contains("\"fullDesktop\"", json);
     }
 
     [Fact]

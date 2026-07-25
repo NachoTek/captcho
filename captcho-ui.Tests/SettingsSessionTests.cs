@@ -234,10 +234,10 @@ public class SettingsSessionTests
         {
             SaveLocation = @"D:\Custom",
             FilenameTemplate = "custom-<title>",
-            GlobalHotkeyEnabledStates = new Dictionary<int, bool>
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool>
             {
-                [GlobalHotkeyRouteMap.IdPrintScreen] = false,
-                [GlobalHotkeyRouteMap.IdWinPrintScreen] = false,
+                [GlobalHotkeyRoute.CurrentMonitor] = false,
+                [GlobalHotkeyRoute.ActiveWindow] = false,
             },
         };
         var session = NewSession(runtime);
@@ -296,9 +296,9 @@ public class SettingsSessionTests
         Assert.Equal(1, recorder.CallCount);
         Assert.NotNull(recorder.LastSaved);
         Assert.Equal(@"D:\New", recorder.LastSaved!.SaveLocation);
-        Assert.False(recorder.LastSaved.IsGlobalHotkeyEnabled(GlobalHotkeyRouteMap.IdPrintScreen));
+        Assert.False(recorder.LastSaved.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.CurrentMonitor));
         // Other Global Hotkey defaults preserved.
-        Assert.True(recorder.LastSaved.IsGlobalHotkeyEnabled(GlobalHotkeyRouteMap.IdWinPrintScreen));
+        Assert.True(recorder.LastSaved.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.ActiveWindow));
         Assert.Equal(SettingsSession.SavedMessage, view.StatusMessage);
         Assert.False(view.StatusIsError);
         Assert.False(view.ShouldClose);
@@ -315,7 +315,7 @@ public class SettingsSessionTests
         session.Apply();
 
         Assert.Equal(@"D:\New", runtime.SaveLocation);
-        Assert.False(runtime.IsGlobalHotkeyEnabled(GlobalHotkeyRouteMap.IdPrintScreen));
+        Assert.False(runtime.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.CurrentMonitor));
     }
 
     [Fact]
@@ -452,7 +452,7 @@ public class SettingsSessionTests
 
         // Runtime untouched — export flow and Global Hotkey runtime see no change.
         Assert.NotEqual(@"D:\Attempted", runtime.SaveLocation);
-        Assert.True(runtime.IsGlobalHotkeyEnabled(GlobalHotkeyRouteMap.IdPrintScreen));
+        Assert.True(runtime.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.CurrentMonitor));
 
         // Baselines untouched — Cancel reverts the (still-uncommitted) edits.
         Assert.Equal(0, adapter.ApplyCallsCount); // no reconcile on failure
@@ -539,7 +539,7 @@ public class SettingsSessionTests
 
         // Runtime untouched on both tabs.
         Assert.NotEqual(@"D:\Attempted", runtime.SaveLocation);
-        Assert.True(runtime.IsGlobalHotkeyEnabled(GlobalHotkeyRouteMap.IdPrintScreen));
+        Assert.True(runtime.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.CurrentMonitor));
 
         // Neither tab's baseline advanced — Cancel reverts both uncommitted edits.
         var afterCancel = session.Cancel();
@@ -574,7 +574,7 @@ public class SettingsSessionTests
         {
             SaveLocation = @"D:\Custom",
             FilenameTemplate = "custom-<title>",
-            GlobalHotkeyEnabledStates = new Dictionary<int, bool> { [GlobalHotkeyRouteMap.IdPrintScreen] = false },
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool> { [GlobalHotkeyRoute.CurrentMonitor] = false },
         };
         var session = new SettingsSession(runtime, recorder, adapter);
 
@@ -587,7 +587,7 @@ public class SettingsSessionTests
         Assert.Null(recorder.LastSaved.GlobalHotkeyEnabledStates);
         // Runtime reflects the persisted defaults.
         Assert.Equal(ExportDefaults.DefaultSaveDirectory, runtime.SaveLocation);
-        Assert.True(runtime.IsGlobalHotkeyEnabled(GlobalHotkeyRouteMap.IdPrintScreen));
+        Assert.True(runtime.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.CurrentMonitor));
         Assert.Equal(1, adapter.ApplyCallsCount);
     }
 

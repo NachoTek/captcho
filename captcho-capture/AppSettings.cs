@@ -27,21 +27,28 @@ public sealed class AppSettings
     public string? FilenameTemplate { get; set; }
 
     /// <summary>
-    /// Per-Global-Hotkey enabled states, keyed by the Global Hotkey's stable id (1–4).
-    /// Null (or an absent id) means the Global Hotkey is enabled — the default, matching
-    /// the pre-existing "every global hotkey on" behavior. When non-null, only ids
-    /// mapped to <c>true</c> are enabled. The ids match <c>GlobalHotkeyRouteMap</c> but
-    /// are kept here as plain integers so this persistence model stays free of UI
-    /// and Win32 dependencies.
+    /// Per-Global-Hotkey enabled states, keyed by the capture route each Global Hotkey
+    /// triggers (<see cref="GlobalHotkeyRoute"/>). Null (or an absent route) means the
+    /// Global Hotkey is enabled — the default, matching the pre-existing "every global
+    /// hotkey on" behavior. When non-null, only routes mapped to <c>true</c> are enabled.
     /// </summary>
     /// <remarks>
-    /// The JSON property name is pinned to the original <c>hotkeyEnabledStates</c> key so
-    /// settings.json files written by earlier builds still load. The C# identifier was
-    /// renamed to the glossary term (Global Hotkey); the on-disk wire format is a
-    /// persistence boundary and is intentionally left unchanged.
+    /// <para>
+    /// Keying by <see cref="GlobalHotkeyRoute"/> — a stable identity defined here in the
+    /// capture layer — keeps this model free of UI and Win32 dependencies.
+    /// The UI layer (<c>GlobalHotkeyRouteMap</c>) maps its Win32 hotkey ids to these
+    /// routes; this layer never needs the UI map to interpret persisted state.
+    /// </para>
+    /// <para>
+    /// The JSON property name is pinned to <c>hotkeyEnabledStates</c> so settings.json
+    /// files written by earlier builds still load. On-disk keys are the route names
+    /// (e.g. <c>currentMonitor</c>); settings written by the earlier int-id-keyed format
+    /// (M002, stable ids 1–4) are migrated on read by the converter.
+    /// </para>
     /// </remarks>
     [JsonPropertyName("hotkeyEnabledStates")]
-    public Dictionary<int, bool>? GlobalHotkeyEnabledStates { get; set; }
+    [JsonConverter(typeof(GlobalHotkeyEnabledStatesConverter))]
+    public Dictionary<GlobalHotkeyRoute, bool>? GlobalHotkeyEnabledStates { get; set; }
 
     // Future properties can be added here. System.Text.Json will ignore
     // unknown properties on read and only serialize declared ones.
@@ -75,14 +82,14 @@ public sealed class AppSettings
             : FilenameTemplate;
 
     /// <summary>
-    /// Resolves whether the global hotkey with the given stable id is enabled.
+    /// Resolves whether the Global Hotkey for the given capture route is enabled.
     /// A null states map (settings file predates per-Global-Hotkey toggles) or a missing
     /// entry means enabled, matching the pre-existing "every global hotkey on"
     /// behavior. An explicit <c>false</c> disables the Global Hotkey.
     /// </summary>
-    public bool IsGlobalHotkeyEnabled(int globalHotkeyId) =>
+    public bool IsGlobalHotkeyEnabled(GlobalHotkeyRoute route) =>
         GlobalHotkeyEnabledStates is null
-        || !GlobalHotkeyEnabledStates.TryGetValue(globalHotkeyId, out bool enabled)
+        || !GlobalHotkeyEnabledStates.TryGetValue(route, out bool enabled)
         || enabled;
 
     /// <summary>
@@ -124,6 +131,6 @@ public sealed class AppSettings
         FilenameTemplate = EffectiveFilenameTemplate,
         GlobalHotkeyEnabledStates = GlobalHotkeyEnabledStates is null
             ? null
-            : new Dictionary<int, bool>(GlobalHotkeyEnabledStates),
+            : new Dictionary<GlobalHotkeyRoute, bool>(GlobalHotkeyEnabledStates),
     };
 }

@@ -12,6 +12,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using captcho.Capture;
 using captcho.UI;
 using Xunit;
 
