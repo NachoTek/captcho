@@ -42,9 +42,10 @@ public sealed class SettingsSession
     private readonly ExportTabSettings _export;
     private readonly InterfaceTabSettings _interface;
 
-    // All editable tabs, in display order, behind the internal tab contract. The session
-    // drives persistence composed across exactly these tabs.
-    private readonly IEditableSettingsTab[] _editableTabs;
+    // All editable tabs, in display order. The session drives persistence composed across
+    // exactly these tabs; it depends on the EditableTabSession seam (snapshot/commit/
+    // cancel/reset live there, tab-specific slices stay on each concrete tab).
+    private readonly EditableTabSession[] _editableTabs;
 
     // Status from the most recent verb. Only Apply/Confirm set it; every Edit, Cancel,
     // and Reset clears it so the View always reflects the most recent action (a fresh
@@ -73,7 +74,7 @@ public sealed class SettingsSession
         _export = new ExportTabSettings();
         _interface = new InterfaceTabSettings();
 
-        _editableTabs = new IEditableSettingsTab[] { _general, _globalHotkeyTab };
+        _editableTabs = new EditableTabSession[] { _general, _globalHotkeyTab };
     }
 
     // ── View ────────────────────────────────────────────────────────────

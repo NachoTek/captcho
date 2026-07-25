@@ -2,13 +2,11 @@
 //
 // Owns the editable per-Global-Hotkey enabled states: a working snapshot of the
 // persisted settings, the display rows (binding, behavior description, registration
-// status) for all four Global Hotkeys, and inline enable/disable editing. Construction
-// snapshots the persisted settings so the active and persisted Settings are never
-// mutated by opening or editing. This tab no longer persists or reconciles runtime
-// registration — it writes its working slice into a merged AppSettings via WriteInto
-// and advances its baseline via Commit at the SettingsSession's direction, which also
-// owns the runtime reconcile through the Global Hotkey adapter. Registration status is
-// read live from the adapter so rows reflect the latest reconcile. Global Hotkey
+// status) for all four Global Hotkeys, and inline enable/disable editing. The shared
+// snapshot/apply/cancel/reset plumbing lives in EditableTabSession (written once); this
+// tab declares only its own Global Hotkeys slice — what to edit, validate, merge via
+// WriteInto, and restore via ApplyDefaults. Registration status is read live from the
+// adapter so rows reflect the latest reconcile driven by the session. Global Hotkey
 // remapping and capture-mode routing are out of scope — only enable/disable per Global Hotkey.
 
 using System;
@@ -55,29 +53,21 @@ public sealed record GlobalHotkeyRow(
 /// persists or mutates the active/persisted Settings on open or edit; the session
 /// orchestrates persistence and runtime registration across all tabs.
 /// </summary>
-public sealed class GlobalHotkeyTabSettings : IEditableSettingsTab
+internal sealed class GlobalHotkeyTabSettings : EditableTabSession
 {
     private readonly IGlobalHotkeyAdapter _globalHotkeys;
 
-    private AppSettings _working;
-    private AppSettings _baseline;
-
     /// <summary>
-    /// Snapshots the persisted settings into working and baseline copies, stores the
-    /// Global Hotkey adapter (read for registration status display), and captures the
-    /// current registration results. The <paramref name="persisted"/> object is never
-    /// mutated by this instance.
+    /// Snapshots the persisted settings into independent working and baseline copies via
+    /// <see cref="EditableTabSession"/>'s constructor, stores the Global Hotkey adapter
+    /// (read for registration status display), and captures the current registration
+    /// results. The <paramref name="persisted"/> object is never mutated by this instance.
     /// </summary>
     public GlobalHotkeyTabSettings(AppSettings persisted, IGlobalHotkeyAdapter globalHotkeys)
+        : base(persisted)
     {
-        ArgumentNullException.ThrowIfNull(persisted);
         ArgumentNullException.ThrowIfNull(globalHotkeys);
-
         _globalHotkeys = globalHotkeys;
-        // Normalized() yields independent deep copies, so the active and persisted
-        // settings are never mutated by opening or editing.
-        _working = persisted.Normalized();
-        _baseline = persisted.Normalized();
     }
 
     // ── Working editable state ──────────────────────────────────────────
@@ -88,7 +78,7 @@ public sealed class GlobalHotkeyTabSettings : IEditableSettingsTab
     /// key); it is translated to the capture-layer route identity here.
     /// </summary>
     public bool IsEnabled(int globalHotkeyId) =>
-        _working.IsGlobalHotkeyEnabled(SpecFor(globalHotkeyId).Route);
+        Working.IsGlobalHotkeyEnabled(SpecFor(globalHotkeyId).Route);
 
     /// <summary>
     /// Sets the working enabled state for a Global Hotkey from user input. Never persists
@@ -98,8 +88,8 @@ public sealed class GlobalHotkeyTabSettings : IEditableSettingsTab
     public void EditEnabled(int globalHotkeyId, bool enabled)
     {
         var route = SpecFor(globalHotkeyId).Route;
-        _working.GlobalHotkeyEnabledStates ??= new Dictionary<GlobalHotkeyRoute, bool>();
-        _working.GlobalHotkeyEnabledStates[route] = enabled;
+        Working.GlobalHotkeyEnabledStates ??= new Dictionary<GlobalHotkeyRoute, bool>();
+        Working.GlobalHotkeyEnabledStates[route] = enabled;
     }
 
     /// <summary>
@@ -174,26 +164,26 @@ public sealed class GlobalHotkeyTabSettings : IEditableSettingsTab
     /// <summary>
     /// Always valid: per-Global-Hotkey enabled states are booleans with no invalid value.
     /// </summary>
-    public bool IsValid => true;
+    public override bool IsValid => true;
 
     /// <summary>First error is always null — enabled states cannot be invalid.</summary>
-    public string? FirstError => null;
+    public override string? FirstError => null;
 
     /// <summary>True when any working enabled state differs from its last applied baseline.</summary>
-    public bool IsDirty
+    public override bool IsDirty
     {
         get
         {
             foreach (var spec in GlobalHotkeyRouteMap.AllSpecs)
             {
-                if (_working.IsGlobalHotkeyEnabled(spec.Route) != _baseline.IsGlobalHotkeyEnabled(spec.Route))
+                if (Working.IsGlobalHotkeyEnabled(spec.Route) != Baseline.IsGlobalHotkeyEnabled(spec.Route))
                     return true;
             }
             return false;
         }
     }
 
-    // ── IEditableSettingsTab: merge, commit, revert, reset ──────────────
+    // ── Global Hotkeys slice: merge, defaults ───────────────────────────
 
     /// <summary>
     /// Writes this tab's working per-Global-Hotkey enabled states into <paramref name="target"/>,
@@ -203,48 +193,27 @@ public sealed class GlobalHotkeyTabSettings : IEditableSettingsTab
     /// the live runtime with the same call). Leaves other tabs' slices untouched so the
     /// session can merge every tab and persist once.
     /// </summary>
-    public void WriteInto(AppSettings target)
+    public override void WriteInto(AppSettings target)
     {
         ArgumentNullException.ThrowIfNull(target);
-        var normalized = NormalizeForPersistence(_working.GlobalHotkeyEnabledStates);
+        var normalized = NormalizeForPersistence(Working.GlobalHotkeyEnabledStates);
         target.GlobalHotkeyEnabledStates = normalized is null
             ? null
             : new Dictionary<GlobalHotkeyRoute, bool>(normalized);
     }
 
     /// <summary>
-    /// Advances the baseline to the current working state. Called by the session only
-    /// after a successful persist, so Cancel no longer reverts the committed change.
+    /// Restores this tab's per-Global-Hotkey enabled states to their default (every
+    /// Global Hotkey enabled), read from <see cref="AppSettings.WithDefaults"/> (the
+    /// single default source shared by every tab). Only this tab's slice is touched; the
+    /// baseline is left untouched by <see cref="EditableTabSession.Reset"/>, so Reset alone
+    /// never persists or reconciles runtime registration, and a later Cancel still reverts
+    /// to the states that existed before Reset. Apply or OK after Reset persists
+    /// all-enabled and the session reconciles runtime.
     /// </summary>
-    public void Commit()
+    protected override void ApplyDefaults(AppSettings working)
     {
-        _baseline = _working.Normalized();
-    }
-
-    /// <summary>
-    /// Discards edits made since the last successful Apply (or since open if Apply
-    /// has not run), reverting the working enabled states to the baseline. Never
-    /// persists or reconciles runtime registration.
-    /// </summary>
-    public void Cancel()
-    {
-        _working = _baseline.Normalized();
-    }
-
-    /// <summary>
-    /// Restores every Global Hotkey to enabled (the default) in the current editing
-    /// session, so the user can inspect the default enabled state immediately. The
-    /// baseline is left untouched and runtime registration is never reconciled, so
-    /// Reset alone does not persist or change runtime Global Hotkey registrations,
-    /// and a later Cancel still reverts to the states that existed before Reset.
-    /// Apply or OK after Reset persists all-enabled and the session reconciles runtime.
-    /// </summary>
-    public void Reset()
-    {
-        // A null states map means every Global Hotkey is enabled — exactly the
-        // default (and reset) state. Only this tab's slice is reset so a Global Hotkeys
-        // Reset cannot leak into the General tab's fields in the working snapshot.
-        _working.GlobalHotkeyEnabledStates = null;
+        working.GlobalHotkeyEnabledStates = AppSettings.WithDefaults().GlobalHotkeyEnabledStates;
     }
 
     private static Dictionary<GlobalHotkeyRoute, bool>? NormalizeForPersistence(Dictionary<GlobalHotkeyRoute, bool>? states)

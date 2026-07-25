@@ -1,11 +1,12 @@
 // GeneralTabSettings.cs — Pure C# editing seam for the General settings tab.
 //
 // Owns the editable Save Location and Filename Template: a working snapshot of the
-// persisted settings, a live filename preview, and inline validation. Construction
-// snapshots the persisted settings so the active and persisted Settings are never
-// mutated by opening or editing. This tab no longer persists — it writes its working
-// slice into a merged AppSettings via WriteInto and advances its baseline via Commit
-// at the SettingsSession's direction, so the session can persist all tabs atomically.
+// persisted settings, a live filename preview, and inline validation. The shared
+// snapshot/apply/cancel/reset plumbing lives in EditableTabSession (written once); this
+// tab declares only its own General slice — what to edit, validate, merge via WriteInto,
+// and restore via ApplyDefaults. Never persists — it writes its working slice into a
+// merged AppSettings via WriteInto and advances its baseline via Commit at the
+// SettingsSession's direction, so the session can persist all tabs atomically.
 
 using System;
 using System.Collections.Generic;
@@ -26,23 +27,16 @@ public sealed record FilenameTemplatePlaceholder(string Token, string Descriptio
 /// Never persists or mutates the active/persisted Settings on open or edit; the
 /// <see cref="SettingsSession"/> orchestrates persistence across all tabs.
 /// </summary>
-public sealed class GeneralTabSettings : IEditableSettingsTab
+internal sealed class GeneralTabSettings : EditableTabSession
 {
-    private AppSettings _working;
-    private AppSettings _baseline;
-
     /// <summary>
-    /// Snapshots the persisted settings into working and baseline copies. The
-    /// <paramref name="persisted"/> object is never mutated by this instance.
+    /// Snapshots the persisted settings into independent working and baseline copies via
+    /// <see cref="EditableTabSession"/>'s constructor. The <paramref name="persisted"/>
+    /// object is never mutated by this instance.
     /// </summary>
     public GeneralTabSettings(AppSettings persisted)
+        : base(persisted)
     {
-        ArgumentNullException.ThrowIfNull(persisted);
-
-        // Normalized() yields independent copies carrying effective defaults, so the
-        // active and persisted settings are never mutated by opening or editing.
-        _working = persisted.Normalized();
-        _baseline = persisted.Normalized();
     }
 
     // ── Working editable state ──────────────────────────────────────────
@@ -51,7 +45,7 @@ public sealed class GeneralTabSettings : IEditableSettingsTab
     /// The current working Filename Template value (effective: the default when the
     /// persisted value was null/empty). Editing updates this without touching the source.
     /// </summary>
-    public string FilenameTemplate => _working.FilenameTemplate!;
+    public string FilenameTemplate => Working.FilenameTemplate!;
 
     /// <summary>
     /// Sets the working Filename Template from user input and recomputes the preview.
@@ -60,7 +54,7 @@ public sealed class GeneralTabSettings : IEditableSettingsTab
     public void EditFilenameTemplate(string value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        _working.FilenameTemplate = value;
+        Working.FilenameTemplate = value;
     }
 
     /// <summary>
@@ -69,9 +63,9 @@ public sealed class GeneralTabSettings : IEditableSettingsTab
     /// template is blank (no representative filename can be produced).
     /// </summary>
     public string FilenameTemplatePreview =>
-        string.IsNullOrWhiteSpace(_working.FilenameTemplate)
+        string.IsNullOrWhiteSpace(Working.FilenameTemplate)
             ? string.Empty
-            : ExportFilenameTemplate.Expand(_working.FilenameTemplate, SampleTimestamp, SampleTitle)
+            : ExportFilenameTemplate.Expand(Working.FilenameTemplate, SampleTimestamp, SampleTitle)
                 + "." + ExportDefaults.DefaultExtension;
 
     // Fixed sample inputs so the preview is a stable, representative filename.
@@ -84,7 +78,7 @@ public sealed class GeneralTabSettings : IEditableSettingsTab
     /// The current working Save Location value (effective: the default when the
     /// persisted value was null/empty). Editing updates this without touching the source.
     /// </summary>
-    public string SaveLocation => _working.SaveLocation!;
+    public string SaveLocation => Working.SaveLocation!;
 
     /// <summary>
     /// Sets the working Save Location from user input (a typed path or a folder-picker
@@ -93,7 +87,7 @@ public sealed class GeneralTabSettings : IEditableSettingsTab
     public void EditSaveLocation(string value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        _working.SaveLocation = value;
+        Working.SaveLocation = value;
     }
 
     /// <summary>
@@ -120,15 +114,15 @@ public sealed class GeneralTabSettings : IEditableSettingsTab
     /// mirroring <see cref="AppSettings.Validate"/>.
     /// </summary>
     public bool IsSaveLocationValid =>
-        string.IsNullOrWhiteSpace(_working.SaveLocation) || Path.IsPathRooted(_working.SaveLocation);
+        string.IsNullOrWhiteSpace(Working.SaveLocation) || Path.IsPathRooted(Working.SaveLocation);
 
     /// <summary>True when every working field passes its validation rule.</summary>
-    public bool IsValid =>
-        !string.IsNullOrWhiteSpace(_working.FilenameTemplate) && IsSaveLocationValid;
+    public override bool IsValid =>
+        !string.IsNullOrWhiteSpace(Working.FilenameTemplate) && IsSaveLocationValid;
 
     /// <summary>An inline validation message for the Filename Template, or null when valid.</summary>
     public string? FilenameTemplateError =>
-        string.IsNullOrWhiteSpace(_working.FilenameTemplate) ? EmptyTemplateError : null;
+        string.IsNullOrWhiteSpace(Working.FilenameTemplate) ? EmptyTemplateError : null;
 
     /// <summary>An inline validation message for the Save Location, or null when valid.</summary>
     public string? SaveLocationError => IsSaveLocationValid ? null : RelativeSaveLocationError;
@@ -137,57 +131,41 @@ public sealed class GeneralTabSettings : IEditableSettingsTab
     /// First validation error across this tab's fields, or null when the tab is valid.
     /// Used by the session to build a status message when an invalid Apply/OK is attempted.
     /// </summary>
-    public string? FirstError => FilenameTemplateError ?? SaveLocationError;
+    public override string? FirstError => FilenameTemplateError ?? SaveLocationError;
 
     /// <summary>
     /// True when any working field differs from its last applied baseline.
     /// </summary>
-    public bool IsDirty =>
-        !string.Equals(_working.FilenameTemplate, _baseline.FilenameTemplate, StringComparison.Ordinal)
-        || !string.Equals(_working.SaveLocation, _baseline.SaveLocation, StringComparison.Ordinal);
+    public override bool IsDirty =>
+        !string.Equals(Working.FilenameTemplate, Baseline.FilenameTemplate, StringComparison.Ordinal)
+        || !string.Equals(Working.SaveLocation, Baseline.SaveLocation, StringComparison.Ordinal);
 
-    // ── IEditableSettingsTab: merge, commit, revert, reset ──────────────
+    // ── General slice: merge, defaults ──────────────────────────────────
 
     /// <summary>
     /// Writes this tab's working Save Location and Filename Template slice into
     /// <paramref name="target"/>. Other tabs' slices are left untouched so the session
     /// can merge every tab into one AppSettings and persist it once.
     /// </summary>
-    public void WriteInto(AppSettings target)
+    public override void WriteInto(AppSettings target)
     {
         ArgumentNullException.ThrowIfNull(target);
-        target.SaveLocation = _working.SaveLocation;
-        target.FilenameTemplate = _working.FilenameTemplate;
+        target.SaveLocation = Working.SaveLocation;
+        target.FilenameTemplate = Working.FilenameTemplate;
     }
 
     /// <summary>
-    /// Advances the baseline to the current working state. Called by the session only
-    /// after a successful persist, so Cancel no longer reverts the committed change.
+    /// Restores this tab's Save Location and Filename Template to their defaults, read
+    /// from <see cref="AppSettings.WithDefaults"/> (the single default source shared by
+    /// every tab). Only this tab's slice is touched; the baseline is left untouched by
+    /// <see cref="EditableTabSession.Reset"/>, so Reset alone never persists and a later
+    /// Cancel still reverts to the settings that existed before Reset.
     /// </summary>
-    public void Commit()
+    protected override void ApplyDefaults(AppSettings working)
     {
-        _baseline = _working.Normalized();
-    }
-
-    /// <summary>
-    /// Discards all edits made since the last successful Apply (or since open if Apply
-    /// has not run), reverting the working settings to the baseline. Never persists.
-    /// </summary>
-    public void Cancel()
-    {
-        _working = _baseline.Normalized();
-    }
-
-    /// <summary>
-    /// Restores the working Save Location and Filename Template to their defaults in the
-    /// current editing session so the user can inspect the defaults, preview, and
-    /// validation results immediately. The baseline is left untouched, so Reset alone
-    /// never persists or changes runtime state, and a later Cancel still reverts to the
-    /// settings that existed before Reset. Apply or OK after Reset persists the defaults.
-    /// </summary>
-    public void Reset()
-    {
-        _working = AppSettings.WithDefaults();
+        var defaults = AppSettings.WithDefaults();
+        working.SaveLocation = defaults.SaveLocation;
+        working.FilenameTemplate = defaults.FilenameTemplate;
     }
 
     // ── Placeholder reference ───────────────────────────────────────────
