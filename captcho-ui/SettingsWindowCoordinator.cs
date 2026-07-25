@@ -58,6 +58,9 @@ public sealed class SettingsSaveReport
 /// </summary>
 public sealed class SettingsWindowCoordinator
 {
+    /// <summary>Shared inline message used when settings are persisted successfully.</summary>
+    internal const string SavedMessage = "Settings saved successfully.";
+
     private readonly ConfigurationService _configurationService;
     private readonly CreateSettingsWindow _createWindow;
     private readonly ActivateSettingsWindow _activateWindow;
@@ -146,7 +149,7 @@ public sealed class SettingsWindowCoordinator
             return new SettingsSaveReport
             {
                 Success = true,
-                Message = "Settings saved successfully.",
+                Message = SavedMessage,
                 ConfigPath = result.ConfigPath,
             };
         }

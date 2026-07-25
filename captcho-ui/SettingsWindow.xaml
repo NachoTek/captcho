@@ -23,16 +23,39 @@ Layout:
         <!-- TabView row -->
         <TabView Grid.Row="0" Padding="16,16">
             <TabViewItem Header="General">
-                <StackPanel Spacing="12" Padding="20">
-                    <TextBlock Text="General settings are not implemented yet."
-                               TextWrapping="Wrap"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                               FontSize="14"/>
-                    <TextBlock Text="This tab will contain application-wide settings."
-                               TextWrapping="Wrap"
-                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                               FontSize="13"/>
-                </StackPanel>
+                <ScrollViewer Padding="20" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="Filename Template"
+                                   FontSize="14" FontWeight="SemiBold"/>
+                        <TextBox x:Name="FilenameTemplateInput"
+                                 TextChanged="FilenameTemplateInput_TextChanged"
+                                 PlaceholderText="e.g. captcho_&lt;yyyy&gt;-&lt;MM&gt;-&lt;dd&gt;_&lt;hh&gt;&lt;mm&gt;&lt;ss&gt;"
+                                 MinWidth="400" MaxWidth="600"
+                                 HorizontalAlignment="Stretch"/>
+                        <TextBlock x:Name="FilenameTemplateErrorText"
+                                   Foreground="{ThemeResource TextFillColorCriticalBrush}"
+                                   FontSize="12"
+                                   TextWrapping="Wrap"
+                                   Visibility="Collapsed"/>
+                        <TextBlock Text="Preview"
+                                   FontSize="13"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock x:Name="FilenameTemplatePreviewText"
+                                   FontSize="13" FontFamily="Consolas"
+                                   IsTextSelectionEnabled="True"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock Text="Available placeholders"
+                                   FontSize="13"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   Margin="0,8,0,0"/>
+                        <TextBlock x:Name="PlaceholdersList"
+                                   FontFamily="Consolas"
+                                   FontSize="12"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                    </StackPanel>
+                </ScrollViewer>
             </TabViewItem>
 
             <TabViewItem Header="Hotkeys">
@@ -54,7 +77,7 @@ Layout:
                                TextWrapping="Wrap"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                FontSize="14"/>
-                    <TextBlock Text="This tab will contain save location and filename template options."
+                    <TextBlock Text="This tab will contain export format and quality options."
                                TextWrapping="Wrap"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                FontSize="13"/>

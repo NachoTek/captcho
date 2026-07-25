@@ -1,13 +1,16 @@
 // SettingsWindow.xaml.cs — Settings dialog with tabbed configuration pages.
 //
 // Provides a Window subclass (not ContentDialog) with TabView containing four tabs:
-// General, Hotkeys, Export, and Interface. Tab content is placeholder until downstream
-// slices implement each tab. Bottom row contains OK (save+close), Cancel (close),
-// and Apply (save) buttons with inline save status feedback.
+// General, Hotkeys, Export, and Interface. The General tab edits the Filename Template
+// through the pure C# GeneralTabSettings seam (preview, validation, Apply/OK/Cancel).
+// Hotkeys/Export/Interface remain placeholders for later slices. The bottom row has
+// OK (save+close on success), Cancel (discard+close), and Apply (save, stay open).
 // Window position and size are persisted to ApplicationData.Current.LocalSettings.
 
 using System;
+using System.Linq;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using captcho.Capture;
 
 namespace captcho.UI;
@@ -22,12 +25,19 @@ public sealed partial class SettingsWindow : Window
     private readonly ConfigurationService? _configService;
     private readonly Windows.Storage.ApplicationDataContainer _localSettings;
 
+    /// <summary>
+    /// Pure C# editing seam for the General tab. Null only when the window fails to
+    /// initialize (e.g., unexpected design-time state). All General-tab UI state and the
+    /// Apply/OK/Cancel session flow through this coordinator.
+    /// </summary>
+    private GeneralTabSettings? _generalTab;
+
     private const string WindowPlacementKey = "SettingsWindowPlacement";
 
     /// <summary>
     /// Production constructor that receives current settings and optional configuration service.
     /// </summary>
-    /// <param name="settings">Current application settings (will not be mutated in S01).</param>
+    /// <param name="settings">Current application settings (snapshotted by the General tab; never mutated).</param>
     /// <param name="configService">Optional configuration service for persisting settings (nullable for design-time).</param>
     public SettingsWindow(AppSettings settings, ConfigurationService? configService)
     {
@@ -44,97 +54,136 @@ public sealed partial class SettingsWindow : Window
         // Restore saved window placement if available
         LoadWindowPlacement();
 
+        // Wire the General tab editing seam (snapshots settings; never mutates the active settings)
+        InitializeGeneralTab();
+
         // Hook Closed event for coordinator cleanup
         this.Closed += OnWindowClosed;
     }
 
+    // ── General tab seam wiring ──────────────────────────────────────────
+
     /// <summary>
-    /// Handles OK button click — saves settings and closes the window.
+    /// Constructs the General tab editing seam from a snapshot of the current settings
+    /// and populates the template input, preview, and placeholder reference.
+    /// </summary>
+    private void InitializeGeneralTab()
+    {
+        // When no ConfigurationService is available (design-time), surface that as a save
+        // failure rather than crashing; the seam still drives validation and preview.
+        SaveSettingsDelegate save = _configService is not null
+            ? s => _configService.Save(s)
+            : _ => new ConfigurationSaveResult
+            {
+                Success = false,
+                Phase = "DesignTime",
+                ErrorMessage = "ConfigurationService not available (design-time).",
+            };
+
+        _generalTab = new GeneralTabSettings(_settings, save);
+
+        // Placeholder reference is static documentation derived from ExportFilenameTemplate.
+        PlaceholdersList.Text = string.Join("\n",
+            GeneralTabSettings.SupportedPlaceholders.Select(
+                p => $"{p.Token} — {p.Description} ({p.Example})"));
+
+        // Loading the input fires TextChanged, which refreshes preview and button gating.
+        FilenameTemplateInput.Text = _generalTab.FilenameTemplate;
+        RefreshGeneralTabState();
+    }
+
+    /// <summary>
+    /// Pushes template edits from the TextBox into the seam, then refreshes the
+    /// preview, inline error, and Apply/OK button gating.
+    /// </summary>
+    private void FilenameTemplateInput_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_generalTab is null)
+            return;
+
+        _generalTab.EditFilenameTemplate(FilenameTemplateInput.Text);
+        RefreshGeneralTabState();
+    }
+
+    /// <summary>
+    /// Reflects the seam's preview, validation, and gating state into the controls.
+    /// </summary>
+    private void RefreshGeneralTabState()
+    {
+        if (_generalTab is null)
+            return;
+
+        FilenameTemplatePreviewText.Text = string.IsNullOrEmpty(_generalTab.FilenameTemplatePreview)
+            ? "—"
+            : _generalTab.FilenameTemplatePreview;
+
+        string? error = _generalTab.FilenameTemplateError;
+        FilenameTemplateErrorText.Text = error ?? string.Empty;
+        FilenameTemplateErrorText.Visibility = _generalTab.IsValid
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+
+        ApplyButton.IsEnabled = _generalTab.CanApply;
+        OKButton.IsEnabled = _generalTab.CanConfirm;
+    }
+
+    /// <summary>
+    /// Displays an inline status message, colored by success or failure.
+    /// </summary>
+    private void ShowStatus(bool success, string message)
+    {
+        SaveStatusText.Text = message;
+        SaveStatusText.Foreground = success
+            ? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
+            : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorCriticalBrush"];
+    }
+
+    // ── Command buttons ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Handles OK button click — persists via the seam and closes only after a
+    /// successful save. Save failures are shown inline and the window stays open.
     /// </summary>
     private void OK_Click(object sender, RoutedEventArgs e)
     {
-        SaveWindowPlacement();
-        SaveSettings();
-        Close();
-    }
-
-    /// <summary>
-    /// Handles Cancel button click — closes the window without saving.
-    /// </summary>
-    private void Cancel_Click(object sender, RoutedEventArgs e)
-    {
-        SaveWindowPlacement();
-        Close();
-    }
-
-    /// <summary>
-    /// Handles Apply button click — saves settings while keeping the window open.
-    /// </summary>
-    private void Apply_Click(object sender, RoutedEventArgs e)
-    {
-        SaveSettings();
-    }
-
-    /// <summary>
-    /// Saves current settings using ConfigurationService and displays inline status.
-    /// In S01, this saves the original settings without field mutations since no editable
-    /// fields exist yet. Downstream tabs will add field bindings and update _settings.
-    /// </summary>
-    private void SaveSettings()
-    {
-        if (_configService == null)
+        if (_generalTab is null)
         {
-            SaveStatusText.Text = "Cannot save: ConfigurationService not available (design-time).";
-            SaveStatusText.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorCautionBrush"];
+            Close();
             return;
         }
 
-        try
-        {
-            var result = _configService.Save(_settings);
+        var result = _generalTab.Confirm();
+        ShowStatus(result.Success, result.Message);
 
-            if (result.Success)
-            {
-                SaveStatusText.Text = "Settings saved successfully.";
-                SaveStatusText.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorPrimaryBrush"];
-            }
-            else
-            {
-                // Use sanitized error message from ConfigurationSaveResult
-                var message = FormatSaveResultMessage(result);
-                SaveStatusText.Text = $"Save failed: {message}";
-                SaveStatusText.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorCriticalBrush"];
-            }
-        }
-        catch (Exception ex)
+        if (result.ShouldClose)
         {
-            // Unexpected exceptions should not crash the window; surface inline instead
-            SaveStatusText.Text = $"Save failed: {ex.Message}";
-            SaveStatusText.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorCriticalBrush"];
+            SaveWindowPlacement();
+            Close();
         }
     }
 
     /// <summary>
-    /// Formats a ConfigurationSaveResult into a user-friendly message using sanitized fields.
+    /// Handles Cancel button click — discards edits since the last Apply and closes.
+    /// Persisted settings are left unchanged.
     /// </summary>
-    private static string FormatSaveResultMessage(ConfigurationSaveResult result)
+    private void Cancel_Click(object sender, RoutedEventArgs e)
     {
-        if (result.Phase != null && result.ErrorMessage != null)
-        {
-            return $"{result.Phase}: {result.ErrorMessage}";
-        }
-        else if (result.Phase != null)
-        {
-            return $"Failed during {result.Phase}.";
-        }
-        else if (result.ErrorMessage != null)
-        {
-            return result.ErrorMessage;
-        }
-        else
-        {
-            return "Unknown error.";
-        }
+        _generalTab?.Cancel();
+        SaveWindowPlacement();
+        Close();
+    }
+
+    /// <summary>
+    /// Handles Apply button click — persists via the seam and keeps the window open.
+    /// Save failures are shown inline without reporting success.
+    /// </summary>
+    private void Apply_Click(object sender, RoutedEventArgs e)
+    {
+        if (_generalTab is null)
+            return;
+
+        var result = _generalTab.Apply();
+        ShowStatus(result.Success, result.Message);
     }
 
     /// <summary>
