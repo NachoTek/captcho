@@ -1,67 +1,56 @@
-// SettingsWindowCoordinator.cs — Testable lifecycle coordinator for settings window.
+// SettingsWindowCoordinator.cs — Testable lifecycle coordinator for the settings window.
 //
-// Manages singleton settings window lifecycle: create-or-activate, close cleanup,
-// and save-result reporting. Uses delegates to avoid WinUI control dependencies
-// and enable headless testing. Mirrors MainWindow settings window logic.
+// Manages singleton settings window lifecycle only: create-or-activate, close cleanup.
+// On each window-open it constructs a fresh SettingsSession (the composed, WinUI-free
+// session that owns the Apply/OK/Cancel/Reset flow) through a delegate and hands it to
+// the window factory, so the window receives a fully-wired session and stays a thin
+// adapter. Uses delegates throughout to avoid WinUI control dependencies and enable
+// headless testing.
 
 using System;
-using System.Collections.Generic;
 using System.Runtime.CompilerServices;
-using captcho.Capture;
 
 [assembly: InternalsVisibleTo("captcho-ui.Tests")]
 
 namespace captcho.UI;
 
 /// <summary>
-/// Factory delegate for creating a settings window instance.
+/// Factory delegate that constructs a fresh <see cref="SettingsSession"/> for a new
+/// window-open. Captures the shared runtime settings, ConfigurationService, and Global
+/// Hotkey adapter so the coordinator stays free of those dependencies.
+/// </summary>
+/// <returns>A new session bound to the live runtime settings.</returns>
+public delegate SettingsSession CreateSettingsSession();
+
+/// <summary>
+/// Factory delegate that creates a settings window instance for a given session.
 /// Returns a handle that can be used for activation and closed tracking.
 /// </summary>
+/// <param name="session">The composed session the window routes events to.</param>
 /// <returns>A window handle, or null if creation failed.</returns>
-public delegate object? CreateSettingsWindow();
+public delegate object? CreateSettingsWindow(SettingsSession session);
 
 /// <summary>
 /// Delegate to activate an existing settings window.
 /// </summary>
-/// <param name="windowHandle">Handle returned from CreateSettingsWindow.</param>
+/// <param name="windowHandle">Handle returned from <see cref="CreateSettingsWindow"/>.</param>
 public delegate void ActivateSettingsWindow(object windowHandle);
 
 /// <summary>
 /// Delegate to subscribe to window closed events.
 /// </summary>
-/// <param name="windowHandle">Handle returned from CreateSettingsWindow.</param>
+/// <param name="windowHandle">Handle returned from <see cref="CreateSettingsWindow"/>.</param>
 /// <param name="onClosed">Callback invoked when the window closes.</param>
 public delegate void SubscribeToWindowClosed(object windowHandle, Action onClosed);
 
 /// <summary>
-/// Result of a settings save operation formatted for UI display.
-/// </summary>
-public sealed class SettingsSaveReport
-{
-    /// <summary>Whether the save succeeded.</summary>
-    public bool Success { get; init; }
-
-    /// <summary>Formatted message suitable for UI display (sanitized, no stack traces).</summary>
-    public string Message { get; init; } = string.Empty;
-
-    /// <summary>Phase where failure occurred, if any.</summary>
-    public string? Phase { get; init; }
-
-    /// <summary>Full path to the configuration file.</summary>
-    public string ConfigPath { get; init; } = string.Empty;
-}
-
-/// <summary>
-/// Manages singleton settings window lifecycle with testable delegates.
-/// Ensures only one settings window exists at a time and tracks state
-/// across create/activate/close operations.
+/// Manages singleton settings window lifecycle with testable delegates. On each open it
+/// constructs one <see cref="SettingsSession"/> and a window bound to it. Ensures only
+/// one settings window exists at a time and tracks state across create/activate/close.
 /// </summary>
 public sealed class SettingsWindowCoordinator
 {
-    /// <summary>Shared inline message used when settings are persisted successfully.</summary>
-    internal const string SavedMessage = "Settings saved successfully.";
-
-    private readonly ConfigurationService _configurationService;
+    private readonly CreateSettingsSession _createSession;
     private readonly CreateSettingsWindow _createWindow;
     private readonly ActivateSettingsWindow _activateWindow;
     private readonly SubscribeToWindowClosed _subscribeToClosed;
@@ -70,27 +59,18 @@ public sealed class SettingsWindowCoordinator
     private object? _currentWindow;
 
     /// <summary>
-    /// Creates a coordinator with production defaults.
-    /// </summary>
-    public SettingsWindowCoordinator()
-        : this(
-            new ConfigurationService(),
-            () => throw new NotImplementedException("Production CreateSettingsWindow must be provided"),
-            _ => throw new NotImplementedException("Production ActivateSettingsWindow must be provided"),
-            (_, _) => throw new NotImplementedException("Production SubscribeToWindowClosed must be provided"))
-    {
-    }
-
-    /// <summary>
-    /// Creates a coordinator with explicit delegates (for testing or dependency injection).
+    /// Creates a coordinator with explicit delegates (production wiring and testing).
+    /// The session/window/activate/closed delegates are all required — there is no
+    /// production-default constructor because every delegate must be wired to real
+    /// WinUI behavior by the host (MainWindow).
     /// </summary>
     public SettingsWindowCoordinator(
-        ConfigurationService configurationService,
+        CreateSettingsSession createSession,
         CreateSettingsWindow createWindow,
         ActivateSettingsWindow activateWindow,
         SubscribeToWindowClosed subscribeToClosed)
     {
-        _configurationService = configurationService ?? throw new ArgumentNullException(nameof(configurationService));
+        _createSession = createSession ?? throw new ArgumentNullException(nameof(createSession));
         _createWindow = createWindow ?? throw new ArgumentNullException(nameof(createWindow));
         _activateWindow = activateWindow ?? throw new ArgumentNullException(nameof(activateWindow));
         _subscribeToClosed = subscribeToClosed ?? throw new ArgumentNullException(nameof(subscribeToClosed));
@@ -107,8 +87,9 @@ public sealed class SettingsWindowCoordinator
     public bool IsWindowOpen => _currentWindow != null;
 
     /// <summary>
-    /// Creates or activates the settings window.
-    /// If a window already exists, activates it instead of creating a new one.
+    /// Creates or activates the settings window. If a window already exists, activates
+    /// it instead of creating a new one. On a fresh open, constructs a new session and
+    /// a window bound to it.
     /// </summary>
     /// <returns>True if a window exists (either created or activated), false if creation failed.</returns>
     public bool CreateOrActivate()
@@ -120,8 +101,9 @@ public sealed class SettingsWindowCoordinator
             return true;
         }
 
-        // Create new window
-        var newWindow = _createWindow();
+        // One composed session per window-open.
+        var session = _createSession();
+        var newWindow = _createWindow(session);
         if (newWindow == null)
         {
             return false; // Creation failed
@@ -135,83 +117,11 @@ public sealed class SettingsWindowCoordinator
     }
 
     /// <summary>
-    /// Saves settings and returns a formatted report.
-    /// Never throws; returns a report with success/failure information.
-    /// </summary>
-    /// <param name="settings">Settings to save.</param>
-    /// <returns>Report with success status and sanitized error messages.</returns>
-    public SettingsSaveReport SaveSettings(AppSettings settings)
-    {
-        var result = _configurationService.Save(settings);
-
-        if (result.Success)
-        {
-            return new SettingsSaveReport
-            {
-                Success = true,
-                Message = SavedMessage,
-                ConfigPath = result.ConfigPath,
-            };
-        }
-        else
-        {
-            // Sanitized error message from ConfigurationService
-            var message = FormatSaveFailureMessage(result);
-
-            return new SettingsSaveReport
-            {
-                Success = false,
-                Message = message,
-                Phase = result.Phase,
-                ConfigPath = result.ConfigPath,
-            };
-        }
-    }
-
-    /// <summary>
-    /// Loads settings from the configuration file.
-    /// Never throws; returns defaults if load fails.
-    /// </summary>
-    /// <returns>Loaded settings or defaults.</returns>
-    public AppSettings LoadSettings()
-    {
-        var result = _configurationService.Load();
-        return result.Settings;
-    }
-
-    /// <summary>
     /// Cleanup callback invoked when the settings window closes.
     /// Clears the current window reference.
     /// </summary>
     private void OnWindowClosed()
     {
         _currentWindow = null;
-    }
-
-    /// <summary>
-    /// Formats a save failure message for UI display.
-    /// Keeps sanitized error messages visible without throwing.
-    /// Internal for testability.
-    /// </summary>
-    internal static string FormatSaveFailureMessage(ConfigurationSaveResult result)
-    {
-        var parts = new List<string>();
-
-        if (!string.IsNullOrWhiteSpace(result.Phase))
-        {
-            parts.Add($"Failed during '{result.Phase}'.");
-        }
-
-        if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
-        {
-            parts.Add(result.ErrorMessage);
-        }
-
-        if (parts.Count == 0)
-        {
-            return "Failed to save settings.";
-        }
-
-        return string.Join(" ", parts);
     }
 }

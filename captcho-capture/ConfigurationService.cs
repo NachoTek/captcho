@@ -68,8 +68,10 @@ public sealed class ConfigurationSaveResult
 /// Loads and saves <see cref="AppSettings"/> from/to a JSON configuration file.
 /// Supports path injection for testing via the constructor.
 /// Production default: %LOCALAPPDATA%\captcho\settings.json
+/// Not sealed so tests can substitute a forced save result by overriding
+/// <see cref="Save(AppSettings)"/> (the class stays the single seam, no port needed).
 /// </summary>
-public sealed class ConfigurationService
+public class ConfigurationService
 {
     private const string SettingsFileName = "settings.json";
     private const string BackupExtension = ".backup";
@@ -200,9 +202,10 @@ public sealed class ConfigurationService
 
     /// <summary>
     /// Saves settings to the JSON file using an atomic temp+replace strategy.
-    /// Never throws for expected file/IO failures.
+    /// Never throws for expected file/IO failures. Virtual so tests can substitute
+    /// a forced result without a port adapter (the class stays the single seam).
     /// </summary>
-    public ConfigurationSaveResult Save(AppSettings settings)
+    public virtual ConfigurationSaveResult Save(AppSettings settings)
     {
         // 1. Ensure directory exists
         try

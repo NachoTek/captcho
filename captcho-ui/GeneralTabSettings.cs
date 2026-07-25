@@ -1,10 +1,11 @@
 // GeneralTabSettings.cs — Pure C# editing seam for the General settings tab.
 //
-// Owns the editable Save Location and Filename Template plus the settings session
-// used by the Settings window: a working snapshot of the persisted settings, a live
-// filename preview, inline validation, and Apply/OK/Cancel actions backed by an
-// injected save delegate. Construction snapshots the persisted settings so the active
-// and persisted Settings are never mutated by opening or editing.
+// Owns the editable Save Location and Filename Template: a working snapshot of the
+// persisted settings, a live filename preview, and inline validation. Construction
+// snapshots the persisted settings so the active and persisted Settings are never
+// mutated by opening or editing. This tab no longer persists — it writes its working
+// slice into a merged AppSettings via WriteInto and advances its baseline via Commit
+// at the SettingsSession's direction, so the session can persist all tabs atomically.
 
 using System;
 using System.Collections.Generic;
@@ -14,57 +15,30 @@ using captcho.Capture;
 namespace captcho.UI;
 
 /// <summary>
-/// Save delegate injected so the session is testable without a filesystem.
-/// Mirrors <see cref="ConfigurationService.Save"/>.
-/// </summary>
-public delegate ConfigurationSaveResult SaveSettingsDelegate(AppSettings settings);
-
-/// <summary>
 /// A supported Filename Template placeholder with a human description and example.
 /// </summary>
 public sealed record FilenameTemplatePlaceholder(string Token, string Description, string Example);
 
 /// <summary>
-/// Outcome of a session Apply or OK action, carrying an inline message and
-/// whether the window should close (OK closes only on a successful save).
-/// </summary>
-public sealed class GeneralSettingsActionResult
-{
-    /// <summary>Whether the settings were persisted.</summary>
-    public bool Success { get; init; }
-
-    /// <summary>Inline message to display (sanitized; never reports success on failure).</summary>
-    public string Message { get; init; } = string.Empty;
-
-    /// <summary>True only when the caller should close the window (OK on success).</summary>
-    public bool ShouldClose { get; init; }
-}
-
-/// <summary>
-/// Pure C# coordinator for the General settings tab. Holds a working snapshot of
+/// Pure C# editing seam for the General settings tab. Holds a working snapshot of
 /// the persisted Save Location and Filename Template, computes a representative
-/// filename preview, lists the supported placeholders, validates edits inline, and
-/// drives the Apply/OK/Cancel session. Never mutates the active or persisted
-/// Settings on open or edit.
+/// filename preview, lists the supported placeholders, and validates edits inline.
+/// Never persists or mutates the active/persisted Settings on open or edit; the
+/// <see cref="SettingsSession"/> orchestrates persistence across all tabs.
 /// </summary>
-public sealed class GeneralTabSettings
+public sealed class GeneralTabSettings : IEditableSettingsTab
 {
-    private readonly SaveSettingsDelegate _save;
-
     private AppSettings _working;
     private AppSettings _baseline;
 
     /// <summary>
-    /// Snapshots the persisted settings into working and baseline copies and
-    /// stores the save delegate. The <paramref name="persisted"/> object is never
-    /// mutated by this instance.
+    /// Snapshots the persisted settings into working and baseline copies. The
+    /// <paramref name="persisted"/> object is never mutated by this instance.
     /// </summary>
-    public GeneralTabSettings(AppSettings persisted, SaveSettingsDelegate save)
+    public GeneralTabSettings(AppSettings persisted)
     {
         ArgumentNullException.ThrowIfNull(persisted);
-        ArgumentNullException.ThrowIfNull(save);
 
-        _save = save;
         // Normalized() yields independent copies carrying effective defaults, so the
         // active and persisted settings are never mutated by opening or editing.
         _working = persisted.Normalized();
@@ -159,11 +133,11 @@ public sealed class GeneralTabSettings
     /// <summary>An inline validation message for the Save Location, or null when valid.</summary>
     public string? SaveLocationError => IsSaveLocationValid ? null : RelativeSaveLocationError;
 
-    /// <summary>Whether Apply may run (requires every field to be valid).</summary>
-    public bool CanApply => IsValid;
-
-    /// <summary>Whether OK may run (requires every field to be valid).</summary>
-    public bool CanConfirm => IsValid;
+    /// <summary>
+    /// First validation error across this tab's fields, or null when the tab is valid.
+    /// Used by the session to build a status message when an invalid Apply/OK is attempted.
+    /// </summary>
+    public string? FirstError => FilenameTemplateError ?? SaveLocationError;
 
     /// <summary>
     /// True when any working field differs from its last applied baseline.
@@ -172,20 +146,28 @@ public sealed class GeneralTabSettings
         !string.Equals(_working.FilenameTemplate, _baseline.FilenameTemplate, StringComparison.Ordinal)
         || !string.Equals(_working.SaveLocation, _baseline.SaveLocation, StringComparison.Ordinal);
 
-    // ── Session actions ─────────────────────────────────────────────────
+    // ── IEditableSettingsTab: merge, commit, revert, reset ──────────────
 
     /// <summary>
-    /// Persists the valid working settings via the save delegate and keeps the window
-    /// open. Updates the baseline on success so Cancel no longer reverts the change.
-    /// Never reports success when the save failed.
+    /// Writes this tab's working Save Location and Filename Template slice into
+    /// <paramref name="target"/>. Other tabs' slices are left untouched so the session
+    /// can merge every tab into one AppSettings and persist it once.
     /// </summary>
-    public GeneralSettingsActionResult Apply() => Persist(shouldCloseOnSuccess: false);
+    public void WriteInto(AppSettings target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        target.SaveLocation = _working.SaveLocation;
+        target.FilenameTemplate = _working.FilenameTemplate;
+    }
 
     /// <summary>
-    /// Persists the valid working settings and signals the window to close, but only
-    /// after a successful save. On failure the window stays open with an inline message.
+    /// Advances the baseline to the current working state. Called by the session only
+    /// after a successful persist, so Cancel no longer reverts the committed change.
     /// </summary>
-    public GeneralSettingsActionResult Confirm() => Persist(shouldCloseOnSuccess: true);
+    public void Commit()
+    {
+        _baseline = _working.Normalized();
+    }
 
     /// <summary>
     /// Discards all edits made since the last successful Apply (or since open if Apply
@@ -208,38 +190,7 @@ public sealed class GeneralTabSettings
         _working = AppSettings.WithDefaults();
     }
 
-    private GeneralSettingsActionResult Persist(bool shouldCloseOnSuccess)
-    {
-        if (!IsValid)
-        {
-            return new GeneralSettingsActionResult
-            {
-                Success = false,
-                Message = FilenameTemplateError ?? SaveLocationError ?? "Cannot apply while settings are invalid.",
-                ShouldClose = false,
-            };
-        }
-
-        var result = _save(_working.Normalized());
-
-        if (result.Success)
-        {
-            _baseline = _working.Normalized();
-            return new GeneralSettingsActionResult
-            {
-                Success = true,
-                Message = SettingsWindowCoordinator.SavedMessage,
-                ShouldClose = shouldCloseOnSuccess,
-            };
-        }
-
-        return new GeneralSettingsActionResult
-        {
-            Success = false,
-            Message = SettingsWindowCoordinator.FormatSaveFailureMessage(result),
-            ShouldClose = false,
-        };
-    }
+    // ── Placeholder reference ───────────────────────────────────────────
 
     /// <summary>
     /// The Filename Template placeholders a user can use, with descriptions and examples.

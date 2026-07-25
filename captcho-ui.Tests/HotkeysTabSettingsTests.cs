@@ -1,16 +1,17 @@
 // HotkeysTabSettingsTests.cs — Headless tests for the Hotkeys tab editing seam.
 //
-// Verifies the pure C# HotkeysTabSettings coordinator: it loads the persisted
+// Verifies the pure C# HotkeysTabSettings collaborator: it loads the persisted
 // per-hotkey enabled states into a working snapshot (never mutating the source),
 // lists all four Global Hotkeys with their bindings, behavior descriptions, and
-// current registration status, lets the user enable/disable each hotkey
-// independently, and drives the Apply/OK/Cancel session — persisting enabled
-// states and reconciling runtime registration through injected delegates and an
-// injected Global Hotkey adapter so no Win32 or WinUI dependency is required.
+// current registration status (read live from the adapter), and lets the user
+// enable/disable each hotkey independently. Persistence and runtime reconcile are
+// no longer this tab's job — it writes its working slice via WriteInto and advances
+// its baseline via Commit at the SettingsSession's direction, so the composed
+// Apply/OK flow (including runtime registration reconcile) is covered in
+// SettingsSessionTests.
 
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using captcho.Capture;
 using Xunit;
@@ -25,21 +26,14 @@ public class HotkeysTabSettingsTests
     public void Constructor_NullSettings_Throws()
     {
         Assert.Throws<ArgumentNullException>(() =>
-            new HotkeysTabSettings(null!, _ => SuccessfulSave(), new RecordingHotkeyAdapter()));
-    }
-
-    [Fact]
-    public void Constructor_NullSave_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() =>
-            new HotkeysTabSettings(new AppSettings(), null!, new RecordingHotkeyAdapter()));
+            new HotkeysTabSettings(null!, new RecordingHotkeyAdapter()));
     }
 
     [Fact]
     public void Constructor_NullAdapter_Throws()
     {
         Assert.Throws<ArgumentNullException>(() =>
-            new HotkeysTabSettings(new AppSettings(), _ => SuccessfulSave(), null!));
+            new HotkeysTabSettings(new AppSettings(), null!));
     }
 
     // ── Display: all four hotkeys with bindings and behavior ────────────
@@ -74,7 +68,6 @@ public class HotkeysTabSettingsTests
         var rows = tab.GetRows();
 
         Assert.All(rows, r => Assert.False(string.IsNullOrWhiteSpace(r.Behavior)));
-        // Behaviors are distinct per route.
         Assert.Equal(rows.Count, rows.Select(r => r.Behavior).Distinct().Count());
     }
 
@@ -129,7 +122,7 @@ public class HotkeysTabSettingsTests
         Assert.True(tab.IsEnabled(HotkeyRouteMap.IdWinPrintScreen));
     }
 
-    // ── Registration status display ─────────────────────────────────────
+    // ── Registration status display (read live from the adapter) ───────
 
     [Fact]
     public void GetRows_RegisteredHotkey_ShowsRegisteredStatus()
@@ -137,7 +130,7 @@ public class HotkeysTabSettingsTests
         var adapter = new RecordingHotkeyAdapter();
         adapter.SetResults(HotkeyRegistrationResult.Success(SpecForId(HotkeyRouteMap.IdPrintScreen)));
 
-        var tab = new HotkeysTabSettings(new AppSettings(), _ => SuccessfulSave(), adapter);
+        var tab = new HotkeysTabSettings(new AppSettings(), adapter);
 
         var row = tab.GetRows().Single(r => r.Id == HotkeyRouteMap.IdPrintScreen);
         Assert.Equal(HotkeyRegistrationStatus.Registered, row.Status);
@@ -151,7 +144,7 @@ public class HotkeysTabSettingsTests
             SpecForId(HotkeyRouteMap.IdWinPrintScreen), "RegisterHotKey", "Win32 error 1409");
         adapter.SetResults(failure);
 
-        var tab = new HotkeysTabSettings(new AppSettings(), _ => SuccessfulSave(), adapter);
+        var tab = new HotkeysTabSettings(new AppSettings(), adapter);
 
         var row = tab.GetRows().Single(r => r.Id == HotkeyRouteMap.IdWinPrintScreen);
         Assert.Equal(HotkeyRegistrationStatus.Failed, row.Status);
@@ -161,10 +154,9 @@ public class HotkeysTabSettingsTests
     [Fact]
     public void GetRows_EnabledHotkeyWithNoRegistrationResult_ShowsUnknownStatus()
     {
-        // Adapter reports no results at all (e.g. hotkeys never initialized).
         var adapter = new RecordingHotkeyAdapter();
 
-        var tab = new HotkeysTabSettings(new AppSettings(), _ => SuccessfulSave(), adapter);
+        var tab = new HotkeysTabSettings(new AppSettings(), adapter);
 
         var row = tab.GetRows().Single(r => r.Id == HotkeyRouteMap.IdShiftPrintScreen);
         Assert.Equal(HotkeyRegistrationStatus.Unknown, row.Status);
@@ -173,7 +165,6 @@ public class HotkeysTabSettingsTests
     [Fact]
     public void GetRows_DisabledHotkey_ShowsDisabledStatusRegardlessOfRegistration()
     {
-        // Registration reports success, but the user disabled the hotkey.
         var adapter = new RecordingHotkeyAdapter();
         adapter.SetResults(HotkeyRegistrationResult.Success(SpecForId(HotkeyRouteMap.IdPrintScreen)));
 
@@ -181,10 +172,29 @@ public class HotkeysTabSettingsTests
         {
             HotkeyEnabledStates = new Dictionary<int, bool> { [HotkeyRouteMap.IdPrintScreen] = false },
         };
-        var tab = new HotkeysTabSettings(source, _ => SuccessfulSave(), adapter);
+        var tab = new HotkeysTabSettings(source, adapter);
 
         var row = tab.GetRows().Single(r => r.Id == HotkeyRouteMap.IdPrintScreen);
         Assert.Equal(HotkeyRegistrationStatus.Disabled, row.Status);
+    }
+
+    [Fact]
+    public void GetRows_ReflectsLiveAdapterResultsAfterAReconcile()
+    {
+        // The tab reads registration status live from the adapter, so after an external
+        // reconcile (driven by the session) the next GetRows reflects the new results
+        // without the tab itself being touched.
+        var adapter = new RecordingHotkeyAdapter();
+        var tab = new HotkeysTabSettings(new AppSettings(), adapter);
+
+        // Initially no results -> Unknown.
+        Assert.Equal(HotkeyRegistrationStatus.Unknown,
+            tab.GetRows().Single(r => r.Id == HotkeyRouteMap.IdPrintScreen).Status);
+
+        adapter.SetResults(HotkeyRegistrationResult.Success(SpecForId(HotkeyRouteMap.IdPrintScreen)));
+
+        Assert.Equal(HotkeyRegistrationStatus.Registered,
+            tab.GetRows().Single(r => r.Id == HotkeyRouteMap.IdPrintScreen).Status);
     }
 
     // ── Editing ─────────────────────────────────────────────────────────
@@ -257,195 +267,101 @@ public class HotkeysTabSettingsTests
         Assert.False(tab.IsDirty);
     }
 
-    // ── Apply: persists enabled states ──────────────────────────────────
+    // ── Validation / gating (booleans are always valid) ─────────────────
 
     [Fact]
-    public void Apply_DisabledHotkey_PersistsExplicitDisabledState()
+    public void IsValid_AlwaysTrue_AndHasNoFirstError()
     {
-        var recorder = new RecordingSave(SuccessfulSave());
-        var tab = new HotkeysTabSettings(new AppSettings(), recorder.Save, new RecordingHotkeyAdapter());
+        var tab = NewTab(new AppSettings());
 
+        Assert.True(tab.IsValid);
+        Assert.Null(tab.FirstError);
+    }
+
+    // ── WriteInto merges only this tab's slice ──────────────────────────
+
+    [Fact]
+    public void WriteInto_DisabledHotkey_WritesExplicitDisabledState()
+    {
+        var tab = NewTab(new AppSettings());
         tab.EditEnabled(HotkeyRouteMap.IdPrintScreen, enabled: false);
-        tab.Apply();
 
-        Assert.NotNull(recorder.LastSaved);
-        Assert.False(recorder.LastSaved!.IsHotkeyEnabled(HotkeyRouteMap.IdPrintScreen));
-        // Other hotkeys remain enabled.
-        Assert.True(recorder.LastSaved.IsHotkeyEnabled(HotkeyRouteMap.IdWinPrintScreen));
+        var target = AppSettings.WithDefaults();
+
+        tab.WriteInto(target);
+
+        Assert.False(target.IsHotkeyEnabled(HotkeyRouteMap.IdPrintScreen));
+        Assert.True(target.IsHotkeyEnabled(HotkeyRouteMap.IdWinPrintScreen));
     }
 
     [Fact]
-    public void Apply_AllEnabled_PersistsCleanNullStates()
+    public void WriteInto_AllEnabled_WritesCleanNullStates()
     {
-        var recorder = new RecordingSave(SuccessfulSave());
-        var tab = new HotkeysTabSettings(new AppSettings(), recorder.Save, new RecordingHotkeyAdapter());
+        var tab = NewTab(new AppSettings());
 
-        tab.Apply();
+        var target = AppSettings.WithDefaults();
+
+        tab.WriteInto(target);
 
         // Nothing disabled -> persist as null (clean default, omitted from JSON).
-        Assert.Null(recorder.LastSaved!.HotkeyEnabledStates);
+        Assert.Null(target.HotkeyEnabledStates);
     }
 
     [Fact]
-    public void Apply_OnSuccess_KeepsWindowOpen()
+    public void WriteInto_PreservesOtherTabsSlices()
+    {
+        var tab = NewTab(new AppSettings());
+        tab.EditEnabled(HotkeyRouteMap.IdPrintScreen, enabled: false);
+
+        var target = new AppSettings
+        {
+            SaveLocation = @"D:\Mine",
+            FilenameTemplate = "custom-<title>",
+        };
+
+        tab.WriteInto(target);
+
+        Assert.Equal(@"D:\Mine", target.SaveLocation);
+        Assert.Equal("custom-<title>", target.FilenameTemplate);
+    }
+
+    [Fact]
+    public void WriteInto_Null_Throws()
     {
         var tab = NewTab(new AppSettings());
 
-        var result = tab.Apply();
-
-        Assert.True(result.Success);
-        Assert.False(result.ShouldClose);
+        Assert.Throws<ArgumentNullException>(() => tab.WriteInto(null!));
     }
 
-    [Fact]
-    public void Apply_OnSuccess_PersistsExactlyOnce()
-    {
-        var recorder = new RecordingSave(SuccessfulSave());
-        var tab = new HotkeysTabSettings(new AppSettings(), recorder.Save, new RecordingHotkeyAdapter());
-
-        tab.Apply();
-
-        Assert.Equal(1, recorder.CallCount);
-    }
+    // ── Commit advances the baseline so Cancel no longer reverts ────────
 
     [Fact]
-    public void Apply_OnSuccess_UpdatesBaselineSoCancelNoLongerReverts()
+    public void Commit_AdvancesBaselineSoCancelKeepsTheCommittedState()
     {
         var tab = NewTab(new AppSettings());
 
         tab.EditEnabled(HotkeyRouteMap.IdPrintScreen, enabled: false);
-        tab.Apply();
+        tab.Commit();
         tab.Cancel();
 
         Assert.False(tab.IsEnabled(HotkeyRouteMap.IdPrintScreen));
         Assert.False(tab.IsDirty);
     }
 
-    // ── Apply: reconciles runtime registration ──────────────────────────
+    // ── Cancel ──────────────────────────────────────────────────────────
 
     [Fact]
-    public void Apply_OnSuccess_ReconcilesRuntimeRegistrationToEnabledSet()
+    public void Cancel_RevertsEditsToBaseline()
     {
-        var adapter = new RecordingHotkeyAdapter();
-        var tab = new HotkeysTabSettings(new AppSettings(), _ => SuccessfulSave(), adapter);
-
-        tab.EditEnabled(HotkeyRouteMap.IdWinPrintScreen, enabled: false);
-        tab.EditEnabled(HotkeyRouteMap.IdShiftPrintScreen, enabled: false);
-        tab.Apply();
-
-        Assert.Equal(1, adapter.ApplyCallsCount);
-        var applied = adapter.LastAppliedEnabledIds!;
-        Assert.DoesNotContain(HotkeyRouteMap.IdWinPrintScreen, applied);
-        Assert.DoesNotContain(HotkeyRouteMap.IdShiftPrintScreen, applied);
-        Assert.Contains(HotkeyRouteMap.IdPrintScreen, applied);
-        Assert.Contains(HotkeyRouteMap.IdWinShiftPrintScreen, applied);
-    }
-
-    [Fact]
-    public void Apply_WhenARegistrationFails_SurfacesItInTheStatusWithoutOverclaimingActive()
-    {
-        // One enabled hotkey fails to register during reconcile.
-        var adapter = new RecordingHotkeyAdapter();
-        adapter.SetApplyFailingIds(HotkeyRouteMap.IdWinPrintScreen);
-        var tab = new HotkeysTabSettings(new AppSettings(), _ => SuccessfulSave(), adapter);
-
-        var result = tab.Apply();
-
-        // The save itself succeeded, so Success is true and the window may close...
-        Assert.True(result.Success);
-        // ...but the status message must not just say "saved" — it surfaces the
-        // registration failure so the user is told the binding is not active.
-        Assert.Contains("failed to register", result.Message);
-        // ...and the offending row shows Failed (not Registered).
-        var row = tab.GetRows().Single(r => r.Id == HotkeyRouteMap.IdWinPrintScreen);
-        Assert.Equal(HotkeyRegistrationStatus.Failed, row.Status);
-        Assert.Contains("1409", row.StatusDetail);
-    }
-
-    [Fact]
-    public void Apply_WhenEveryRegistrationSucceeds_ReportsPlainSavedMessage()
-    {
-        var adapter = new RecordingHotkeyAdapter();
-        var tab = new HotkeysTabSettings(new AppSettings(), _ => SuccessfulSave(), adapter);
-
-        var result = tab.Apply();
-
-        Assert.Equal(SettingsWindowCoordinator.SavedMessage, result.Message);
-    }
-
-    [Fact]
-    public void Apply_OnFailure_DoesNotReconcileAndStaysOpen()
-    {
-        var adapter = new RecordingHotkeyAdapter();
-        var recorder = new RecordingSave(FailedSave("WriteTemp", "disk full"));
-        var tab = new HotkeysTabSettings(new AppSettings(), recorder.Save, adapter);
+        var tab = NewTab(new AppSettings());
 
         tab.EditEnabled(HotkeyRouteMap.IdPrintScreen, enabled: false);
-        var result = tab.Apply();
-
-        Assert.False(result.Success);
-        Assert.False(result.ShouldClose);
-        Assert.Equal(0, adapter.ApplyCallsCount);
-        Assert.Contains("disk full", result.Message);
-        // Still dirty — the edit was not committed.
         Assert.True(tab.IsDirty);
-    }
 
-    // ── Confirm and Cancel ──────────────────────────────────────────────
-
-    [Fact]
-    public void Confirm_OnSuccess_PersistsAndCloses()
-    {
-        var recorder = new RecordingSave(SuccessfulSave());
-        var tab = new HotkeysTabSettings(new AppSettings(), recorder.Save, new RecordingHotkeyAdapter());
-
-        tab.EditEnabled(HotkeyRouteMap.IdPrintScreen, enabled: false);
-        var result = tab.Confirm();
-
-        Assert.True(result.Success);
-        Assert.True(result.ShouldClose);
-        Assert.Equal(1, recorder.CallCount);
-    }
-
-    [Fact]
-    public void Confirm_OnFailure_StaysOpenWithoutReconcile()
-    {
-        var adapter = new RecordingHotkeyAdapter();
-        var tab = new HotkeysTabSettings(new AppSettings(), _ => FailedSave("Move", "locked"), adapter);
-
-        var result = tab.Confirm();
-
-        Assert.False(result.Success);
-        Assert.False(result.ShouldClose);
-        Assert.Equal(0, adapter.ApplyCallsCount);
-    }
-
-    [Fact]
-    public void Cancel_RevertsEditsAndLeavesNothingPersistedOrReconciled()
-    {
-        var recorder = new RecordingSave(SuccessfulSave());
-        var adapter = new RecordingHotkeyAdapter();
-        var tab = new HotkeysTabSettings(new AppSettings(), recorder.Save, adapter);
-
-        tab.EditEnabled(HotkeyRouteMap.IdPrintScreen, enabled: false);
         tab.Cancel();
 
         Assert.True(tab.IsEnabled(HotkeyRouteMap.IdPrintScreen));
         Assert.False(tab.IsDirty);
-        Assert.Equal(0, recorder.CallCount);
-        Assert.Equal(0, adapter.ApplyCallsCount);
-    }
-
-    // ── Validation / gating (booleans are always valid) ─────────────────
-
-    [Fact]
-    public void IsValid_AlwaysTrue_AndButtonsCanBeApplied()
-    {
-        var tab = NewTab(new AppSettings());
-
-        Assert.True(tab.IsValid);
-        Assert.True(tab.CanApply);
-        Assert.True(tab.CanConfirm);
     }
 
     // ── Reset to defaults: re-enables every Global Hotkey without persisting ──
@@ -486,45 +402,7 @@ public class HotkeysTabSettingsTests
 
         tab.Reset();
 
-        // After Reset no hotkey reads as Disabled — status comes from registration results.
         Assert.All(tab.GetRows(), r => Assert.NotEqual(HotkeyRegistrationStatus.Disabled, r.Status));
-    }
-
-    [Fact]
-    public void Reset_DoesNotPersist()
-    {
-        var recorder = new RecordingSave(SuccessfulSave());
-        var source = new AppSettings
-        {
-            HotkeyEnabledStates = new Dictionary<int, bool>
-            {
-                [HotkeyRouteMap.IdPrintScreen] = false,
-            },
-        };
-        var tab = new HotkeysTabSettings(source, recorder.Save, new RecordingHotkeyAdapter());
-
-        tab.Reset();
-
-        Assert.Equal(0, recorder.CallCount);
-        Assert.Null(recorder.LastSaved);
-    }
-
-    [Fact]
-    public void Reset_DoesNotReconcileRuntimeRegistration()
-    {
-        var adapter = new RecordingHotkeyAdapter();
-        var source = new AppSettings
-        {
-            HotkeyEnabledStates = new Dictionary<int, bool>
-            {
-                [HotkeyRouteMap.IdPrintScreen] = false,
-            },
-        };
-        var tab = new HotkeysTabSettings(source, _ => SuccessfulSave(), adapter);
-
-        tab.Reset();
-
-        Assert.Equal(0, adapter.ApplyCallsCount); // runtime registration untouched
     }
 
     [Fact]
@@ -541,7 +419,7 @@ public class HotkeysTabSettingsTests
 
         tab.Reset();
 
-        Assert.False(source.IsHotkeyEnabled(HotkeyRouteMap.IdPrintScreen)); // source untouched
+        Assert.False(source.IsHotkeyEnabled(HotkeyRouteMap.IdPrintScreen));
     }
 
     [Fact]
@@ -558,13 +436,13 @@ public class HotkeysTabSettingsTests
 
         tab.Reset();
 
-        Assert.True(tab.IsDirty); // re-enabling a disabled hotkey is a pending change
+        Assert.True(tab.IsDirty);
     }
 
     [Fact]
     public void Reset_WhenBaselineAlreadyAllEnabled_IsNotDirty()
     {
-        var source = new AppSettings(); // all enabled by default
+        var source = new AppSettings();
         var tab = NewTab(source);
 
         tab.Reset();
@@ -575,8 +453,6 @@ public class HotkeysTabSettingsTests
     [Fact]
     public void Cancel_AfterReset_PreservesEnabledStatesFromBeforeReset()
     {
-        var recorder = new RecordingSave(SuccessfulSave());
-        var adapter = new RecordingHotkeyAdapter();
         var source = new AppSettings
         {
             HotkeyEnabledStates = new Dictionary<int, bool>
@@ -584,65 +460,13 @@ public class HotkeysTabSettingsTests
                 [HotkeyRouteMap.IdPrintScreen] = false,
             },
         };
-        var tab = new HotkeysTabSettings(source, recorder.Save, adapter);
+        var tab = NewTab(source);
 
         tab.Reset();
         tab.Cancel();
 
-        Assert.False(tab.IsEnabled(HotkeyRouteMap.IdPrintScreen)); // baseline restored
+        Assert.False(tab.IsEnabled(HotkeyRouteMap.IdPrintScreen));
         Assert.False(tab.IsDirty);
-        Assert.Equal(0, recorder.CallCount);
-        Assert.Equal(0, adapter.ApplyCallsCount);
-    }
-
-    [Fact]
-    public void Apply_AfterReset_PersistsAllEnabledAndReconcilesRuntime()
-    {
-        var recorder = new RecordingSave(SuccessfulSave());
-        var adapter = new RecordingHotkeyAdapter();
-        var source = new AppSettings
-        {
-            HotkeyEnabledStates = new Dictionary<int, bool>
-            {
-                [HotkeyRouteMap.IdPrintScreen] = false,
-            },
-        };
-        var tab = new HotkeysTabSettings(source, recorder.Save, adapter);
-
-        tab.Reset();
-        var result = tab.Apply();
-
-        Assert.True(result.Success);
-        Assert.Equal(1, recorder.CallCount);
-        // Persisted as a clean all-enabled (null) map.
-        Assert.Null(recorder.LastSaved!.HotkeyEnabledStates);
-        // Runtime registration reconciled to every hotkey.
-        Assert.Equal(1, adapter.ApplyCallsCount);
-        foreach (var spec in HotkeyRouteMap.AllSpecs)
-            Assert.Contains(spec.Id, adapter.LastAppliedEnabledIds!);
-        Assert.False(tab.IsDirty); // baseline advanced to defaults
-    }
-
-    [Fact]
-    public void Confirm_AfterReset_PersistsAndSignalsClose()
-    {
-        var recorder = new RecordingSave(SuccessfulSave());
-        var source = new AppSettings
-        {
-            HotkeyEnabledStates = new Dictionary<int, bool>
-            {
-                [HotkeyRouteMap.IdPrintScreen] = false,
-            },
-        };
-        var tab = new HotkeysTabSettings(source, recorder.Save, new RecordingHotkeyAdapter());
-
-        tab.Reset();
-        var result = tab.Confirm();
-
-        Assert.True(result.Success);
-        Assert.True(result.ShouldClose);
-        Assert.Equal(1, recorder.CallCount);
-        Assert.Null(recorder.LastSaved!.HotkeyEnabledStates);
     }
 
     [Fact]
@@ -669,56 +493,17 @@ public class HotkeysTabSettingsTests
     // ── Helpers ─────────────────────────────────────────────────────────
 
     private static HotkeysTabSettings NewTab(AppSettings source)
-        => new HotkeysTabSettings(source, _ => SuccessfulSave(), new RecordingHotkeyAdapter());
+        => new HotkeysTabSettings(source, new RecordingHotkeyAdapter());
 
     private static HotkeySpec SpecForId(int id) => HotkeyRouteMap.AllSpecs.Single(s => s.Id == id);
 
-    private static ConfigurationSaveResult SuccessfulSave() => new()
-    {
-        Success = true,
-        ConfigPath = Path.Combine(Path.GetTempPath(), "settings.json"),
-    };
-
-    private static ConfigurationSaveResult FailedSave(string phase, string message) => new()
-    {
-        Success = false,
-        Phase = phase,
-        ErrorMessage = message,
-        ConfigPath = Path.Combine(Path.GetTempPath(), "settings.json"),
-    };
-
     /// <summary>
-    /// Records save calls and returns a forced result, so persistence can be
-    /// observed without touching the filesystem.
-    /// </summary>
-    private sealed class RecordingSave
-    {
-        private readonly ConfigurationSaveResult _result;
-        public int CallCount { get; private set; }
-        public AppSettings? LastSaved { get; private set; }
-
-        public RecordingSave(ConfigurationSaveResult result) => _result = result;
-
-        public ConfigurationSaveResult Save(AppSettings settings)
-        {
-            CallCount++;
-            LastSaved = settings;
-            return _result;
-        }
-    }
-
-    /// <summary>
-    /// Fake Global Hotkey adapter that records ApplyEnabledStates calls and serves
-    /// configurable registration results, so display and reconcile behavior can be
-    /// verified without a Win32 hotkey manager.
+    /// Fake Global Hotkey adapter that serves configurable registration results, so
+    /// display behavior can be verified without a Win32 hotkey manager.
     /// </summary>
     private sealed class RecordingHotkeyAdapter : IGlobalHotkeyAdapter
     {
         private readonly List<HotkeyRegistrationResult> _results = new();
-        private readonly HashSet<int> _applyFailingIds = new();
-
-        public int ApplyCallsCount { get; private set; }
-        public IReadOnlySet<int>? LastAppliedEnabledIds { get; private set; }
 
         public IReadOnlyList<HotkeyRegistrationResult> RegistrationResults => _results;
 
@@ -728,27 +513,7 @@ public class HotkeysTabSettingsTests
             _results.AddRange(results);
         }
 
-        /// <summary>Ids that ApplyEnabledStates should report as failed registrations.</summary>
-        public void SetApplyFailingIds(params int[] ids)
-        {
-            _applyFailingIds.Clear();
-            foreach (var id in ids)
-                _applyFailingIds.Add(id);
-        }
-
         public IReadOnlyList<HotkeyRegistrationResult> ApplyEnabledStates(IReadOnlySet<int> enabledIds)
-        {
-            ApplyCallsCount++;
-            LastAppliedEnabledIds = enabledIds;
-            _results.Clear();
-            foreach (var id in enabledIds)
-            {
-                var spec = HotkeyRouteMap.AllSpecs.Single(s => s.Id == id);
-                _results.Add(_applyFailingIds.Contains(id)
-                    ? HotkeyRegistrationResult.Fail(spec, "RegisterHotKey", "Win32 error 1409")
-                    : HotkeyRegistrationResult.Success(spec));
-            }
-            return RegistrationResults;
-        }
+            => RegistrationResults;
     }
 }

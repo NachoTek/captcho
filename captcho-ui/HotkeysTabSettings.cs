@@ -1,15 +1,15 @@
 // HotkeysTabSettings.cs — Pure C# editing seam for the Hotkeys settings tab.
 //
-// Owns the editable per-Global-Hotkey enabled states plus the settings session
-// used by the Settings window: a working snapshot of the persisted settings, the
-// display rows (binding, behavior description, registration status) for all four
-// Global Hotkeys, inline enable/disable editing, and Apply/OK/Cancel actions
-// backed by an injected save delegate and an injected Global Hotkey adapter.
-// Apply/OK persist the enabled states and reconcile runtime registration; Cancel
-// reverts to the last applied baseline. Construction snapshots the persisted
-// settings so the active and persisted Settings are never mutated by opening or
-// editing. Global Hotkey remapping and capture-mode routing are out of scope —
-// only enable/disable per hotkey is supported.
+// Owns the editable per-Global-Hotkey enabled states: a working snapshot of the
+// persisted settings, the display rows (binding, behavior description, registration
+// status) for all four Global Hotkeys, and inline enable/disable editing. Construction
+// snapshots the persisted settings so the active and persisted Settings are never
+// mutated by opening or editing. This tab no longer persists or reconciles runtime
+// registration — it writes its working slice into a merged AppSettings via WriteInto
+// and advances its baseline via Commit at the SettingsSession's direction, which also
+// owns the runtime reconcile through the Global Hotkey adapter. Registration status is
+// read live from the adapter so rows reflect the latest reconcile. Global Hotkey
+// remapping and capture-mode routing are out of scope — only enable/disable per hotkey.
 
 using System;
 using System.Collections.Generic;
@@ -47,42 +47,37 @@ public sealed record HotkeyRow(
     string StatusDetail);
 
 /// <summary>
-/// Pure C# coordinator for the Hotkeys settings tab. Holds a working snapshot of
+/// Pure C# editing seam for the Hotkeys settings tab. Holds a working snapshot of
 /// the persisted per-hotkey enabled states, exposes the four Global Hotkeys with
-/// their bindings and behavior descriptions, reflects the current runtime
-/// registration status per hotkey, and drives the Apply/OK/Cancel session. Apply
-/// and OK persist enabled states and reconcile runtime registration through the
-/// injected Global Hotkey adapter; Cancel leaves runtime and persisted state
-/// unchanged. Never mutates the active or persisted Settings on open or edit.
+/// their bindings and behavior descriptions, and reflects the current runtime
+/// registration status per hotkey (read live from the adapter so a reconcile by the
+/// <see cref="SettingsSession"/> is visible without rebuilding the tab). Never
+/// persists or mutates the active/persisted Settings on open or edit; the session
+/// orchestrates persistence and runtime registration across all tabs.
 /// </summary>
-public sealed class HotkeysTabSettings
+public sealed class HotkeysTabSettings : IEditableSettingsTab
 {
-    private readonly SaveSettingsDelegate _save;
     private readonly IGlobalHotkeyAdapter _hotkeys;
 
     private AppSettings _working;
     private AppSettings _baseline;
-    private IReadOnlyList<HotkeyRegistrationResult> _registrationResults;
 
     /// <summary>
-    /// Snapshots the persisted settings into working and baseline copies, stores
-    /// the save delegate, and captures the current registration results for
-    /// display. The <paramref name="persisted"/> object is never mutated by this
-    /// instance.
+    /// Snapshots the persisted settings into working and baseline copies, stores the
+    /// Global Hotkey adapter (read for registration status display), and captures the
+    /// current registration results. The <paramref name="persisted"/> object is never
+    /// mutated by this instance.
     /// </summary>
-    public HotkeysTabSettings(AppSettings persisted, SaveSettingsDelegate save, IGlobalHotkeyAdapter hotkeys)
+    public HotkeysTabSettings(AppSettings persisted, IGlobalHotkeyAdapter hotkeys)
     {
         ArgumentNullException.ThrowIfNull(persisted);
-        ArgumentNullException.ThrowIfNull(save);
         ArgumentNullException.ThrowIfNull(hotkeys);
 
-        _save = save;
         _hotkeys = hotkeys;
         // Normalized() yields independent deep copies, so the active and persisted
         // settings are never mutated by opening or editing.
         _working = persisted.Normalized();
         _baseline = persisted.Normalized();
-        _registrationResults = hotkeys.RegistrationResults;
     }
 
     // ── Working editable state ──────────────────────────────────────────
@@ -109,17 +104,18 @@ public sealed class HotkeysTabSettings
     /// <summary>
     /// Builds the display rows for all four Global Hotkeys in stable-id order.
     /// Each row carries the shortcut binding, the capture-mode behavior, the
-    /// working enabled state, and the registration status derived from the latest
-    /// registration results. A disabled hotkey always reads as Disabled regardless
+    /// working enabled state, and the registration status derived live from the
+    /// adapter's latest results. A disabled hotkey always reads as Disabled regardless
     /// of its registration result.
     /// </summary>
     public IReadOnlyList<HotkeyRow> GetRows()
     {
+        var results = _hotkeys.RegistrationResults;
         var rows = new List<HotkeyRow>(HotkeyRouteMap.AllSpecs.Count);
         foreach (var spec in HotkeyRouteMap.AllSpecs)
         {
             bool enabled = IsEnabled(spec.Id);
-            var (status, detail) = StatusFor(spec, enabled, _registrationResults);
+            var (status, detail) = StatusFor(spec, enabled, results);
             rows.Add(new HotkeyRow(
                 Id: spec.Id,
                 Binding: spec.Name,
@@ -162,18 +158,15 @@ public sealed class HotkeysTabSettings
         _ => string.Empty,
     };
 
-    // ── Validation and gating ───────────────────────────────────────────
+    // ── Validation, gating, dirty tracking ──────────────────────────────
 
     /// <summary>
     /// Always valid: per-hotkey enabled states are booleans with no invalid value.
     /// </summary>
     public bool IsValid => true;
 
-    /// <summary>Whether Apply may run (always, since enabled states are always valid).</summary>
-    public bool CanApply => IsValid;
-
-    /// <summary>Whether OK may run (always, since enabled states are always valid).</summary>
-    public bool CanConfirm => IsValid;
+    /// <summary>First error is always null — enabled states cannot be invalid.</summary>
+    public string? FirstError => null;
 
     /// <summary>True when any working enabled state differs from its last applied baseline.</summary>
     public bool IsDirty
@@ -189,24 +182,33 @@ public sealed class HotkeysTabSettings
         }
     }
 
-    // ── Session actions ─────────────────────────────────────────────────
+    // ── IEditableSettingsTab: merge, commit, revert, reset ──────────────
 
     /// <summary>
-    /// Persists the working enabled states via the save delegate, reconciles
-    /// runtime registration to match, and keeps the window open. Updates the
-    /// baseline on success so Cancel no longer reverts the change. Never reports
-    /// success when the save failed, and never reconciles runtime registration on
-    /// a failed save.
+    /// Writes this tab's working per-hotkey enabled states into <paramref name="target"/>,
+    /// collapsing an all-enabled map back to null so persisted JSON stays clean (the
+    /// hotkey field is omitted entirely when no hotkey is disabled), and deep-copying the
+    /// map so the target never aliases this tab's working state (the session writes into
+    /// the live runtime with the same call). Leaves other tabs' slices untouched so the
+    /// session can merge every tab and persist once.
     /// </summary>
-    public GeneralSettingsActionResult Apply() => Persist(shouldCloseOnSuccess: false);
+    public void WriteInto(AppSettings target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        var normalized = NormalizeForPersistence(_working.HotkeyEnabledStates);
+        target.HotkeyEnabledStates = normalized is null
+            ? null
+            : new Dictionary<int, bool>(normalized);
+    }
 
     /// <summary>
-    /// Persists the working enabled states, reconciles runtime registration, and
-    /// signals the window to close — but only after a successful save. On failure
-    /// the window stays open with an inline message and runtime registration is
-    /// left unchanged.
+    /// Advances the baseline to the current working state. Called by the session only
+    /// after a successful persist, so Cancel no longer reverts the committed change.
     /// </summary>
-    public GeneralSettingsActionResult Confirm() => Persist(shouldCloseOnSuccess: true);
+    public void Commit()
+    {
+        _baseline = _working.Normalized();
+    }
 
     /// <summary>
     /// Discards edits made since the last successful Apply (or since open if Apply
@@ -224,7 +226,7 @@ public sealed class HotkeysTabSettings
     /// baseline is left untouched and runtime registration is never reconciled, so
     /// Reset alone does not persist or change runtime Global Hotkey registrations,
     /// and a later Cancel still reverts to the states that existed before Reset.
-    /// Apply or OK after Reset persists all-enabled and reconciles runtime registration.
+    /// Apply or OK after Reset persists all-enabled and the session reconciles runtime.
     /// </summary>
     public void Reset()
     {
@@ -232,54 +234,6 @@ public sealed class HotkeysTabSettings
         // default (and reset) state. Only this tab's slice is reset so a Hotkeys
         // Reset cannot leak into the General tab's fields in the working snapshot.
         _working.HotkeyEnabledStates = null;
-    }
-
-    private GeneralSettingsActionResult Persist(bool shouldCloseOnSuccess)
-    {
-        var toSave = BuildPersistSettings();
-        var result = _save(toSave);
-
-        if (!result.Success)
-        {
-            return new GeneralSettingsActionResult
-            {
-                Success = false,
-                Message = SettingsWindowCoordinator.FormatSaveFailureMessage(result),
-                ShouldClose = false,
-            };
-        }
-
-        _baseline = _working.Normalized();
-
-        // Reconcile runtime registration to match the persisted enabled states.
-        // The adapter never throws for expected conflicts; failures surface as
-        // Failed registration results that the next GetRows() call will display.
-        _registrationResults = _hotkeys.ApplyEnabledStates(HotkeyRouteMap.EnabledHotkeyIds(_working));
-
-        int failedRegistrations = _registrationResults.Count(r => !r.Succeeded);
-        return new GeneralSettingsActionResult
-        {
-            Success = true,
-            // The save itself succeeded; surface any runtime registration conflicts
-            // in the status so a failed binding is visible to the user, not just in
-            // its row. Never falsely reports the binding as active.
-            Message = failedRegistrations > 0
-                ? $"{SettingsWindowCoordinator.SavedMessage} {failedRegistrations} global hotkey{(failedRegistrations == 1 ? "" : "s")} failed to register — see below."
-                : SettingsWindowCoordinator.SavedMessage,
-            ShouldClose = shouldCloseOnSuccess,
-        };
-    }
-
-    /// <summary>
-    /// Builds the settings to persist: a normalized copy of the working state with
-    /// an all-enabled map collapsed back to null, so persisted JSON stays clean
-    /// (the hotkey field is omitted entirely when no hotkey is disabled).
-    /// </summary>
-    private AppSettings BuildPersistSettings()
-    {
-        var toSave = _working.Normalized();
-        toSave.HotkeyEnabledStates = NormalizeForPersistence(toSave.HotkeyEnabledStates);
-        return toSave;
     }
 
     private static Dictionary<int, bool>? NormalizeForPersistence(Dictionary<int, bool>? states)

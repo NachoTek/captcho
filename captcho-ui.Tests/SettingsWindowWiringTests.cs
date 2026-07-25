@@ -1,16 +1,17 @@
-// SettingsWindowWiringTests.cs — Headless lifecycle tests for settings window coordinator.
+// SettingsWindowWiringTests.cs — Headless lifecycle tests for the settings window
+// coordinator.
 //
-// Verifies singleton lifecycle: create-or-activate, close cleanup, and save-result
-// reporting without WinUI controls. Covers:
-// - First open creates a window
-// - Second open activates the same window
+// Verifies singleton lifecycle: create-or-activate, close cleanup, and that the
+// coordinator constructs one session per window-open and hands it to the window
+// factory. Does not exercise WinUI controls. Covers:
+// - First open creates a window (and a session)
+// - Second open activates the same window (no second session)
 // - Closed window clears the current reference
 // - After close, open creates a new window
 // - Activation does not call create again
-// - Save-result formatting keeps sanitized ConfigurationService failure messages visible
+// - CreateOrActivate returns false on creation failure
 
 using System;
-using System.Collections.Generic;
 using captcho.Capture;
 using captcho.UI;
 using Xunit;
@@ -28,6 +29,7 @@ public sealed class TestSettingsWindowHandle
     public bool Closed { get; private set; }
     public int ActivateCount { get; private set; }
     public int CreateCount { get; private set; }
+    public SettingsSession? Session { get; private set; }
     private Action? _onClosedCallback;
 
     /// <summary>
@@ -60,12 +62,13 @@ public sealed class TestSettingsWindowHandle
     }
 
     /// <summary>
-    /// Factory delegate that creates a new TestSettingsWindowHandle.
+    /// Factory delegate that creates a new TestSettingsWindowHandle bound to a session.
     /// </summary>
-    public static object? Create()
+    public static object? Create(SettingsSession session)
     {
         var handle = new TestSettingsWindowHandle();
         handle.CreateCount++;
+        handle.Session = session;
         return handle;
     }
 }
@@ -75,12 +78,27 @@ public sealed class TestSettingsWindowHandle
 /// </summary>
 public sealed class TestSettingsWindowAdapter
 {
+    public int SessionCreateCount { get; private set; }
+
     /// <summary>
-    /// Factory delegate for coordinator.
+    /// Session factory for the coordinator: returns a real session bound to an
+    /// in-memory runtime and a temp-dir ConfigurationService.
     /// </summary>
-    public object? CreateWindow()
+    public SettingsSession CreateSession()
     {
-        return TestSettingsWindowHandle.Create();
+        SessionCreateCount++;
+        return new SettingsSession(
+            new AppSettings(),
+            new ConfigurationService(System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"test_{Guid.NewGuid()}")),
+            new NullGlobalHotkeyAdapterForTests());
+    }
+
+    /// <summary>
+    /// Factory delegate for coordinator: creates a test window bound to the session.
+    /// </summary>
+    public object? CreateWindow(SettingsSession session)
+    {
+        return TestSettingsWindowHandle.Create(session);
     }
 
     /// <summary>
@@ -123,70 +141,30 @@ public sealed class TestSettingsWindowAdapter
 }
 
 /// <summary>
-/// Wrapper for ConfigurationService that allows forced save results for testing.
+/// No-op Global Hotkey adapter for wiring tests (the real NullGlobalHotkeyAdapter is
+/// internal). Reports no registrations and no-op reconciles.
 /// </summary>
-public sealed class FakeConfigurationService
+internal sealed class NullGlobalHotkeyAdapterForTests : IGlobalHotkeyAdapter
 {
-    private readonly ConfigurationService _innerService;
-    private readonly ConfigurationSaveResult? _forcedResult;
-    private bool _saveCalled;
+    private static readonly IReadOnlyList<HotkeyRegistrationResult> Empty =
+        Array.Empty<HotkeyRegistrationResult>();
 
-    /// <summary>
-    /// Creates a fake service that forces a specific result.
-    /// </summary>
-    public FakeConfigurationService(string configDir, ConfigurationSaveResult? forcedResult = null)
-    {
-        _innerService = new ConfigurationService(configDir);
-        _forcedResult = forcedResult;
-    }
+    public IReadOnlyList<HotkeyRegistrationResult> RegistrationResults => Empty;
 
-    /// <summary>
-    /// Whether Save was called.
-    /// </summary>
-    public bool SaveCalled => _saveCalled;
-
-    /// <summary>
-    /// Returns a forced result for testing, or delegates to the inner service.
-    /// </summary>
-    public ConfigurationSaveResult Save(AppSettings settings)
-    {
-        _saveCalled = true;
-        return _forcedResult ?? _innerService.Save(settings);
-    }
-
-    /// <summary>
-    /// Loads settings by delegating to the inner service.
-    /// </summary>
-    public ConfigurationLoadResult Load()
-    {
-        return _innerService.Load();
-    }
-
-    /// <summary>
-    /// Gets the config path from the inner service.
-    /// </summary>
-    public string ConfigPath => _innerService.ConfigPath;
-
-    /// <summary>
-    /// Implicit conversion to ConfigurationService for use with SettingsWindowCoordinator.
-    /// </summary>
-    public static implicit operator ConfigurationService(FakeConfigurationService fake)
-    {
-        return fake._innerService;
-    }
+    public IReadOnlyList<HotkeyRegistrationResult> ApplyEnabledStates(IReadOnlySet<int> enabledIds)
+        => Empty;
 }
 
 public class SettingsWindowWiringTests
 {
-    // ── First open creates a window ───────────────────────────────────
+    // ── First open creates a window and constructs one session ─────────
 
     [Fact]
-    public void FirstOpen_CreatesWindow()
+    public void FirstOpen_CreatesWindowAndSession()
     {
         var adapter = new TestSettingsWindowAdapter();
-        var configService = new ConfigurationService(Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid()}"));
         var coordinator = new SettingsWindowCoordinator(
-            configService,
+            adapter.CreateSession,
             adapter.CreateWindow,
             adapter.ActivateWindow,
             adapter.SubscribeToClosed);
@@ -201,120 +179,103 @@ public class SettingsWindowWiringTests
         Assert.NotNull(handle);
         Assert.Equal(1, handle!.CreateCount);
         Assert.Equal(0, handle.ActivateCount);
+        Assert.NotNull(handle.Session);
+        Assert.Equal(1, adapter.SessionCreateCount);
     }
 
-    // ── Second open activates the same window ────────────────────────
+    // ── Second open activates the same window without a new session ────
 
     [Fact]
-    public void SecondOpen_ActivatesSameWindow()
+    public void SecondOpen_ActivatesSameWindow_WithoutNewSession()
     {
         var adapter = new TestSettingsWindowAdapter();
-        var configService = new ConfigurationService(Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid()}"));
         var coordinator = new SettingsWindowCoordinator(
-            configService,
+            adapter.CreateSession,
             adapter.CreateWindow,
             adapter.ActivateWindow,
             adapter.SubscribeToClosed);
 
-        // First open creates a window
-        var firstResult = coordinator.CreateOrActivate();
-        Assert.True(firstResult);
+        coordinator.CreateOrActivate();
         var firstWindow = coordinator.CurrentWindow;
 
-        // Second open should activate the same window
-        var secondResult = coordinator.CreateOrActivate();
-        Assert.True(secondResult);
-        Assert.Same(firstWindow, coordinator.CurrentWindow);
+        coordinator.CreateOrActivate();
 
+        Assert.Same(firstWindow, coordinator.CurrentWindow);
         var handle = TestSettingsWindowAdapter.GetHandleFromCoordinator(coordinator);
         Assert.NotNull(handle);
-        Assert.Equal(1, handle!.CreateCount);  // Created once
-        Assert.Equal(1, handle.ActivateCount);  // Activated once on second open
+        Assert.Equal(1, handle!.CreateCount);
+        Assert.Equal(1, handle.ActivateCount);
+        Assert.Equal(1, adapter.SessionCreateCount); // no second session on activate
     }
 
-    // ── Closed window clears the current reference ──────────────────
+    // ── Closed window clears the current reference ─────────────────────
 
     [Fact]
     public void ClosedWindow_ClearsCurrentReference()
     {
         var adapter = new TestSettingsWindowAdapter();
-        var configService = new ConfigurationService(Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid()}"));
         var coordinator = new SettingsWindowCoordinator(
-            configService,
+            adapter.CreateSession,
             adapter.CreateWindow,
             adapter.ActivateWindow,
             adapter.SubscribeToClosed);
 
-        // Create window
         coordinator.CreateOrActivate();
         Assert.True(coordinator.IsWindowOpen);
-        var window = coordinator.CurrentWindow;
 
-        // Close the window
         var handle = TestSettingsWindowAdapter.GetHandleFromCoordinator(coordinator);
         handle!.Close();
 
-        // Reference should be cleared
         Assert.False(coordinator.IsWindowOpen);
         Assert.Null(coordinator.CurrentWindow);
     }
 
-    // ── After close, open creates a new window ───────────────────────
+    // ── After close, open creates a new window and session ─────────────
 
     [Fact]
-    public void AfterClose_OpenCreatesNewWindow()
+    public void AfterClose_OpenCreatesNewWindowAndSession()
     {
         var adapter = new TestSettingsWindowAdapter();
-        var configService = new ConfigurationService(Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid()}"));
         var coordinator = new SettingsWindowCoordinator(
-            configService,
+            adapter.CreateSession,
             adapter.CreateWindow,
             adapter.ActivateWindow,
             adapter.SubscribeToClosed);
 
-        // Create first window
         coordinator.CreateOrActivate();
         var firstWindow = coordinator.CurrentWindow;
 
-        // Close it
-        var handle = TestSettingsWindowAdapter.GetHandleFromCoordinator(coordinator);
-        handle!.Close();
+        var firstHandle = TestSettingsWindowAdapter.GetHandleFromCoordinator(coordinator);
+        firstHandle!.Close();
 
-        // Open again should create a new window
         coordinator.CreateOrActivate();
         Assert.True(coordinator.IsWindowOpen);
         Assert.NotSame(firstWindow, coordinator.CurrentWindow);
-
-        var newHandle = TestSettingsWindowAdapter.GetHandleFromCoordinator(coordinator);
-        Assert.NotNull(newHandle);
-        Assert.Equal(1, newHandle!.CreateCount);
+        Assert.Equal(2, adapter.SessionCreateCount); // a fresh session per open
     }
 
-    // ── Activation does not call create again ─────────────────────────
+    // ── Activation does not call create again ──────────────────────────
 
     [Fact]
     public void MultipleActivations_DoNotCreateAgain()
     {
         var adapter = new TestSettingsWindowAdapter();
-        var configService = new ConfigurationService(Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid()}"));
         var coordinator = new SettingsWindowCoordinator(
-            configService,
+            adapter.CreateSession,
             adapter.CreateWindow,
             adapter.ActivateWindow,
             adapter.SubscribeToClosed);
 
-        // Create window
         coordinator.CreateOrActivate();
-
-        // Activate multiple times
         coordinator.CreateOrActivate();
         coordinator.CreateOrActivate();
         coordinator.CreateOrActivate();
 
         var handle = TestSettingsWindowAdapter.GetHandleFromCoordinator(coordinator);
         Assert.NotNull(handle);
-        Assert.Equal(1, handle!.CreateCount);   // Created once
-        Assert.Equal(3, handle.ActivateCount);  // Activated 3 times (the first call creates, subsequent calls activate)
+        Assert.Equal(1, handle!.CreateCount);
+        Assert.Equal(3, handle.ActivateCount);
+        Assert.Equal(1, adapter.SessionCreateCount);
     }
 
     // ── CreateOrActivate returns false on creation failure ─────────────
@@ -323,12 +284,9 @@ public class SettingsWindowWiringTests
     public void CreateFailure_ReturnsFalse()
     {
         var adapter = new TestSettingsWindowAdapter();
-        var configService = new ConfigurationService(Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid()}"));
-
-        // Override CreateWindow to return null (creation failed)
         var coordinator = new SettingsWindowCoordinator(
-            configService,
-            () => null,  // Always fails
+            adapter.CreateSession,
+            _ => null,  // window creation always fails
             adapter.ActivateWindow,
             adapter.SubscribeToClosed);
 
@@ -339,241 +297,14 @@ public class SettingsWindowWiringTests
         Assert.Null(coordinator.CurrentWindow);
     }
 
-    // ── Save-result formatting keeps sanitized messages visible ───────
-
-    [Fact]
-    public void SaveSuccess_FormatsSuccessMessage()
-    {
-        var adapter = new TestSettingsWindowAdapter();
-        var testDir = Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid()}");
-        var configService = new ConfigurationService(testDir);
-        var coordinator = new SettingsWindowCoordinator(
-            configService,
-            adapter.CreateWindow,
-            adapter.ActivateWindow,
-            adapter.SubscribeToClosed);
-
-        var settings = AppSettings.WithDefaults();
-        var report = coordinator.SaveSettings(settings);
-
-        Assert.True(report.Success);
-        Assert.Equal("Settings saved successfully.", report.Message);
-        Assert.Null(report.Phase);
-    }
-
-    [Fact]
-    public void SaveFailure_FormatsErrorMessageWithPhase()
-    {
-        var adapter = new TestSettingsWindowAdapter();
-        var testDir = Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid()}");
-        var forcedResult = new ConfigurationSaveResult
-        {
-            Success = false,
-            Phase = "WriteTemp",
-            ErrorMessage = "Access is denied",
-            ConfigPath = Path.Combine(testDir, "settings.json"),
-        };
-        
-        // Use the real ConfigurationService with the wrapper
-        var innerConfigService = new ConfigurationService(testDir);
-        var fakeConfigService = new FakeConfigurationService(testDir, forcedResult);
-        
-        // Create a wrapper coordinator that uses the fake's Save
-        var coordinator = new SettingsWindowCoordinator(
-            innerConfigService,
-            adapter.CreateWindow,
-            adapter.ActivateWindow,
-            adapter.SubscribeToClosed);
-
-        var settings = AppSettings.WithDefaults();
-        
-        // Test formatting directly through the fake service
-        var saveResult = fakeConfigService.Save(settings);
-        var report = new SettingsSaveReport
-        {
-            Success = saveResult.Success,
-            Message = SettingsWindowCoordinator.FormatSaveFailureMessage(saveResult),
-            Phase = saveResult.Phase,
-            ConfigPath = saveResult.ConfigPath,
-        };
-
-        Assert.False(report.Success);
-        Assert.Equal("Failed during 'WriteTemp'. Access is denied", report.Message);
-        Assert.Equal("WriteTemp", report.Phase);
-    }
-
-    [Fact]
-    public void SaveFailure_WithoutPhase_FormatsGenericMessage()
-    {
-        var testDir = Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid()}");
-        var forcedResult = new ConfigurationSaveResult
-        {
-            Success = false,
-            Phase = null,
-            ErrorMessage = null,
-            ConfigPath = Path.Combine(testDir, "settings.json"),
-        };
-        
-        var fakeConfigService = new FakeConfigurationService(testDir, forcedResult);
-        var saveResult = fakeConfigService.Save(AppSettings.WithDefaults());
-        var report = new SettingsSaveReport
-        {
-            Success = saveResult.Success,
-            Message = SettingsWindowCoordinator.FormatSaveFailureMessage(saveResult),
-            Phase = saveResult.Phase,
-            ConfigPath = saveResult.ConfigPath,
-        };
-
-        Assert.False(report.Success);
-        Assert.Equal("Failed to save settings.", report.Message);
-    }
-
-    [Fact]
-    public void SaveFailure_WithoutErrorMessage_StillIncludesPhase()
-    {
-        var testDir = Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid()}");
-        var forcedResult = new ConfigurationSaveResult
-        {
-            Success = false,
-            Phase = "Move",
-            ErrorMessage = null,
-            ConfigPath = Path.Combine(testDir, "settings.json"),
-        };
-        
-        var fakeConfigService = new FakeConfigurationService(testDir, forcedResult);
-        var saveResult = fakeConfigService.Save(AppSettings.WithDefaults());
-        var report = new SettingsSaveReport
-        {
-            Success = saveResult.Success,
-            Message = SettingsWindowCoordinator.FormatSaveFailureMessage(saveResult),
-            Phase = saveResult.Phase,
-            ConfigPath = saveResult.ConfigPath,
-        };
-
-        Assert.False(report.Success);
-        Assert.Equal("Failed during 'Move'.", report.Message);
-    }
-
-    // ── Load settings returns defaults or loaded settings ─────────────
-
-    [Fact]
-    public void LoadSettings_ReturnsDefaultsWhenMissing()
-    {
-        var adapter = new TestSettingsWindowAdapter();
-        var testDir = Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid()}");
-        var configService = new ConfigurationService(testDir);
-        var coordinator = new SettingsWindowCoordinator(
-            configService,
-            adapter.CreateWindow,
-            adapter.ActivateWindow,
-            adapter.SubscribeToClosed);
-
-        var settings = coordinator.LoadSettings();
-
-        Assert.NotNull(settings);
-        Assert.Equal(ExportDefaults.DefaultSaveDirectory, settings.EffectiveSaveLocation);
-        Assert.Equal(ExportDefaults.DefaultFilenameTemplate, settings.EffectiveFilenameTemplate);
-    }
-
-    [Fact]
-    public void LoadSettings_WithValidFile_ReturnsLoadedSettings()
-    {
-        var adapter = new TestSettingsWindowAdapter();
-        var testDir = Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid()}");
-        Directory.CreateDirectory(testDir);
-
-        // Create a valid settings file
-        var configService = new ConfigurationService(testDir);
-        var settingsToSave = new AppSettings
-        {
-            SaveLocation = @"C:\Custom\Path",
-            FilenameTemplate = "screenshot-{date}",
-        };
-        configService.Save(settingsToSave);
-
-        // Now load it
-        var coordinator = new SettingsWindowCoordinator(
-            configService,
-            adapter.CreateWindow,
-            adapter.ActivateWindow,
-            adapter.SubscribeToClosed);
-
-        var loadedSettings = coordinator.LoadSettings();
-
-        Assert.NotNull(loadedSettings);
-        Assert.Equal(@"C:\Custom\Path", loadedSettings.SaveLocation);
-        Assert.Equal("screenshot-{date}", loadedSettings.FilenameTemplate);
-    }
-
-    // ── Constructor validation ─────────────────────────────────────────
-
-    [Fact]
-    public void Constructor_NullConfigurationService_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() =>
-        {
-            new SettingsWindowCoordinator(
-                null!,
-                () => new object(),
-                _ => { },
-                (_, _) => { });
-        });
-    }
-
-    [Fact]
-    public void Constructor_NullCreateWindow_Throws()
-    {
-        var configService = new ConfigurationService(Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid()}"));
-
-        Assert.Throws<ArgumentNullException>(() =>
-        {
-            new SettingsWindowCoordinator(
-                configService,
-                null!,
-                _ => { },
-                (_, _) => { });
-        });
-    }
-
-    [Fact]
-    public void Constructor_NullActivateWindow_Throws()
-    {
-        var configService = new ConfigurationService(Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid()}"));
-
-        Assert.Throws<ArgumentNullException>(() =>
-        {
-            new SettingsWindowCoordinator(
-                configService,
-                () => new object(),
-                null!,
-                (_, _) => { });
-        });
-    }
-
-    [Fact]
-    public void Constructor_NullSubscribeToClosed_Throws()
-    {
-        var configService = new ConfigurationService(Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid()}"));
-
-        Assert.Throws<ArgumentNullException>(() =>
-        {
-            new SettingsWindowCoordinator(
-                configService,
-                () => new object(),
-                _ => { },
-                null!);
-        });
-    }
-
-    // ── Closed event subscription is invoked ───────────────────────────
+    // ── Closed event subscription is invoked ────────────────────────────
 
     [Fact]
     public void ClosedEvent_SubscriptionInvoked()
     {
         var adapter = new TestSettingsWindowAdapter();
-        var configService = new ConfigurationService(Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid()}"));
         var coordinator = new SettingsWindowCoordinator(
-            configService,
+            adapter.CreateSession,
             adapter.CreateWindow,
             adapter.ActivateWindow,
             adapter.SubscribeToClosed);
@@ -594,9 +325,8 @@ public class SettingsWindowWiringTests
     public void MultipleCloseInvocations_AreSafe()
     {
         var adapter = new TestSettingsWindowAdapter();
-        var configService = new ConfigurationService(Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid()}"));
         var coordinator = new SettingsWindowCoordinator(
-            configService,
+            adapter.CreateSession,
             adapter.CreateWindow,
             adapter.ActivateWindow,
             adapter.SubscribeToClosed);
@@ -604,7 +334,6 @@ public class SettingsWindowWiringTests
         coordinator.CreateOrActivate();
         var handle = TestSettingsWindowAdapter.GetHandleFromCoordinator(coordinator);
 
-        // Close multiple times
         handle!.Close();
         Assert.False(coordinator.IsWindowOpen);
 
@@ -613,5 +342,55 @@ public class SettingsWindowWiringTests
 
         handle.Close();
         Assert.False(coordinator.IsWindowOpen);
+    }
+
+    // ── Constructor validation ─────────────────────────────────────────
+
+    [Fact]
+    public void Constructor_NullCreateSession_Throws()
+    {
+        var adapter = new TestSettingsWindowAdapter();
+        Assert.Throws<ArgumentNullException>(() =>
+            new SettingsWindowCoordinator(
+                null!,
+                adapter.CreateWindow,
+                adapter.ActivateWindow,
+                adapter.SubscribeToClosed));
+    }
+
+    [Fact]
+    public void Constructor_NullCreateWindow_Throws()
+    {
+        var adapter = new TestSettingsWindowAdapter();
+        Assert.Throws<ArgumentNullException>(() =>
+            new SettingsWindowCoordinator(
+                adapter.CreateSession,
+                null!,
+                adapter.ActivateWindow,
+                adapter.SubscribeToClosed));
+    }
+
+    [Fact]
+    public void Constructor_NullActivateWindow_Throws()
+    {
+        var adapter = new TestSettingsWindowAdapter();
+        Assert.Throws<ArgumentNullException>(() =>
+            new SettingsWindowCoordinator(
+                adapter.CreateSession,
+                adapter.CreateWindow,
+                null!,
+                adapter.SubscribeToClosed));
+    }
+
+    [Fact]
+    public void Constructor_NullSubscribeToClosed_Throws()
+    {
+        var adapter = new TestSettingsWindowAdapter();
+        Assert.Throws<ArgumentNullException>(() =>
+            new SettingsWindowCoordinator(
+                adapter.CreateSession,
+                adapter.CreateWindow,
+                adapter.ActivateWindow,
+                null!));
     }
 }
