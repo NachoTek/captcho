@@ -25,6 +25,31 @@ Layout:
             <TabViewItem Header="General">
                 <ScrollViewer Padding="20" VerticalScrollBarVisibility="Auto">
                     <StackPanel Spacing="12">
+                        <TextBlock Text="Save Location"
+                                   FontSize="14" FontWeight="SemiBold"/>
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="SaveLocationInput"
+                                     Grid.Column="0"
+                                     TextChanged="SaveLocationInput_TextChanged"
+                                     PlaceholderText="e.g. C:\Users\you\Pictures\Captures"
+                                     MinWidth="400" MaxWidth="600"
+                                     HorizontalAlignment="Stretch"/>
+                            <Button x:Name="BrowseSaveLocationButton"
+                                    Grid.Column="1"
+                                    Content="Browse…"
+                                    Click="BrowseSaveLocationButton_Click"
+                                    MinHeight="36"
+                                    CornerRadius="6"/>
+                        </Grid>
+                        <TextBlock x:Name="SaveLocationErrorText"
+                                   Foreground="{ThemeResource TextFillColorCriticalBrush}"
+                                   FontSize="12"
+                                   TextWrapping="Wrap"
+                                   Visibility="Collapsed"/>
                         <TextBlock Text="Filename Template"
                                    FontSize="14" FontWeight="SemiBold"/>
                         <TextBox x:Name="FilenameTemplateInput"

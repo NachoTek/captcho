@@ -1,9 +1,11 @@
 // GeneralTabSettingsTests.cs — Headless tests for the General tab editing seam.
 //
 // Verifies the pure C# GeneralTabSettings coordinator: it loads the persisted
-// Filename Template into a working snapshot (never mutating the source), previews
-// the expanded filename, lists supported placeholders, validates inline, and
-// drives the Apply/OK/Cancel settings session through an injected save delegate.
+// Save Location and Filename Template into a working snapshot (never mutating the
+// source), previews the expanded filename, lists supported placeholders, validates
+// inline (relative save paths rejected; empty templates rejected), routes folder
+// picker outcomes, and drives the Apply/OK/Cancel settings session through an
+// injected save delegate.
 
 using System;
 using System.Collections.Generic;
@@ -275,6 +277,213 @@ public class GeneralTabSettingsTests
         // Reverts to the last applied value, not the original.
         Assert.Equal("applied-edit", tab.FilenameTemplate);
         Assert.False(tab.IsDirty);
+    }
+
+    // ── Opening displays the persisted Save Location without mutating the source ──
+
+    [Fact]
+    public void Constructor_DisplaysPersistedSaveLocation_AndDoesNotMutateSource()
+    {
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Captures",
+            FilenameTemplate = ExportDefaults.DefaultFilenameTemplate,
+        };
+
+        var tab = new GeneralTabSettings(source, _ => SuccessfulSave());
+
+        Assert.Equal(@"D:\Captures", tab.SaveLocation);
+        Assert.Equal(@"D:\Captures", source.SaveLocation);
+    }
+
+    [Fact]
+    public void Constructor_DisplaysDefaultSaveLocationWhenPersistedIsNull_AndLeavesSourceNull()
+    {
+        var source = new AppSettings
+        {
+            SaveLocation = null,
+            FilenameTemplate = ExportDefaults.DefaultFilenameTemplate,
+        };
+
+        var tab = new GeneralTabSettings(source, _ => SuccessfulSave());
+
+        Assert.Equal(ExportDefaults.DefaultSaveDirectory, tab.SaveLocation);
+        Assert.Null(source.SaveLocation);
+    }
+
+    // ── Editing the Save Location updates the working value ───────────
+
+    [Fact]
+    public void EditSaveLocation_UpdatesWorkingValue()
+    {
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Captures",
+            FilenameTemplate = ExportDefaults.DefaultFilenameTemplate,
+        };
+
+        var tab = new GeneralTabSettings(source, _ => SuccessfulSave());
+        tab.EditSaveLocation(@"E:\NewCaptures");
+
+        Assert.Equal(@"E:\NewCaptures", tab.SaveLocation);
+    }
+
+    [Fact]
+    public void EditSaveLocation_Null_Throws()
+    {
+        var tab = new GeneralTabSettings(AppSettings.WithDefaults(), _ => SuccessfulSave());
+
+        Assert.Throws<ArgumentNullException>(() => tab.EditSaveLocation(null!));
+    }
+
+    // ── Folder picker outcomes route through the seam ──────────────────
+
+    [Fact]
+    public void ApplyFolderPickerResult_WithSelection_UpdatesWorkingValue()
+    {
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Captures",
+            FilenameTemplate = ExportDefaults.DefaultFilenameTemplate,
+        };
+
+        var tab = new GeneralTabSettings(source, _ => SuccessfulSave());
+        tab.ApplyFolderPickerResult(@"F:\Picked");
+
+        Assert.Equal(@"F:\Picked", tab.SaveLocation);
+    }
+
+    [Fact]
+    public void ApplyFolderPickerResult_WithNull_LeavesEditUnchanged()
+    {
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Captures",
+            FilenameTemplate = ExportDefaults.DefaultFilenameTemplate,
+        };
+
+        var tab = new GeneralTabSettings(source, _ => SuccessfulSave());
+        tab.ApplyFolderPickerResult(null);
+
+        Assert.Equal(@"D:\Captures", tab.SaveLocation);
+    }
+
+    [Fact]
+    public void ApplyFolderPickerResult_WithEmpty_LeavesEditUnchanged()
+    {
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Captures",
+            FilenameTemplate = ExportDefaults.DefaultFilenameTemplate,
+        };
+
+        var tab = new GeneralTabSettings(source, _ => SuccessfulSave());
+        tab.ApplyFolderPickerResult("   ");
+
+        Assert.Equal(@"D:\Captures", tab.SaveLocation);
+    }
+
+    // ── Save Location validation: relative paths invalid; absolute/empty valid ──
+
+    [Fact]
+    public void EditSaveLocation_ToRelative_MarksInvalidAndBlocksActions()
+    {
+        var tab = new GeneralTabSettings(AppSettings.WithDefaults(), _ => SuccessfulSave());
+        tab.EditSaveLocation("relative/path");
+
+        Assert.False(tab.IsSaveLocationValid);
+        Assert.NotNull(tab.SaveLocationError);
+        Assert.False(tab.IsValid);
+        Assert.False(tab.CanApply);
+        Assert.False(tab.CanConfirm);
+    }
+
+    [Fact]
+    public void EditSaveLocation_ToAbsolute_StaysValid()
+    {
+        var tab = new GeneralTabSettings(AppSettings.WithDefaults(), _ => SuccessfulSave());
+        tab.EditSaveLocation(@"D:\Screens");
+
+        Assert.True(tab.IsSaveLocationValid);
+        Assert.Null(tab.SaveLocationError);
+    }
+
+    [Fact]
+    public void EditSaveLocation_ToEmpty_StaysValid_AllowingDefaultFallback()
+    {
+        var tab = new GeneralTabSettings(AppSettings.WithDefaults(), _ => SuccessfulSave());
+        tab.EditSaveLocation("");
+
+        Assert.True(tab.IsSaveLocationValid);
+        Assert.Null(tab.SaveLocationError);
+    }
+
+    // ── Save Location participates in the Apply/OK/Cancel session ──────
+
+    [Fact]
+    public void IsDirty_TrueWhenOnlySaveLocationChanged()
+    {
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Captures",
+            FilenameTemplate = ExportDefaults.DefaultFilenameTemplate,
+        };
+        var tab = new GeneralTabSettings(source, _ => SuccessfulSave());
+
+        tab.EditSaveLocation(@"E:\Elsewhere");
+
+        Assert.True(tab.IsDirty);
+    }
+
+    [Fact]
+    public void Apply_ValidSaveLocationEdit_PersistsNewLocation()
+    {
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Captures",
+            FilenameTemplate = ExportDefaults.DefaultFilenameTemplate,
+        };
+        var recorder = new RecordingSave(SuccessfulSave());
+        var tab = new GeneralTabSettings(source, recorder.Save);
+
+        tab.EditSaveLocation(@"E:\NewCaptures");
+        var result = tab.Apply();
+
+        Assert.True(result.Success);
+        Assert.Equal(@"E:\NewCaptures", recorder.LastSaved!.SaveLocation);
+        Assert.False(tab.IsDirty);
+    }
+
+    [Fact]
+    public void Apply_RelativeSaveLocation_DoesNotPersist()
+    {
+        var recorder = new RecordingSave(SuccessfulSave());
+        var tab = new GeneralTabSettings(AppSettings.WithDefaults(), recorder.Save);
+
+        tab.EditSaveLocation("relative/path");
+        var result = tab.Apply();
+
+        Assert.False(result.Success);
+        Assert.Equal(0, recorder.CallCount);
+    }
+
+    [Fact]
+    public void Cancel_DiscardsSaveLocationEdits()
+    {
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Captures",
+            FilenameTemplate = ExportDefaults.DefaultFilenameTemplate,
+        };
+        var recorder = new RecordingSave(SuccessfulSave());
+        var tab = new GeneralTabSettings(source, recorder.Save);
+
+        tab.EditSaveLocation(@"E:\ThrownAway");
+        tab.Cancel();
+
+        Assert.Equal(@"D:\Captures", tab.SaveLocation);
+        Assert.False(tab.IsDirty);
+        Assert.Equal(0, recorder.CallCount);
     }
 
     // ── Constructor guards ──────────────────────────────────────────────

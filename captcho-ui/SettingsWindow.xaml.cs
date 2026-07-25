@@ -1,11 +1,14 @@
 // SettingsWindow.xaml.cs — Settings dialog with tabbed configuration pages.
 //
 // Provides a Window subclass (not ContentDialog) with TabView containing four tabs:
-// General, Hotkeys, Export, and Interface. The General tab edits the Filename Template
-// through the pure C# GeneralTabSettings seam (preview, validation, Apply/OK/Cancel).
-// Hotkeys/Export/Interface remain placeholders for later slices. The bottom row has
-// OK (save+close on success), Cancel (discard+close), and Apply (save, stay open).
-// Window position and size are persisted to ApplicationData.Current.LocalSettings.
+// General, Hotkeys, Export, and Interface. The General tab edits the Save Location
+// (text or Windows folder picker) and the Filename Template through the pure C#
+// GeneralTabSettings seam (preview, validation, Apply/OK/Cancel). Saved values are
+// written back to the live in-memory settings so the export flow picks them up
+// without a restart. Hotkeys/Export/Interface remain placeholders for later slices.
+// The bottom row has OK (save+close on success), Cancel (discard+close), and Apply
+// (save, stay open). Window position and size are persisted to
+// ApplicationData.Current.LocalSettings.
 
 using System;
 using System.Linq;
@@ -71,14 +74,28 @@ public sealed partial class SettingsWindow : Window
     {
         // When no ConfigurationService is available (design-time), surface that as a save
         // failure rather than crashing; the seam still drives validation and preview.
-        SaveSettingsDelegate save = _configService is not null
-            ? s => _configService.Save(s)
-            : _ => new ConfigurationSaveResult
+        SaveSettingsDelegate save = s =>
+        {
+            var result = _configService is not null
+                ? _configService.Save(s)
+                : new ConfigurationSaveResult
+                {
+                    Success = false,
+                    Phase = "DesignTime",
+                    ErrorMessage = "ConfigurationService not available (design-time).",
+                };
+
+            if (result.Success)
             {
-                Success = false,
-                Phase = "DesignTime",
-                ErrorMessage = "ConfigurationService not available (design-time).",
-            };
+                // Propagate the persisted values onto the live in-memory settings so the
+                // export flow picks up the new Save Location (and Filename Template)
+                // without requiring an application restart.
+                _settings.SaveLocation = s.SaveLocation;
+                _settings.FilenameTemplate = s.FilenameTemplate;
+            }
+
+            return result;
+        };
 
         _generalTab = new GeneralTabSettings(_settings, save);
 
@@ -87,7 +104,8 @@ public sealed partial class SettingsWindow : Window
             GeneralTabSettings.SupportedPlaceholders.Select(
                 p => $"{p.Token} — {p.Description} ({p.Example})"));
 
-        // Loading the input fires TextChanged, which refreshes preview and button gating.
+        // Loading the inputs fires TextChanged, which refreshes validation and button gating.
+        SaveLocationInput.Text = _generalTab.SaveLocation;
         FilenameTemplateInput.Text = _generalTab.FilenameTemplate;
         RefreshGeneralTabState();
     }
@@ -106,7 +124,46 @@ public sealed partial class SettingsWindow : Window
     }
 
     /// <summary>
+    /// Pushes Save Location edits from the TextBox into the seam, then refreshes the
+    /// inline error and Apply/OK button gating.
+    /// </summary>
+    private void SaveLocationInput_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_generalTab is null)
+            return;
+
+        _generalTab.EditSaveLocation(SaveLocationInput.Text);
+        RefreshGeneralTabState();
+    }
+
+    /// <summary>
+    /// Opens the Windows folder picker and routes its outcome through the seam. A
+    /// cancelled picker (null result) leaves the current edit unchanged; a selection
+    /// replaces the working Save Location and is reflected back into the input.
+    /// </summary>
+    private async void BrowseSaveLocationButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_generalTab is null)
+            return;
+
+        var picker = new Windows.Storage.Pickers.FolderPicker();
+        // FolderPicker requires an owner window handle in a WinUI 3 desktop app.
+        WinRT.Interop.InitializeWithWindow.Initialize(
+            picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        picker.FileTypeFilter.Add("*");
+
+        var folder = await picker.PickSingleFolderAsync();
+
+        // Route the picker outcome through the seam so cancellation is a no-op and the
+        // resulting working value is reflected back into the input.
+        _generalTab.ApplyFolderPickerResult(folder?.Path);
+        SaveLocationInput.Text = _generalTab.SaveLocation;
+        RefreshGeneralTabState();
+    }
+
+    /// <summary>
     /// Reflects the seam's preview, validation, and gating state into the controls.
+    /// Each inline error is shown only for its own field.
     /// </summary>
     private void RefreshGeneralTabState()
     {
@@ -117,9 +174,15 @@ public sealed partial class SettingsWindow : Window
             ? "—"
             : _generalTab.FilenameTemplatePreview;
 
-        string? error = _generalTab.FilenameTemplateError;
-        FilenameTemplateErrorText.Text = error ?? string.Empty;
-        FilenameTemplateErrorText.Visibility = _generalTab.IsValid
+        string? templateError = _generalTab.FilenameTemplateError;
+        FilenameTemplateErrorText.Text = templateError ?? string.Empty;
+        FilenameTemplateErrorText.Visibility = string.IsNullOrEmpty(templateError)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+
+        string? locationError = _generalTab.SaveLocationError;
+        SaveLocationErrorText.Text = locationError ?? string.Empty;
+        SaveLocationErrorText.Visibility = string.IsNullOrEmpty(locationError)
             ? Visibility.Collapsed
             : Visibility.Visible;
 
