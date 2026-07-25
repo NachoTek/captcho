@@ -466,7 +466,8 @@ public sealed partial class SettingsWindow : Window
     /// closes only after every tab saves successfully. General is confirmed first (it
     /// can fail validation); on any failure the window stays open with an inline
     /// message and runtime/persisted state is left consistent. Save failures are
-    /// shown inline and the window stays open.
+    /// shown inline and the window stays open. Window placement is persisted by the
+    /// Closed handler shared with Cancel and the title-bar X.
     /// </summary>
     private void OK_Click(object sender, RoutedEventArgs e)
     {
@@ -494,13 +495,13 @@ public sealed partial class SettingsWindow : Window
         }
 
         ShowStatus(true, SettingsWindowCoordinator.SavedMessage);
-        SaveWindowPlacement();
         Close();
     }
 
     /// <summary>
     /// Handles Cancel button click — discards edits since the last Apply on every tab
     /// and closes. Persisted settings and runtime registration are left unchanged.
+    /// Window placement is persisted by the Closed handler shared with OK and X-close.
     /// </summary>
     private void Cancel_Click(object sender, RoutedEventArgs e)
     {
@@ -510,7 +511,6 @@ public sealed partial class SettingsWindow : Window
             _hotkeysTab.Cancel();
             RebuildHotkeyRows();
         }
-        SaveWindowPlacement();
         Close();
     }
 
@@ -576,44 +576,34 @@ public sealed partial class SettingsWindow : Window
     }
 
     /// <summary>
-    /// Loads saved window placement (position and size) from LocalSettings.
-    /// Uses safe defaults if saved values are missing or malformed.
+    /// Loads saved window placement (position and size) from LocalSettings via the
+    /// pure <see cref="WindowPlacement"/> seam, which owns parsing and minimum-size
+    /// clamping. Applies the restored placement to the AppWindow, or leaves the
+    /// default size in place when no valid placement is stored.
     /// </summary>
     private void LoadWindowPlacement()
     {
         try
         {
-            var placement = _localSettings.Values[WindowPlacementKey] as string;
-            if (string.IsNullOrEmpty(placement))
+            var raw = _localSettings.Values[WindowPlacementKey] as string;
+            var placement = WindowPlacement.TryParse(raw);
+            if (placement is null)
                 return;
 
-            var parts = placement.Split(',');
-            if (parts.Length != 4)
-                return;
-
-            // Parse with safe defaults on failure
-            if (int.TryParse(parts[0], out int x) &&
-                int.TryParse(parts[1], out int y) &&
-                int.TryParse(parts[2], out int width) &&
-                int.TryParse(parts[3], out int height))
-            {
-                // Clamp to reasonable minimum size
-                width = Math.Max(width, 400);
-                height = Math.Max(height, 300);
-
-                var appWindow = this.AppWindow;
-                appWindow.Move(new Windows.Graphics.PointInt32(x, y));
-                appWindow.Resize(new Windows.Graphics.SizeInt32(width, height));
-            }
+            var appWindow = this.AppWindow;
+            appWindow.Move(new Windows.Graphics.PointInt32(placement.Value.X, placement.Value.Y));
+            appWindow.Resize(new Windows.Graphics.SizeInt32(placement.Value.Width, placement.Value.Height));
         }
         catch
         {
-            // Malformed placement data — ignore and use defaults
+            // TryParse absorbs malformed placement data (returns null); this catch
+            // only guards LocalSettings/AppWindow access failures — ignore and use defaults
         }
     }
 
     /// <summary>
-    /// Saves current window placement (position and size) to LocalSettings.
+    /// Saves current window placement (position and size) to LocalSettings via the
+    /// pure <see cref="WindowPlacement"/> seam, which owns the serialization format.
     /// </summary>
     private void SaveWindowPlacement()
     {
@@ -623,8 +613,8 @@ public sealed partial class SettingsWindow : Window
             var position = appWindow.Position;
             var size = appWindow.Size;
 
-            var placement = $"{position.X},{position.Y},{size.Width},{size.Height}";
-            _localSettings.Values[WindowPlacementKey] = placement;
+            var placement = new WindowPlacement(position.X, position.Y, size.Width, size.Height);
+            _localSettings.Values[WindowPlacementKey] = placement.Serialize();
         }
         catch
         {
@@ -633,11 +623,17 @@ public sealed partial class SettingsWindow : Window
     }
 
     /// <summary>
-    /// Handles window closed event — unhooks event handler and notifies coordinator
-    /// (the coordinator's OnWindowClosed delegate will clear the current reference).
+    /// Handles window closed event — persists window placement (so OK, Cancel,
+    /// and the title-bar X all save position and size through this single path),
+    /// unhooks the event handler, and notifies the coordinator (the coordinator's
+    /// OnWindowClosed delegate will clear the current reference).
     /// </summary>
     private void OnWindowClosed(object sender, WindowEventArgs args)
     {
+        // Persist placement on every close path — OK_Click and Cancel_Click both
+        // call Close(), which fires this event, and the title-bar X closes the
+        // window directly. Routing the save here means no close path can drop it.
+        SaveWindowPlacement();
         this.Closed -= OnWindowClosed;
     }
 }
