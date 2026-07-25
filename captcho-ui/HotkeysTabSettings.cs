@@ -218,6 +218,22 @@ public sealed class HotkeysTabSettings
         _working = _baseline.Normalized();
     }
 
+    /// <summary>
+    /// Restores every Global Hotkey to enabled (the default) in the current editing
+    /// session, so the user can inspect the default enabled state immediately. The
+    /// baseline is left untouched and runtime registration is never reconciled, so
+    /// Reset alone does not persist or change runtime Global Hotkey registrations,
+    /// and a later Cancel still reverts to the states that existed before Reset.
+    /// Apply or OK after Reset persists all-enabled and reconciles runtime registration.
+    /// </summary>
+    public void Reset()
+    {
+        // A null states map means every Global Hotkey is enabled — exactly the
+        // default (and reset) state. Only this tab's slice is reset so a Hotkeys
+        // Reset cannot leak into the General tab's fields in the working snapshot.
+        _working.HotkeyEnabledStates = null;
+    }
+
     private GeneralSettingsActionResult Persist(bool shouldCloseOnSuccess)
     {
         var toSave = BuildPersistSettings();

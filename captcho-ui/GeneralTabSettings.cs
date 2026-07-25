@@ -196,6 +196,18 @@ public sealed class GeneralTabSettings
         _working = _baseline.Normalized();
     }
 
+    /// <summary>
+    /// Restores the working Save Location and Filename Template to their defaults in the
+    /// current editing session so the user can inspect the defaults, preview, and
+    /// validation results immediately. The baseline is left untouched, so Reset alone
+    /// never persists or changes runtime state, and a later Cancel still reverts to the
+    /// settings that existed before Reset. Apply or OK after Reset persists the defaults.
+    /// </summary>
+    public void Reset()
+    {
+        _working = AppSettings.WithDefaults();
+    }
+
     private GeneralSettingsActionResult Persist(bool shouldCloseOnSuccess)
     {
         if (!IsValid)

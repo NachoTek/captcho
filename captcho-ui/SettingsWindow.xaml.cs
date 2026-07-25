@@ -515,6 +515,36 @@ public sealed partial class SettingsWindow : Window
     }
 
     /// <summary>
+    /// Handles Reset to Defaults button click — restores every editable setting to its
+    /// default in the current editing session so the user can inspect the defaults,
+    /// preview, and validation results immediately. Reset alone does not write
+    /// Configuration or reconcile runtime Global Hotkey registration; the baseline is
+    /// left untouched so a later Cancel reverts the reset, and Apply/OK persist the
+    /// defaults. Inputs, preview, validation, button gating, and Hotkey rows all
+    /// refresh to reflect the reset working state.
+    /// </summary>
+    private void Reset_Click(object sender, RoutedEventArgs e)
+    {
+        if (_generalTab is not null)
+        {
+            _generalTab.Reset();
+            // Reflect the reset working values back into the inputs. Setting Text fires
+            // TextChanged, which pushes the value through the seam and refreshes the
+            // preview, inline errors, and Apply/OK gating — the same pattern as the
+            // folder-picker outcome.
+            SaveLocationInput.Text = _generalTab.SaveLocation;
+            FilenameTemplateInput.Text = _generalTab.FilenameTemplate;
+            RefreshGeneralTabState();
+        }
+
+        if (_hotkeysTab is not null)
+        {
+            _hotkeysTab.Reset();
+            RebuildHotkeyRows();
+        }
+    }
+
+    /// <summary>
     /// Handles Apply button click — persists via both the General and Hotkeys seams
     /// and keeps the window open. Save failures are shown inline without reporting
     /// success; the Hotkeys tab reconciles runtime registration on a successful save.

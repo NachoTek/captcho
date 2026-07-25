@@ -5,7 +5,7 @@ Layout:
   │  TabView: General, Hotkeys, Export,    │
   │            Interface                    │
   ├─────────────────────────────────────────┤
-  │  [OK] [Cancel] [Apply]   [Save status] │
+  │ [Reset to Defaults] [OK] [Cancel] [Apply]   [Save status] │
   └─────────────────────────────────────────┘
 -->
 <Window
@@ -155,12 +155,21 @@ Layout:
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <Button x:Name="OKButton"
+            <Button x:Name="ResetButton"
                     Grid.Column="0"
+                    Content="Reset to Defaults"
+                    MinHeight="36"
+                    Margin="0,0,16,0"
+                    Click="Reset_Click"
+                    CornerRadius="6"/>
+
+            <Button x:Name="OKButton"
+                    Grid.Column="1"
                     Content="OK"
                     MinWidth="80" MinHeight="36"
                     Margin="0,0,8,0"
@@ -168,7 +177,7 @@ Layout:
                     CornerRadius="6"/>
 
             <Button x:Name="CancelButton"
-                    Grid.Column="1"
+                    Grid.Column="2"
                     Content="Cancel"
                     MinWidth="80" MinHeight="36"
                     Margin="0,0,8,0"
@@ -176,7 +185,7 @@ Layout:
                     CornerRadius="6"/>
 
             <Button x:Name="ApplyButton"
-                    Grid.Column="2"
+                    Grid.Column="3"
                     Content="Apply"
                     MinWidth="80" MinHeight="36"
                     Margin="0,0,16,0"
@@ -184,7 +193,7 @@ Layout:
                     CornerRadius="6"/>
 
             <TextBlock x:Name="SaveStatusText"
-                       Grid.Column="4"
+                       Grid.Column="5"
                        Text=""
                        TextTrimming="CharacterEllipsis"
                        VerticalAlignment="Center"

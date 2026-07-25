@@ -486,6 +486,224 @@ public class GeneralTabSettingsTests
         Assert.Equal(0, recorder.CallCount);
     }
 
+    // ── Reset to defaults: restores the editing session without persisting ──
+
+    [Fact]
+    public void Reset_RestoresDefaultSaveLocationAndFilenameTemplate()
+    {
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Custom\Captures",
+            FilenameTemplate = "custom-<title>",
+        };
+        var tab = new GeneralTabSettings(source, _ => SuccessfulSave());
+
+        tab.Reset();
+
+        Assert.Equal(ExportDefaults.DefaultSaveDirectory, tab.SaveLocation);
+        Assert.Equal(ExportDefaults.DefaultFilenameTemplate, tab.FilenameTemplate);
+    }
+
+    [Fact]
+    public void Reset_RefreshesPreviewToTheDefaultTemplate()
+    {
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Custom\Captures",
+            FilenameTemplate = "custom-<title>",
+        };
+        var tab = new GeneralTabSettings(source, _ => SuccessfulSave());
+
+        tab.Reset();
+
+        // Preview mirrors the value the constructor-derived default produces.
+        var expected = new GeneralTabSettings(
+            new AppSettings { FilenameTemplate = ExportDefaults.DefaultFilenameTemplate },
+            _ => SuccessfulSave());
+        Assert.Equal(expected.FilenameTemplatePreview, tab.FilenameTemplatePreview);
+    }
+
+    [Fact]
+    public void Reset_ClearsValidationErrorsAndEnablesActions()
+    {
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Captures",
+            FilenameTemplate = ExportDefaults.DefaultFilenameTemplate,
+        };
+        var tab = new GeneralTabSettings(source, _ => SuccessfulSave());
+
+        // Make an invalid edit first so an error is showing.
+        tab.EditSaveLocation("relative/path");
+        Assert.False(tab.IsValid);
+        Assert.NotNull(tab.SaveLocationError);
+
+        tab.Reset();
+
+        Assert.True(tab.IsValid);
+        Assert.Null(tab.FilenameTemplateError);
+        Assert.Null(tab.SaveLocationError);
+        Assert.True(tab.CanApply);
+        Assert.True(tab.CanConfirm);
+    }
+
+    [Fact]
+    public void Reset_DoesNotPersist()
+    {
+        var recorder = new RecordingSave(SuccessfulSave());
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Captures",
+            FilenameTemplate = "custom-<title>",
+        };
+        var tab = new GeneralTabSettings(source, recorder.Save);
+
+        tab.Reset();
+
+        Assert.Equal(0, recorder.CallCount);
+        Assert.Null(recorder.LastSaved);
+    }
+
+    [Fact]
+    public void Reset_DoesNotMutateSourceSettings()
+    {
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Captures",
+            FilenameTemplate = "custom-<title>",
+        };
+        var tab = new GeneralTabSettings(source, _ => SuccessfulSave());
+
+        tab.Reset();
+
+        Assert.Equal(@"D:\Captures", source.SaveLocation);
+        Assert.Equal("custom-<title>", source.FilenameTemplate);
+    }
+
+    [Fact]
+    public void Reset_DoesNotUpdateBaselineSoCancelCanRevertIt()
+    {
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Captures",
+            FilenameTemplate = "custom-<title>",
+        };
+        var tab = new GeneralTabSettings(source, _ => SuccessfulSave());
+
+        tab.Reset();
+        tab.Cancel();
+
+        // Cancel reverts to the baseline (the pre-reset editing session), not defaults.
+        Assert.Equal(@"D:\Captures", tab.SaveLocation);
+        Assert.Equal("custom-<title>", tab.FilenameTemplate);
+    }
+
+    [Fact]
+    public void Reset_WhenBaselineDiffersFromDefaults_IsDirty()
+    {
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Captures",
+            FilenameTemplate = "custom-<title>",
+        };
+        var tab = new GeneralTabSettings(source, _ => SuccessfulSave());
+
+        tab.Reset();
+
+        Assert.True(tab.IsDirty); // reset is a pending change awaiting Apply/OK
+    }
+
+    [Fact]
+    public void Reset_WhenBaselineAlreadyDefaults_IsNotDirty()
+    {
+        var source = AppSettings.WithDefaults();
+        var tab = new GeneralTabSettings(source, _ => SuccessfulSave());
+
+        tab.Reset();
+
+        Assert.False(tab.IsDirty); // already at defaults — nothing pending
+    }
+
+    [Fact]
+    public void Cancel_AfterReset_PreservesSettingsFromBeforeReset()
+    {
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Original",
+            FilenameTemplate = "original-<yyyy>",
+        };
+        var recorder = new RecordingSave(SuccessfulSave());
+        var tab = new GeneralTabSettings(source, recorder.Save);
+
+        tab.Reset();
+        tab.Cancel();
+
+        Assert.Equal(@"D:\Original", tab.SaveLocation);
+        Assert.Equal("original-<yyyy>", tab.FilenameTemplate);
+        Assert.False(tab.IsDirty);
+        Assert.Equal(0, recorder.CallCount); // nothing persisted by Reset or Cancel
+    }
+
+    [Fact]
+    public void Apply_AfterReset_PersistsDefaults()
+    {
+        var recorder = new RecordingSave(SuccessfulSave());
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Captures",
+            FilenameTemplate = "custom-<title>",
+        };
+        var tab = new GeneralTabSettings(source, recorder.Save);
+
+        tab.Reset();
+        var result = tab.Apply();
+
+        Assert.True(result.Success);
+        Assert.False(result.ShouldClose); // Apply keeps the window open
+        Assert.Equal(1, recorder.CallCount);
+        Assert.Equal(ExportDefaults.DefaultSaveDirectory, recorder.LastSaved!.SaveLocation);
+        Assert.Equal(ExportDefaults.DefaultFilenameTemplate, recorder.LastSaved!.FilenameTemplate);
+        Assert.False(tab.IsDirty); // baseline advanced to defaults
+    }
+
+    [Fact]
+    public void Confirm_AfterReset_PersistsDefaultsAndSignalsClose()
+    {
+        var recorder = new RecordingSave(SuccessfulSave());
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Captures",
+            FilenameTemplate = "custom-<title>",
+        };
+        var tab = new GeneralTabSettings(source, recorder.Save);
+
+        tab.Reset();
+        var result = tab.Confirm();
+
+        Assert.True(result.Success);
+        Assert.True(result.ShouldClose); // OK closes on success
+        Assert.Equal(1, recorder.CallCount);
+        Assert.Equal(ExportDefaults.DefaultFilenameTemplate, recorder.LastSaved!.FilenameTemplate);
+    }
+
+    [Fact]
+    public void Reset_IsIdempotent()
+    {
+        var source = new AppSettings
+        {
+            SaveLocation = @"D:\Captures",
+            FilenameTemplate = "custom-<title>",
+        };
+        var tab = new GeneralTabSettings(source, _ => SuccessfulSave());
+
+        tab.Reset();
+        tab.Reset();
+        tab.Reset();
+
+        Assert.Equal(ExportDefaults.DefaultFilenameTemplate, tab.FilenameTemplate);
+        Assert.Equal(ExportDefaults.DefaultSaveDirectory, tab.SaveLocation);
+    }
+
     // ── Constructor guards ──────────────────────────────────────────────
 
     [Fact]
