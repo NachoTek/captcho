@@ -25,7 +25,7 @@ Layout:
         </Grid.RowDefinitions>
 
         <!-- Toolbar row -->
-        <Grid Grid.Row="0" Padding="12,10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+        <Grid Grid.Row="1" Padding="12,10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
               BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
@@ -90,9 +90,44 @@ Layout:
                     VerticalAlignment="Stretch"
                     Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
 
+            <!-- Settings button -->
+            <Button x:Name="SettingsButton"
+                    Grid.Column="6"
+                    Content="Settings…"
+                    MinWidth="90" MinHeight="40"
+                    Margin="8,0,8,0"
+                    Click="Settings_Click"
+                    CornerRadius="6"
+                    ToolTipService.ToolTip="Open settings (F4 or Ctrl+,)"/>
+
+            <!-- Menu separator -->
+            <Border x:Name="MenuSeparator"
+                    Grid.Column="7"
+                    Width="1" Margin="4,4"
+                    VerticalAlignment="Stretch"
+                    Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+            <!-- About button -->
+            <Button x:Name="AboutButton"
+                    Grid.Column="8"
+                    Content="About"
+                    MinWidth="80" MinHeight="40"
+                    Margin="8,0,8,0"
+                    Click="About_Click"
+                    CornerRadius="6"/>
+
+            <!-- Exit button -->
+            <Button x:Name="ExitButton"
+                    Grid.Column="9"
+                    Content="Exit"
+                    MinWidth="80" MinHeight="40"
+                    Margin="8,0,8,0"
+                    Click="Exit_Click"
+                    CornerRadius="6"/>
+
             <!-- Export buttons: disabled until a capture succeeds -->
             <Button x:Name="SaveButton"
-                    Grid.Column="6"
+                    Grid.Column="10"
                     Content="Save"
                     MinWidth="80" MinHeight="40"
                     Margin="0,0,6,0"
@@ -102,7 +137,7 @@ Layout:
                     ToolTipService.ToolTip="Save to default location"/>
 
             <Button x:Name="SaveAsButton"
-                    Grid.Column="7"
+                    Grid.Column="11"
                     Content="Save As…"
                     MinWidth="90" MinHeight="40"
                     Margin="0,0,6,0"
@@ -112,7 +147,7 @@ Layout:
                     ToolTipService.ToolTip="Choose location and filename"/>
 
             <Button x:Name="CopyToClipboardButton"
-                    Grid.Column="8"
+                    Grid.Column="12"
                     Content="Copy"
                     MinWidth="80" MinHeight="40"
                     Margin="0,0,8,0"
@@ -123,7 +158,7 @@ Layout:
 
             <!-- Delay input: compact NumberBox for 0–60 second countdown -->
             <NumberBox x:Name="DelaySecondsInput"
-                       Grid.Column="9"
+                       Grid.Column="13"
                        Header="Delay (s)"
                        Minimum="0" Maximum="60"
                        SmallChange="1" LargeChange="5"
@@ -136,7 +171,7 @@ Layout:
 
             <!-- Countdown progress: determinate bar hidden when idle -->
             <ProgressBar x:Name="CountdownProgress"
-                         Grid.Column="10"
+                         Grid.Column="14"
                          Width="120" MinHeight="6"
                          Margin="8,0,4,0"
                          VerticalAlignment="Center"
@@ -146,7 +181,7 @@ Layout:
 
             <!-- Cancel countdown button: hidden when idle -->
             <Button x:Name="CancelDelayButton"
-                    Grid.Column="11"
+                    Grid.Column="15"
                     Content="Cancel"
                     MinWidth="70" MinHeight="40"
                     Margin="4,0,0,0"
@@ -155,7 +190,7 @@ Layout:
                     CornerRadius="6"/>
 
             <ProgressRing x:Name="CaptureProgress"
-                          Grid.Column="11"
+                          Grid.Column="15"
                           Width="28" Height="28"
                           Margin="4,0,0,0"
                           Visibility="Collapsed"

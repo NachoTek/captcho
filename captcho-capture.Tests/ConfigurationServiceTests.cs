@@ -43,12 +43,12 @@ public class ConfigurationServiceTests : IDisposable
     }
 
     [Fact]
-    public void Load_MissingFile_ConfigPathSet()
+    public void Load_MissingFile_ConfigurationPathSet()
     {
         var svc = CreateService();
         var result = svc.Load();
 
-        Assert.Equal(Path.Combine(_tempDir, "settings.json"), result.ConfigPath);
+        Assert.Equal(Path.Combine(_tempDir, "settings.json"), result.ConfigurationPath);
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public class ConfigurationServiceTests : IDisposable
     [Fact]
     public void Save_CreatesDirectoryIfMissing()
     {
-        string subDir = Path.Combine(_tempDir, "nested", "config");
+        string subDir = Path.Combine(_tempDir, "nested", "configuration");
         var svc = new ConfigurationService(subDir);
         var settings = AppSettings.WithDefaults();
 
@@ -140,7 +140,52 @@ public class ConfigurationServiceTests : IDisposable
         Assert.NotNull(result.TempPath);
         Assert.False(File.Exists(result.TempPath));
         // Final file should exist
-        Assert.True(File.Exists(result.ConfigPath));
+        Assert.True(File.Exists(result.ConfigurationPath));
+    }
+
+    [Fact]
+    public void Save_WhenMoveFails_LeavesOriginalFileIntactAndCleansTemp()
+    {
+        // Disk-level atomic-write contract: if the final Move phase fails after the temp
+        // file was written, the EXISTING settings file must be left byte-for-byte intact
+        // and the temp file cleaned up. This is the persistence-seam half of the #12
+        // "neither change persisted" guarantee — a save that reports failure never strands a
+        // half-written file, so the session's single-save-all-or-nothing contract holds at
+        // the disk level too, not just in the session's in-memory bookkeeping.
+        var svc = CreateService();
+        var original = new AppSettings
+        {
+            SaveLocation = @"D:\Original",
+            FilenameTemplate = "original-<title>",
+        };
+        Assert.True(svc.Save(original).Success);
+        string configurationPath = svc.ConfigurationPath;
+        string originalJson = File.ReadAllText(configurationPath, Encoding.UTF8);
+
+        var changed = new AppSettings
+        {
+            SaveLocation = @"D:\Changed",
+            FilenameTemplate = "changed-<title>",
+        };
+
+        // Hold an exclusive (FileShare.None) handle on the settings file so the temp write
+        // succeeds but File.Move(overwrite: true) cannot replace the locked destination.
+        using (var lockStream = new FileStream(
+            configurationPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            var result = svc.Save(changed);
+            Assert.False(result.Success);
+            Assert.Equal("Move", result.Phase);
+        }
+
+        // Original file is intact — content unchanged and a reload yields pre-save values.
+        Assert.True(File.Exists(configurationPath));
+        Assert.Equal(originalJson, File.ReadAllText(configurationPath, Encoding.UTF8));
+        var reloaded = svc.Load().Settings;
+        Assert.Equal(@"D:\Original", reloaded.SaveLocation);
+        Assert.Equal("original-<title>", reloaded.FilenameTemplate);
+        // Temp file was cleaned up even though the Move failed.
+        Assert.False(File.Exists(configurationPath + ".tmp"));
     }
 
     // ── Corruption / Invalid JSON ────────────────────────────────────────
@@ -149,10 +194,10 @@ public class ConfigurationServiceTests : IDisposable
     public void Load_InvalidJSON_CreatesBackupAndReturnsDefaults()
     {
         var svc = CreateService();
-        string configPath = Path.Combine(_tempDir, "settings.json");
+        string configurationPath = Path.Combine(_tempDir, "settings.json");
 
         // Write invalid JSON
-        File.WriteAllText(configPath, "{ not valid json }", Encoding.UTF8);
+        File.WriteAllText(configurationPath, "{ not valid json }", Encoding.UTF8);
 
         var result = svc.Load();
 
@@ -168,9 +213,9 @@ public class ConfigurationServiceTests : IDisposable
     public void Load_InvalidJSON_BackupContainsOriginalContent()
     {
         var svc = CreateService();
-        string configPath = Path.Combine(_tempDir, "settings.json");
+        string configurationPath = Path.Combine(_tempDir, "settings.json");
         string badContent = "{ not valid json }";
-        File.WriteAllText(configPath, badContent, Encoding.UTF8);
+        File.WriteAllText(configurationPath, badContent, Encoding.UTF8);
 
         var result = svc.Load();
 
@@ -183,28 +228,28 @@ public class ConfigurationServiceTests : IDisposable
     public void Load_InvalidJSON_RemovesOriginalFile()
     {
         var svc = CreateService();
-        string configPath = Path.Combine(_tempDir, "settings.json");
-        File.WriteAllText(configPath, "bad", Encoding.UTF8);
+        string configurationPath = Path.Combine(_tempDir, "settings.json");
+        File.WriteAllText(configurationPath, "bad", Encoding.UTF8);
 
         svc.Load();
 
-        Assert.False(File.Exists(configPath));
+        Assert.False(File.Exists(configurationPath));
     }
 
     [Fact]
     public void Load_MultipleCorruptions_IncrementalBackupNames()
     {
         var svc = CreateService();
-        string configPath = Path.Combine(_tempDir, "settings.json");
+        string configurationPath = Path.Combine(_tempDir, "settings.json");
 
         // First corruption
-        File.WriteAllText(configPath, "bad1", Encoding.UTF8);
+        File.WriteAllText(configurationPath, "bad1", Encoding.UTF8);
         var result1 = svc.Load();
         Assert.NotNull(result1.BackupPath);
         Assert.EndsWith(".backup", result1.BackupPath);
 
         // Second corruption
-        File.WriteAllText(configPath, "bad2", Encoding.UTF8);
+        File.WriteAllText(configurationPath, "bad2", Encoding.UTF8);
         var result2 = svc.Load();
         Assert.NotNull(result2.BackupPath);
         Assert.EndsWith("1.backup", result2.BackupPath);
@@ -233,9 +278,9 @@ public class ConfigurationServiceTests : IDisposable
     public void Load_UnknownProperties_PreservedViaRoundTrip()
     {
         var svc = CreateService();
-        string configPath = Path.Combine(_tempDir, "settings.json");
+        string configurationPath = Path.Combine(_tempDir, "settings.json");
         string jsonWithExtra = """{"saveLocation":"C:\\Test","futureProperty":"futureValue"}""";
-        File.WriteAllText(configPath, jsonWithExtra, Encoding.UTF8);
+        File.WriteAllText(configurationPath, jsonWithExtra, Encoding.UTF8);
 
         var result = svc.Load();
         Assert.True(result.Success);
@@ -252,7 +297,9 @@ public class ConfigurationServiceTests : IDisposable
     {
         var settings = new AppSettings { SaveLocation = "relative/path" };
         var issues = settings.Validate();
-        Assert.Contains(issues, i => i.Contains("absolute"));
+        var issue = Assert.Single(issues);
+        Assert.Equal(SettingsField.SaveLocation, issue.Field);
+        Assert.Contains("absolute", issue.Message);
     }
 
     [Fact]
@@ -276,7 +323,8 @@ public class ConfigurationServiceTests : IDisposable
     {
         var settings = new AppSettings { FilenameTemplate = "   " };
         var issues = settings.Validate();
-        Assert.Contains(issues, i => i.Contains("FilenameTemplate"));
+        var issue = Assert.Single(issues);
+        Assert.Equal(SettingsField.FilenameTemplate, issue.Field);
     }
 
     [Fact]
@@ -371,10 +419,10 @@ public class ConfigurationServiceTests : IDisposable
     // ── Configuration Path ──────────────────────────────────────────────
 
     [Fact]
-    public void ConfigPath_ReturnsInjectedPath()
+    public void ConfigurationPath_ReturnsInjectedPath()
     {
         var svc = CreateService();
-        Assert.Equal(Path.Combine(_tempDir, "settings.json"), svc.ConfigPath);
+        Assert.Equal(Path.Combine(_tempDir, "settings.json"), svc.ConfigurationPath);
     }
 
     [Fact]
@@ -385,6 +433,6 @@ public class ConfigurationServiceTests : IDisposable
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "captcho",
             "settings.json");
-        Assert.Equal(expected, svc.ConfigPath);
+        Assert.Equal(expected, svc.ConfigurationPath);
     }
 }

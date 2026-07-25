@@ -16,6 +16,9 @@ rust-dll/target/
 # ── Misc scripts (root level only) ──
 /*.ps1
 
+# ── Skill working state (ephemeral; ticket briefs live on the issue tracker) ──
+.scratch/
+
 # ── GSD baseline (auto-generated) ──
 .gsd
 .gsd-id
@@ -46,3 +49,17 @@ vendor/
 coverage/
 .cache/
 tmp/
+
+# ── GSD baseline (auto-generated) ──
+nul
+nul.*
+con
+con.*
+prn
+prn.*
+aux
+aux.*
+com[1-9]
+com[1-9].*
+lpt[1-9]
+lpt[1-9].*

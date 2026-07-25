@@ -35,13 +35,13 @@ public partial class App : Application
     {
         // Load configuration — falls back to defaults on missing/corrupt file.
         // Never crashes the app for configuration issues.
-        var configService = new ConfigurationService();
-        var loadResult = configService.Load();
+        var configurationService = new ConfigurationService();
+        var loadResult = configurationService.Load();
 
         LoadedSettings = loadResult.Settings;
         LoadResult = loadResult;
 
-        _window = new MainWindow(loadResult.Settings, configService, loadResult);
+        _window = new MainWindow(loadResult.Settings, configurationService, loadResult);
         _window.Closed += OnWindowClosed;
         _window.Activate();
     }

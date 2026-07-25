@@ -1,0 +1,3 @@
+# Pre-capture annotation
+
+Annotation happens on a live screen overlay _before_ the capture is taken, not on the captured frame afterward. The user sees their actual screen with annotation tools overlaid, draws or marks what they want, and then the system captures screen plus annotations together. For Selection mode, drawing the region and annotating happen in a single combined overlay pass; for other modes that use target selection, annotation follows target selection on the same overlay. This was chosen over the post-capture model (used by ShareX, Snipaste) because it preserves spatial context — the user annotates against live UI elements rather than a frozen screenshot — and avoids the extra step of selecting-then-editing.

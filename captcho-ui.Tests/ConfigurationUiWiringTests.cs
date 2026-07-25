@@ -637,8 +637,8 @@ public class ConfigurationUiWiringTests
         var tempDir = Path.Combine(Path.GetTempPath(), $"captcho_cfg_{Guid.NewGuid():N}");
         try
         {
-            var configService = new ConfigurationService(tempDir);
-            var loadResult = configService.Load();
+            var configurationService = new ConfigurationService(tempDir);
+            var loadResult = configurationService.Load();
 
             Assert.True(loadResult.Success);
             Assert.True(loadResult.UsedDefaults);
@@ -660,9 +660,9 @@ public class ConfigurationUiWiringTests
         try
         {
             // Write settings first
-            var configService = new ConfigurationService(tempDir);
+            var configurationService = new ConfigurationService(tempDir);
             var expectedDir = Path.Combine(tempDir, "MyExports");
-            var saveResult = configService.Save(new AppSettings
+            var saveResult = configurationService.Save(new AppSettings
             {
                 SaveLocation = expectedDir,
                 FilenameTemplate = "Test_<yyyy>"
@@ -670,7 +670,7 @@ public class ConfigurationUiWiringTests
             Assert.True(saveResult.Success);
 
             // Load and use in mediator
-            var loadResult = configService.Load();
+            var loadResult = configurationService.Load();
             var mediator = new ConfiguredExportFlowMediator(settings: loadResult.Settings);
 
             Assert.Equal(expectedDir, mediator.CurrentSettings.SaveLocation);

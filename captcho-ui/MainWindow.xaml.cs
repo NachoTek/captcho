@@ -43,7 +43,7 @@ public sealed partial class MainWindow : Window
     /// Configuration service for persisting settings changes (e.g., after Save As).
     /// Null in design-time/test scenarios where persistence is not needed.
     /// </summary>
-    private readonly ConfigurationService? _configService;
+    private readonly ConfigurationService? _configurationService;
 
     /// <summary>
     /// The configuration load result from startup, exposing load warnings and backup paths.
@@ -52,6 +52,12 @@ public sealed partial class MainWindow : Window
     private readonly ConfigurationLoadResult? _loadResult;
 
     private readonly CapturePreviewService _captureService = new();
+
+    /// <summary>
+    /// Coordinates singleton settings window lifecycle.
+    /// Ensures only one settings dialog is open at a time.
+    /// </summary>
+    private SettingsWindowCoordinator? _settingsCoordinator;
 
     /// <summary>
     /// Tracks whether a capture has succeeded and the cached bitmap is available for export.
@@ -71,13 +77,13 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private CancellationTokenSource? _activeCts;
 
-    // ── Hotkey fields ─────────────────────────────────────────────────
+    // ── Global Hotkey fields ─────────────────────────────────────────────────
 
     /// <summary>
-    /// Manages registration and cleanup of all four global capture hotkeys.
+    /// Manages registration and cleanup of all four Global Hotkeys.
     /// Null before initialization or after disposal.
     /// </summary>
-    private HotkeyManager? _hotkeyManager;
+    private GlobalHotkeyManager? _globalHotkeyManager;
 
     /// <summary>
     /// Original window procedure before subclassing. Used to restore on cleanup.
@@ -85,14 +91,21 @@ public sealed partial class MainWindow : Window
     private IntPtr _originalWndProc;
 
     /// <summary>
-    /// Window handle used for hotkey registration and subclassing.
+    /// Window handle used for Global Hotkey registration and subclassing.
     /// </summary>
     private IntPtr _hwnd;
 
     /// <summary>
-    /// Guards against double-cleanup of hotkey resources (UnregisterAll + subclass removal).
+    /// Guards against double-cleanup of Global Hotkey resources (UnregisterAll + subclass removal).
     /// </summary>
-    private bool _hotkeyCleanedUp;
+    private bool _globalHotkeyCleanedUp;
+
+    // ── Settings keyboard accelerator fields ───────────────────────────────────────
+
+    /// <summary>
+    /// Tracks whether settings window keyboard accelerator (F4 or Ctrl+,) is being pressed.
+    /// </summary>
+    private bool _isSettingsAcceleratorPressed;
 
     // ── P/Invoke for window subclassing ───────────────────────────────
 
@@ -111,6 +124,11 @@ public sealed partial class MainWindow : Window
     private static extern IntPtr CallWindowProc(IntPtr lpPrevWndFunc, IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
     private const int GWLP_WNDPROC = -4;
+    private const int WM_KEYDOWN = 0x0100;
+    private const int WM_KEYUP = 0x0101;
+    private const int VK_CONTROL = 0x11;
+    private const int VK_F4 = 0x73;
+    private const int VK_OEM_COMMA = 0xBC;
 
     /// <summary>
     /// Keeps the managed delegate alive (prevents GC collection while subclassed).
@@ -130,12 +148,12 @@ public sealed partial class MainWindow : Window
     /// Falls back to defaults safely if settings are null.
     /// </summary>
     /// <param name="settings">Loaded application settings (may be defaults).</param>
-    /// <param name="configService">Configuration service for persisting settings changes.</param>
+    /// <param name="configurationService">Configuration service for persisting settings changes.</param>
     /// <param name="loadResult">Configuration load result with optional warnings.</param>
-    public MainWindow(AppSettings settings, ConfigurationService? configService, ConfigurationLoadResult? loadResult)
+    public MainWindow(AppSettings settings, ConfigurationService? configurationService, ConfigurationLoadResult? loadResult)
     {
         _settings = settings ?? AppSettings.WithDefaults();
-        _configService = configService;
+        _configurationService = configurationService;
         _loadResult = loadResult;
 
         InitializeComponent();
@@ -145,21 +163,31 @@ public sealed partial class MainWindow : Window
         var appWindow = this.AppWindow;
         appWindow.Resize(new Windows.Graphics.SizeInt32(1100, 700));
 
-        // Initialize hotkeys after the window has an HWND.
+        // Initialize Global Hotkeys after the window has an HWND.
         // In WinUI 3, the HWND is available immediately after construction.
-        InitializeHotkeys();
+        InitializeGlobalHotkeys();
+
+        // Initialize settings coordinator with production delegates
+        if (_configurationService != null)
+        {
+            _settingsCoordinator = new SettingsWindowCoordinator(
+                CreateSettingsSession,
+                CreateSettingsWindow,
+                ActivateSettingsWindow,
+                SubscribeToWindowClosed);
+        }
 
         // Ensure cleanup on window close
         this.Closed += OnWindowClosed;
     }
 
-    // ── Hotkey initialization and cleanup ─────────────────────────────
+    // ── Global Hotkey initialization and cleanup ─────────────────────────────
 
     /// <summary>
     /// Registers all four global hotkeys and installs a WndProc subclass for WM_HOTKEY.
     /// Reports partial registration conflicts in status text without throwing.
     /// </summary>
-    private void InitializeHotkeys()
+    private void InitializeGlobalHotkeys()
     {
         try
         {
@@ -172,12 +200,15 @@ public sealed partial class MainWindow : Window
             _hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
             if (_hwnd == IntPtr.Zero)
             {
-                StatusText.Text = "Hotkeys: window handle unavailable — keyboard shortcuts disabled.";
+                StatusText.Text = "Global Hotkeys: window handle unavailable — keyboard accelerators disabled.";
                 return;
             }
 
-            _hotkeyManager = new HotkeyManager(new WindowsHotkeyRegistrar());
-            var results = _hotkeyManager.RegisterAll(_hwnd);
+            _globalHotkeyManager = new GlobalHotkeyManager(new WindowsGlobalHotkeyRegistrar());
+            // Register only the Global Hotkeys the user has enabled, so disabled
+            // Global Hotkeys are not active on launch. Global Hotkeys disabled in settings are
+            // skipped; the rest register just like RegisterAll would.
+            var results = _globalHotkeyManager.Reconcile(_hwnd, GlobalHotkeyRouteMap.EnabledGlobalHotkeyIds(_settings));
 
             // Install WndProc subclass to intercept WM_HOTKEY messages.
             // Keep the delegate alive to prevent GC collection while subclassed.
@@ -186,40 +217,70 @@ public sealed partial class MainWindow : Window
                 Marshal.GetFunctionPointerForDelegate(_wndProcDelegate));
 
             // Report registration status
-            StatusText.Text = _hotkeyManager.GetRegistrationSummary();
+            StatusText.Text = _globalHotkeyManager.GetRegistrationSummary();
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Hotkeys: setup failed — {SanitizeException(ex)}";
+            StatusText.Text = $"Global Hotkeys: setup failed — {SanitizeException(ex)}";
         }
     }
 
     /// <summary>
-    /// Subclassed window procedure that intercepts WM_HOTKEY and delegates all other
-    /// messages to the original window proc. Unknown hotkey ids are silently ignored.
+    /// Subclassed window procedure that intercepts WM_HOTKEY and WM_KEYDOWN/WM_KEYUP messages.
+    /// Handles the settings keyboard accelerators (F4 and Ctrl+,) and delegates other messages to the original proc.
     /// </summary>
     private IntPtr SubclassedWndProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
-        if (msg == HotkeyRouteMap.WM_HOTKEY && _hotkeyManager != null)
+        if (msg == GlobalHotkeyRouteMap.WM_HOTKEY && _globalHotkeyManager != null)
         {
-            int hotkeyId = wParam.ToInt32();
-            if (_hotkeyManager.TryResolveRoute(hotkeyId, out HotkeyRoute route))
+            int globalHotkeyId = wParam.ToInt32();
+            if (_globalHotkeyManager.TryResolveRoute(globalHotkeyId, out GlobalHotkeyRoute route))
             {
                 // Dispatch on the UI thread via DispatcherQueue
-                DispatcherQueue.TryEnqueue(() => DispatchHotkeyRoute(route));
+                DispatcherQueue.TryEnqueue(() => DispatchGlobalHotkeyRoute(route));
             }
-            // Unknown hotkey ids are silently ignored — not an error.
+            // Unknown Global Hotkey ids are silently ignored — not an error.
             // Still call original WndProc for WM_HOTKEY to maintain default handling.
+        }
+        else if (msg == WM_KEYDOWN)
+        {
+            int vk = wParam.ToInt32();
+            bool isCtrlPressed = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+
+            // Handle F4 or Ctrl+, for settings
+            if (vk == VK_F4 || (isCtrlPressed && vk == VK_OEM_COMMA))
+            {
+                if (!_isSettingsAcceleratorPressed)
+                {
+                    _isSettingsAcceleratorPressed = true;
+                    DispatcherQueue.TryEnqueue(() => Settings_Click(null, null!));
+                }
+                return IntPtr.Zero;
+            }
+        }
+        else if (msg == WM_KEYUP)
+        {
+            int vk = wParam.ToInt32();
+            if (vk == VK_F4 || vk == VK_OEM_COMMA)
+            {
+                _isSettingsAcceleratorPressed = false;
+            }
         }
 
         return CallWindowProc(_originalWndProc, hwnd, msg, wParam, lParam);
     }
 
     /// <summary>
-    /// Dispatches a hotkey route to the appropriate capture workflow.
+    /// Gets the current key state for a virtual key.
+    /// </summary>
+    [DllImport("user32.dll")]
+    private static extern short GetKeyState(int nVirtKey);
+
+    /// <summary>
+    /// Dispatches a Global Hotkey route to the appropriate capture workflow.
     /// Respects the _isOperationRunning guard to prevent overlapping captures.
     /// </summary>
-    private void DispatchHotkeyRoute(HotkeyRoute route)
+    private void DispatchGlobalHotkeyRoute(GlobalHotkeyRoute route)
     {
         if (_isOperationRunning)
         {
@@ -230,33 +291,33 @@ public sealed partial class MainWindow : Window
 
         switch (route)
         {
-            case HotkeyRoute.CurrentMonitor:
+            case GlobalHotkeyRoute.CurrentMonitor:
                 _ = RunDelayedCaptureAsync(_captureService.CaptureCurrentMonitorAsync);
                 break;
-            case HotkeyRoute.ActiveWindow:
+            case GlobalHotkeyRoute.ActiveWindow:
                 _ = RunDelayedCaptureAsync(_captureService.CaptureActiveWindowAsync);
                 break;
-            case HotkeyRoute.FullDesktop:
+            case GlobalHotkeyRoute.FullDesktop:
                 _ = RunDelayedCaptureAsync(_captureService.CaptureFullDesktopAsync);
                 break;
-            case HotkeyRoute.RectangularRegion:
+            case GlobalHotkeyRoute.RectangularRegion:
                 _ = RunDelayedRegionCaptureAsync();
                 break;
         }
     }
 
     /// <summary>
-    /// Cleans up hotkey registrations and removes the WndProc subclass.
+    /// Cleans up Global Hotkey registrations and removes the WndProc subclass.
     /// Idempotent — safe to call multiple times.
     /// </summary>
-    private void CleanupHotkeys()
+    private void CleanupGlobalHotkeys()
     {
-        if (_hotkeyCleanedUp) return;
-        _hotkeyCleanedUp = true;
+        if (_globalHotkeyCleanedUp) return;
+        _globalHotkeyCleanedUp = true;
 
         try
         {
-            // Restore original window proc before unregistering hotkeys
+            // Restore original window proc before unregistering Global Hotkeys
             if (_hwnd != IntPtr.Zero && _originalWndProc != IntPtr.Zero)
             {
                 SetWindowLongPtr64(_hwnd, GWLP_WNDPROC, _originalWndProc);
@@ -273,21 +334,29 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            _hotkeyManager?.UnregisterAll();
+            _globalHotkeyManager?.UnregisterAll();
         }
         catch
         {
-            // Unregister failure is non-fatal; hotkeys are released when
+            // Unregister failure is non-fatal; Global Hotkeys are released when
             // the process exits.
         }
     }
 
     /// <summary>
-    /// Handles window close event — ensures hotkeys are unregistered exactly once.
+    /// Handles window close event — ensures Global Hotkeys are unregistered exactly once
+    /// and any open settings window is closed cleanly.
     /// </summary>
     private void OnWindowClosed(object sender, WindowEventArgs args)
     {
-        CleanupHotkeys();
+        // Close settings window if open (lets it save its own placement)
+        if (_settingsCoordinator != null && _settingsCoordinator.IsWindowOpen)
+        {
+            var currentWindow = _settingsCoordinator.CurrentWindow as SettingsWindow;
+            currentWindow?.Close();
+        }
+
+        CleanupGlobalHotkeys();
         this.Closed -= OnWindowClosed;
     }
 
@@ -415,7 +484,7 @@ public sealed partial class MainWindow : Window
             TimingText.Text = FormatTimingWithExport(result, null);
 
             // Persist the selected directory after successful save only
-            if (result.Success && _configService != null)
+            if (result.Success && _configurationService != null)
             {
                 PersistSaveAsDirectory(Path.GetDirectoryName(file.Path));
             }
@@ -437,7 +506,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void PersistSaveAsDirectory(string? directory)
     {
-        if (string.IsNullOrWhiteSpace(directory) || _configService == null)
+        if (string.IsNullOrWhiteSpace(directory) || _configurationService == null)
             return;
 
         try
@@ -448,7 +517,7 @@ public sealed partial class MainWindow : Window
                 FilenameTemplate = _settings.FilenameTemplate,
             };
 
-            var saveResult = _configService.Save(updatedSettings);
+            var saveResult = _configurationService.Save(updatedSettings);
 
             if (saveResult.Success)
             {
@@ -791,6 +860,116 @@ public sealed partial class MainWindow : Window
         if (newline > 0)
             msg = msg[..newline];
         return msg;
+    }
+
+    // ── Button handlers ───────────────────────────────────────────────
+
+    /// <summary>
+    /// Handles Settings button click — opens the settings dialog using the coordinator.
+    /// Also invoked by F4 or Ctrl+, keyboard accelerators.
+    /// </summary>
+    private void Settings_Click(object sender, RoutedEventArgs e)
+    {
+        if (_settingsCoordinator == null)
+        {
+            StatusText.Text = "Settings not available in this context.";
+            return;
+        }
+
+        _settingsCoordinator.CreateOrActivate();
+    }
+
+    /// <summary>
+    /// Handles Exit menu item click — closes the main window.
+    /// </summary>
+    private void Exit_Click(object sender, RoutedEventArgs e)
+    {
+        Close();
+    }
+
+    /// <summary>
+    /// Handles About menu item click — shows a simple about dialog.
+    /// </summary>
+    private void About_Click(object sender, RoutedEventArgs e)
+    {
+        StatusText.Text = "captcho — Screen Capture Tool v1.0";
+    }
+
+    // ── Settings window coordinator delegates ─────────────────────────
+
+    /// <summary>
+    /// Factory delegate for constructing a fresh composed session per window-open.
+    /// Captures the live runtime settings, ConfigurationService, and a Global Hotkey
+    /// adapter bound to the live Global Hotkey manager so Apply/OK reconcile runtime
+    /// registration. When Global Hotkeys could not be initialized, a no-op adapter keeps the
+    /// tab rendering without crashing.
+    /// </summary>
+    private SettingsSession CreateSettingsSession()
+    {
+        if (_configurationService == null)
+            throw new InvalidOperationException("Settings session requires a ConfigurationService.");
+
+        var settings = _settings ?? AppSettings.WithDefaults();
+        IGlobalHotkeyAdapter adapter = _globalHotkeyManager is not null
+            ? new GlobalHotkeyManagerAdapter(_globalHotkeyManager, _hwnd)
+            : new NullGlobalHotkeyAdapter();
+        return new SettingsSession(settings, _configurationService, adapter);
+    }
+
+    /// <summary>
+    /// Factory delegate for creating a new settings window bound to a session.
+    /// </summary>
+    private object? CreateSettingsWindow(SettingsSession session)
+    {
+        var window = new SettingsWindow(session);
+        return window;
+    }
+
+    /// <summary>
+    /// Activation delegate for bringing the settings window to the foreground.
+    /// </summary>
+    private void ActivateSettingsWindow(object windowHandle)
+    {
+        if (windowHandle is SettingsWindow window)
+        {
+            // Activate by bringing to foreground (WinUI 3 Window has no Activate method directly)
+            // Use WinRT interop to bring window to front
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
+            if (hwnd != IntPtr.Zero)
+            {
+                // Show and bring to foreground using Win32 SetForegroundWindow
+                NativeMethods.SetForegroundWindow(hwnd);
+                NativeMethods.ShowWindow(hwnd, NativeMethods.SW_RESTORE);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Subscription delegate for tracking when the settings window closes.
+    /// </summary>
+    private void SubscribeToWindowClosed(object windowHandle, Action onClosed)
+    {
+        if (windowHandle is SettingsWindow window)
+        {
+            // We already hook Closed in SettingsWindow, so the coordinator's callback
+            // is not directly used. The coordinator's OnWindowClosed clears the reference,
+            // but SettingsWindow doesn't call back to coordinator.
+            // Instead, we hook the Closed event here to invoke the coordinator's cleanup.
+            window.Closed += (s, e) => onClosed();
+        }
+    }
+
+    // ── Native methods for window activation ───────────────────────────
+
+    private static class NativeMethods
+    {
+        [DllImport("user32.dll")]
+        public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        public const int SW_RESTORE = 9;
     }
 }
 
