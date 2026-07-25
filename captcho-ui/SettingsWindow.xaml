@@ -97,29 +97,52 @@ Layout:
             </TabViewItem>
 
             <TabViewItem Header="Export">
-                <StackPanel Spacing="12" Padding="20">
-                    <TextBlock Text="Export settings are not implemented yet."
-                               TextWrapping="Wrap"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                               FontSize="14"/>
-                    <TextBlock Text="This tab will contain export format and quality options."
-                               TextWrapping="Wrap"
-                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                               FontSize="13"/>
-                </StackPanel>
+                <ScrollViewer Padding="20" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Spacing="12">
+                        <TextBlock x:Name="ExportFormatHeading"
+                                   FontSize="16" FontWeight="SemiBold"
+                                   AutomationProperties.HeadingLevel="Level1"/>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="Current format"
+                                       FontSize="14"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <TextBlock x:Name="ExportFormatNameText"
+                                       FontSize="14" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="ExportFormatExtensionText"
+                                       FontFamily="Consolas"
+                                       FontSize="14"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        </StackPanel>
+                        <TextBlock x:Name="ExportFormatDescriptionText"
+                                   TextWrapping="Wrap"
+                                   FontSize="13"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock x:Name="ExportPlannedFormatsText"
+                                   TextWrapping="Wrap"
+                                   FontSize="13" FontStyle="Italic"
+                                   Margin="0,4,0,0"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                    </StackPanel>
+                </ScrollViewer>
             </TabViewItem>
 
             <TabViewItem Header="Interface">
-                <StackPanel Spacing="12" Padding="20">
-                    <TextBlock Text="Interface settings are not implemented yet."
-                               TextWrapping="Wrap"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                               FontSize="14"/>
-                    <TextBlock Text="This tab will contain UI customization options."
-                               TextWrapping="Wrap"
-                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                               FontSize="13"/>
-                </StackPanel>
+                <ScrollViewer Padding="20" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Spacing="12">
+                        <TextBlock x:Name="InterfaceHeading"
+                                   FontSize="16" FontWeight="SemiBold"
+                                   AutomationProperties.HeadingLevel="Level1"/>
+                        <TextBlock x:Name="InterfaceMessageText"
+                                   TextWrapping="Wrap"
+                                   FontSize="14"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock x:Name="InterfacePlannedText"
+                                   TextWrapping="Wrap"
+                                   FontSize="13" FontStyle="Italic"
+                                   Margin="0,4,0,0"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                    </StackPanel>
+                </ScrollViewer>
             </TabViewItem>
         </TabView>
 

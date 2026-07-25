@@ -5,7 +5,10 @@
 // (text or Windows folder picker) and the Filename Template through the pure C#
 // GeneralTabSettings seam (preview, validation, Apply/OK/Cancel). Saved values are
 // written back to the live in-memory settings so the export flow picks them up
-// without a restart. Hotkeys/Export/Interface remain placeholders for later slices.
+// without a restart. The Export and Interface tabs render read-only content
+// through the ExportTabSettings and InterfaceTabSettings seams (current PNG format
+// and a not-yet-available interface message). The Hotkeys tab remains a placeholder
+// for a later slice.
 // The bottom row has OK (save+close on success), Cancel (discard+close), and Apply
 // (save, stay open). Window position and size are persisted to
 // ApplicationData.Current.LocalSettings.
@@ -35,6 +38,18 @@ public sealed partial class SettingsWindow : Window
     /// </summary>
     private GeneralTabSettings? _generalTab;
 
+    /// <summary>
+    /// Read-only display seam for the Export tab. Surfaces the current export format
+    /// (PNG) and supporting text. Null only when the window fails to initialize.
+    /// </summary>
+    private ExportTabSettings? _exportTab;
+
+    /// <summary>
+    /// Read-only display seam for the Interface tab. Surfaces the not-yet-available
+    /// message and planned-settings note. Null only when the window fails to initialize.
+    /// </summary>
+    private InterfaceTabSettings? _interfaceTab;
+
     private const string WindowPlacementKey = "SettingsWindowPlacement";
 
     /// <summary>
@@ -59,6 +74,10 @@ public sealed partial class SettingsWindow : Window
 
         // Wire the General tab editing seam (snapshots settings; never mutates the active settings)
         InitializeGeneralTab();
+
+        // Wire the read-only Export and Interface tab seams (display content only).
+        InitializeExportTab();
+        InitializeInterfaceTab();
 
         // Hook Closed event for coordinator cleanup
         this.Closed += OnWindowClosed;
@@ -108,6 +127,40 @@ public sealed partial class SettingsWindow : Window
         SaveLocationInput.Text = _generalTab.SaveLocation;
         FilenameTemplateInput.Text = _generalTab.FilenameTemplate;
         RefreshGeneralTabState();
+    }
+
+    // ── Export tab seam wiring ───────────────────────────────────────────
+
+    /// <summary>
+    /// Constructs the read-only Export tab seam and populates the format display
+    /// (name, extension, description, and planned-formats note) from the coordinator.
+    /// Read-only: no editing, validation, or persistence.
+    /// </summary>
+    private void InitializeExportTab()
+    {
+        _exportTab = new ExportTabSettings();
+
+        ExportFormatHeading.Text = _exportTab.Heading;
+        ExportFormatNameText.Text = _exportTab.FormatName;
+        ExportFormatExtensionText.Text = $"({_exportTab.FileExtension})";
+        ExportFormatDescriptionText.Text = _exportTab.FormatDescription;
+        ExportPlannedFormatsText.Text = _exportTab.PlannedFormatsNote;
+    }
+
+    // ── Interface tab seam wiring ────────────────────────────────────────
+
+    /// <summary>
+    /// Constructs the read-only Interface tab seam and populates the heading,
+    /// not-yet-available message, and planned-settings note from the coordinator.
+    /// Read-only: no editing, validation, or persistence.
+    /// </summary>
+    private void InitializeInterfaceTab()
+    {
+        _interfaceTab = new InterfaceTabSettings();
+
+        InterfaceHeading.Text = _interfaceTab.Heading;
+        InterfaceMessageText.Text = _interfaceTab.Message;
+        InterfacePlannedText.Text = _interfaceTab.PlannedSettingsNote;
     }
 
     /// <summary>
