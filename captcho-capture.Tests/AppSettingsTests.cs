@@ -306,4 +306,119 @@ public class AppSettingsTests : IDisposable
 
         Assert.DoesNotContain("hotkeyEnabledStates", json, StringComparison.OrdinalIgnoreCase);
     }
+
+    // ── Validate(): structured, field-attributed source of truth (#13) ──────────
+
+    [Fact]
+    public void Validate_EmptySettings_HasNoIssues()
+    {
+        var settings = new AppSettings();
+
+        Assert.Empty(settings.Validate());
+    }
+
+    [Fact]
+    public void Validate_WithDefaults_HasNoIssues()
+    {
+        var settings = AppSettings.WithDefaults();
+
+        Assert.Empty(settings.Validate());
+    }
+
+    [Fact]
+    public void Validate_RelativeSaveLocation_AttributedToSaveLocationField()
+    {
+        var settings = new AppSettings { SaveLocation = "relative/path" };
+
+        var issue = Assert.Single(settings.Validate());
+
+        Assert.Equal(SettingsField.SaveLocation, issue.Field);
+        Assert.Contains("absolute", issue.Message);
+    }
+
+    [Fact]
+    public void Validate_EmptySaveLocation_HasNoIssue_AllowingDefaultFallback()
+    {
+        // Empty/whitespace resolves to the default on save; it is not a validation error.
+        var settings = new AppSettings { SaveLocation = "   " };
+
+        Assert.Empty(settings.Validate());
+    }
+
+    [Fact]
+    public void Validate_WhitespaceFilenameTemplate_AttributedToFilenameTemplateField()
+    {
+        var settings = new AppSettings { FilenameTemplate = "   " };
+
+        var issue = Assert.Single(settings.Validate());
+
+        Assert.Equal(SettingsField.FilenameTemplate, issue.Field);
+        Assert.Contains("empty", issue.Message);
+    }
+
+    [Fact]
+    public void Validate_NullFilenameTemplate_HasNoIssue_AllowingDefaultFallback()
+    {
+        var settings = new AppSettings { FilenameTemplate = null };
+
+        Assert.Empty(settings.Validate());
+    }
+
+    [Fact]
+    public void Validate_MultipleInvalidFields_ReportsEachWithAttribution()
+    {
+        var settings = new AppSettings
+        {
+            SaveLocation = "relative",
+            FilenameTemplate = "  ",
+        };
+
+        var issues = settings.Validate();
+
+        Assert.Equal(2, issues.Count);
+        Assert.Contains(issues, i => i.Field == SettingsField.SaveLocation);
+        Assert.Contains(issues, i => i.Field == SettingsField.FilenameTemplate);
+    }
+
+    // ── Validate(): Global Hotkey enabled-states rule (extended for #13) ────────
+
+    [Fact]
+    public void Validate_GlobalHotkeyStates_KnownRoutes_HasNoIssue()
+    {
+        var settings = new AppSettings
+        {
+            GlobalHotkeyEnabledStates = AllRoutes.ToDictionary(r => r, _ => true),
+        };
+
+        Assert.Empty(settings.Validate());
+    }
+
+    [Fact]
+    public void Validate_GlobalHotkeyStates_Null_HasNoIssue()
+    {
+        var settings = new AppSettings { GlobalHotkeyEnabledStates = null };
+
+        Assert.Empty(settings.Validate());
+    }
+
+    [Fact]
+    public void Validate_GlobalHotkeyStates_UnknownRoute_AttributedToHotkeyField()
+    {
+        // Defensive boundary check: an out-of-range route key (only reachable through a
+        // programming error or corruption; the typed API and JSON converter cannot
+        // introduce one through normal use) is flagged so the hotkey tab is never
+        // "valid by accident".
+        var settings = new AppSettings
+        {
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool>
+            {
+                [(GlobalHotkeyRoute)999] = true,
+            },
+        };
+
+        var issue = Assert.Single(settings.Validate());
+
+        Assert.Equal(SettingsField.GlobalHotkeyEnabledStates, issue.Field);
+        Assert.Contains("unknown route", issue.Message);
+    }
 }

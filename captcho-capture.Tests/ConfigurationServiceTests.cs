@@ -297,7 +297,9 @@ public class ConfigurationServiceTests : IDisposable
     {
         var settings = new AppSettings { SaveLocation = "relative/path" };
         var issues = settings.Validate();
-        Assert.Contains(issues, i => i.Contains("absolute"));
+        var issue = Assert.Single(issues);
+        Assert.Equal(SettingsField.SaveLocation, issue.Field);
+        Assert.Contains("absolute", issue.Message);
     }
 
     [Fact]
@@ -321,7 +323,8 @@ public class ConfigurationServiceTests : IDisposable
     {
         var settings = new AppSettings { FilenameTemplate = "   " };
         var issues = settings.Validate();
-        Assert.Contains(issues, i => i.Contains("FilenameTemplate"));
+        var issue = Assert.Single(issues);
+        Assert.Equal(SettingsField.FilenameTemplate, issue.Field);
     }
 
     [Fact]

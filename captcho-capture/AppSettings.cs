@@ -9,6 +9,29 @@ using System.Text.Json.Serialization;
 namespace captcho.Capture;
 
 /// <summary>
+/// Identifies which persisted setting a <see cref="SettingsIssue"/> belongs to. Used by
+/// <see cref="AppSettings.Validate"/> to attribute each issue so editable tabs can surface
+/// inline per-field errors and the composed session can build a cross-tab status, all from
+/// the one validation result.
+/// </summary>
+public enum SettingsField
+{
+    /// <summary>The <see cref="AppSettings.SaveLocation"/> field.</summary>
+    SaveLocation,
+    /// <summary>The <see cref="AppSettings.FilenameTemplate"/> field.</summary>
+    FilenameTemplate,
+    /// <summary>The <see cref="AppSettings.GlobalHotkeyEnabledStates"/> field.</summary>
+    GlobalHotkeyEnabledStates,
+}
+
+/// <summary>
+/// One validation issue produced by <see cref="AppSettings.Validate"/>: which field it
+/// concerns and a user-displayable message. Carried verbatim into inline tab errors and
+/// the composed session status so the message text has exactly one source.
+/// </summary>
+public sealed record SettingsIssue(SettingsField Field, string Message);
+
+/// <summary>
 /// User-configurable settings persisted to %LOCALAPPDATA%\captcho\settings.json.
 /// Unknown properties from future versions are preserved during round-trip.
 /// </summary>
@@ -93,28 +116,57 @@ public sealed class AppSettings
         || enabled;
 
     /// <summary>
-    /// Validates the settings, returning a list of issues found.
-    /// An empty list means the settings are valid.
+    /// Validates the settings, returning a list of field-attributed issues found.
+    /// An empty list means the settings are valid. This is the single source of truth
+    /// for persisted-setting validity: every editable tab and the composed settings
+    /// session gate Apply/OK enablement through this method, so a validation rule added
+    /// here flows to both inline per-field errors and the cross-tab button gate without
+    /// any caller-specific duplication.
     /// </summary>
-    public List<string> Validate()
+    public IReadOnlyList<SettingsIssue> Validate()
     {
-        var issues = new List<string>();
+        var issues = new List<SettingsIssue>();
 
-        // SaveLocation: if provided, must be an absolute path
+        // SaveLocation: if provided, must be an absolute path. Empty/whitespace is valid
+        // (it resolves to the default on save via Normalized).
         if (!string.IsNullOrWhiteSpace(SaveLocation))
         {
             if (!Path.IsPathRooted(SaveLocation))
             {
-                issues.Add("SaveLocation must be an absolute path.");
+                issues.Add(new SettingsIssue(
+                    SettingsField.SaveLocation,
+                    "Save location must be an absolute path."));
             }
         }
 
-        // FilenameTemplate: if provided, must not be empty/whitespace after trimming
-        // (the ExportFilenameTemplate.Expand method will validate at expansion time,
-        //  but we can pre-check for obviously invalid values)
+        // FilenameTemplate: if provided (non-null), must not be empty/whitespace after
+        // trimming. A null template is valid (resolves to the default via Normalized);
+        // an explicitly blank one is a user edit that cannot produce a filename.
         if (FilenameTemplate is not null && string.IsNullOrWhiteSpace(FilenameTemplate))
         {
-            issues.Add("FilenameTemplate must not be empty or whitespace when specified.");
+            issues.Add(new SettingsIssue(
+                SettingsField.FilenameTemplate,
+                "Filename template must not be empty."));
+        }
+
+        // GlobalHotkeyEnabledStates: defensive structural check at the persistence
+        // boundary. The typed API and JSON converter cannot introduce an undefined
+        // route through normal use, so this rule is a no-op on well-formed state — but
+        // it gives the field a real validation path (covered by AppSettings.Validate)
+        // so the Global Hotkeys tab is never "valid by accident" and a future rule flows
+        // straight through the composed Apply/OK gate.
+        if (GlobalHotkeyEnabledStates is not null)
+        {
+            foreach (var route in GlobalHotkeyEnabledStates.Keys)
+            {
+                if (!Enum.IsDefined(typeof(GlobalHotkeyRoute), route))
+                {
+                    issues.Add(new SettingsIssue(
+                        SettingsField.GlobalHotkeyEnabledStates,
+                        "Global Hotkey enabled states contain an unknown route."));
+                    break;
+                }
+            }
         }
 
         return issues;

@@ -10,7 +10,7 @@
 
 using System;
 using System.Collections.Generic;
-using System.IO;
+using System.Linq;
 using captcho.Capture;
 
 namespace captcho.UI;
@@ -105,33 +105,34 @@ internal sealed class GeneralTabSettings : EditableTabSession
 
     // ── Validation ──────────────────────────────────────────────────────
 
-    private const string EmptyTemplateError = "Filename template must not be empty.";
-    private const string RelativeSaveLocationError = "Save location must be an absolute path.";
+    /// <summary>
+    /// True when every working field passes its validation rule. Derived from
+    /// <see cref="AppSettings.Validate"/> (the source of truth) so this tab and the
+    /// composed session gate never disagree about what counts as a valid Save Location or
+    /// Filename Template.
+    /// </summary>
+    public override bool IsValid => SliceIssues().Count == 0;
 
     /// <summary>
-    /// True when the working Save Location, if provided, is an absolute path.
-    /// Empty/whitespace is valid (it resolves to the default on save via Normalized),
-    /// mirroring <see cref="AppSettings.Validate"/>.
+    /// Inline validation message for the Save Location, sourced from
+    /// <see cref="AppSettings.Validate"/>, or null when valid.
     /// </summary>
-    public bool IsSaveLocationValid =>
-        string.IsNullOrWhiteSpace(Working.SaveLocation) || Path.IsPathRooted(Working.SaveLocation);
+    public string? SaveLocationError =>
+        SliceIssues().FirstOrDefault(i => i.Field == SettingsField.SaveLocation)?.Message;
 
-    /// <summary>True when every working field passes its validation rule.</summary>
-    public override bool IsValid =>
-        !string.IsNullOrWhiteSpace(Working.FilenameTemplate) && IsSaveLocationValid;
-
-    /// <summary>An inline validation message for the Filename Template, or null when valid.</summary>
+    /// <summary>
+    /// Inline validation message for the Filename Template, sourced from
+    /// <see cref="AppSettings.Validate"/>, or null when valid.
+    /// </summary>
     public string? FilenameTemplateError =>
-        string.IsNullOrWhiteSpace(Working.FilenameTemplate) ? EmptyTemplateError : null;
-
-    /// <summary>An inline validation message for the Save Location, or null when valid.</summary>
-    public string? SaveLocationError => IsSaveLocationValid ? null : RelativeSaveLocationError;
+        SliceIssues().FirstOrDefault(i => i.Field == SettingsField.FilenameTemplate)?.Message;
 
     /// <summary>
     /// First validation error across this tab's fields, or null when the tab is valid.
-    /// Used by the session to build a status message when an invalid Apply/OK is attempted.
+    /// Sourced from <see cref="AppSettings.Validate"/> and used by the session to build a
+    /// status message when an invalid Apply/OK is attempted.
     /// </summary>
-    public override string? FirstError => FilenameTemplateError ?? SaveLocationError;
+    public override string? FirstError => SliceIssues().FirstOrDefault()?.Message;
 
     /// <summary>
     /// True when any working field differs from its last applied baseline.

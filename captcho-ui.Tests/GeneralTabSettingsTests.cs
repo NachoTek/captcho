@@ -248,7 +248,6 @@ public class GeneralTabSettingsTests
         var tab = new GeneralTabSettings(AppSettings.WithDefaults());
         tab.EditSaveLocation("relative/path");
 
-        Assert.False(tab.IsSaveLocationValid);
         Assert.NotNull(tab.SaveLocationError);
         Assert.False(tab.IsValid);
     }
@@ -259,7 +258,6 @@ public class GeneralTabSettingsTests
         var tab = new GeneralTabSettings(AppSettings.WithDefaults());
         tab.EditSaveLocation(@"D:\Screens");
 
-        Assert.True(tab.IsSaveLocationValid);
         Assert.Null(tab.SaveLocationError);
     }
 
@@ -269,7 +267,6 @@ public class GeneralTabSettingsTests
         var tab = new GeneralTabSettings(AppSettings.WithDefaults());
         tab.EditSaveLocation("");
 
-        Assert.True(tab.IsSaveLocationValid);
         Assert.Null(tab.SaveLocationError);
     }
 

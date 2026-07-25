@@ -5,9 +5,14 @@
 // GlobalHotkeyTabSettings: independent Working/Baseline snapshots of the persisted
 // AppSettings, a Commit that advances the baseline after a successful persist, a Cancel
 // that reverts the working snapshot to the baseline, and a Reset that restores the tab's
-// slice of defaults through the ApplyDefaults template method. Each concrete tab declares
-// only its own slice (WriteInto, IsValid, IsDirty, FirstError, ApplyDefaults); the
-// snapshot plumbing is written once, here.
+// slice of defaults through the ApplyDefaults template method. It also owns the
+// slice-validation plumbing (SliceIssues: seed a defaults probe, WriteInto it, run
+// AppSettings.Validate) — identical for every tab, so written once here. The validation
+// *rules* themselves stay in AppSettings.Validate (the single source of truth); each
+// concrete tab declares only its own slice (WriteInto, IsValid, IsDirty, FirstError,
+// ApplyDefaults) and reads SliceIssues for IsValid/FirstError/inline errors. Issue #13
+// routed the rules through AppSettings.Validate so the composed Apply/OK gate and each
+// tab's inline errors can never disagree.
 //
 // Internal: this is the private seam SettingsSession depends on (it holds an
 // EditableTabSession[] and iterates it for Apply/OK/Cancel/Reset). Issue #11 reviewed
@@ -18,6 +23,7 @@
 // (one abstraction, not two). Revisit only if a real third editable tab appears.
 
 using System;
+using System.Collections.Generic;
 using captcho.Capture;
 
 namespace captcho.UI;
@@ -26,10 +32,12 @@ namespace captcho.UI;
 /// Shared snapshot/apply/cancel/reset mechanics for an editable settings tab. Construction
 /// snapshots <paramref name="persisted"/> into independent working and baseline copies so
 /// the active and persisted settings are never mutated by opening or editing.
-/// <see cref="Commit"/> and <see cref="Cancel"/> are identical for every tab and live here;
-/// <see cref="WriteInto"/>, validation, dirty tracking, and <see cref="ApplyDefaults"/> are
-/// tab-specific and left abstract. This is the contract <see cref="SettingsSession"/> holds
-/// a collection of; concrete tabs extend it.
+/// <see cref="Commit"/> and <see cref="Cancel"/> are identical for every tab and live here,
+/// as does <see cref="SliceIssues"/> (the slice-validation plumbing that delegates to
+/// <see cref="AppSettings.Validate"/>). <see cref="WriteInto"/>, dirty tracking, and
+/// <see cref="ApplyDefaults"/> are tab-specific and left abstract; <see cref="IsValid"/> and
+/// <see cref="FirstError"/> are tab-specific reads over <see cref="SliceIssues"/>. This is
+/// the contract <see cref="SettingsSession"/> holds a collection of; concrete tabs extend it.
 /// </summary>
 internal abstract class EditableTabSession
 {
@@ -97,4 +105,20 @@ internal abstract class EditableTabSession
     /// slices untouched so the session can merge every tab and persist once.
     /// </summary>
     public abstract void WriteInto(AppSettings target);
+
+    /// <summary>
+    /// The issues <see cref="AppSettings.Validate"/> reports for this tab's working slice —
+    /// the single source of truth for persisted-setting validity. Writes the working slice
+    /// into a defaults-populated probe so other tabs' fields cannot contribute issues, then
+    /// returns every issue Validate reports for it. Because the probe is seeded with
+    /// defaults, the returned issues belong only to the fields this tab owns; concrete tabs
+    /// read them for <see cref="IsValid"/>, <see cref="FirstError"/>, and inline per-field
+    /// errors, and the composed session gates Apply/OK on the AND of every tab's IsValid.
+    /// </summary>
+    protected IReadOnlyList<SettingsIssue> SliceIssues()
+    {
+        var probe = AppSettings.WithDefaults();
+        WriteInto(probe);
+        return probe.Validate();
+    }
 }

@@ -166,7 +166,11 @@ public sealed class SettingsSession
 
     private SettingsView Persist(bool shouldCloseOnSuccess)
     {
-        // Composed validation: an invalid tab blocks the save with its first error.
+        // Composed validity check across all tabs: an invalid tab blocks the save with its
+        // first error. Each tab derives IsValid/FirstError from AppSettings.Validate() —
+        // the source of truth — so this loop is the composed gate over per-tab
+        // persisted-setting validity. It matches the CanApply/CanConfirm gate the user
+        // already sees.
         var invalid = _editableTabs.FirstOrDefault(t => !t.IsValid);
         if (invalid is not null)
         {
@@ -176,13 +180,7 @@ public sealed class SettingsSession
             return BuildView();
         }
 
-        // Merge every editable tab's working slice onto a fresh copy of the runtime
-        // settings so disjoint slices (General vs Global Hotkeys) combine without clobbering,
-        // and future fields not owned by any tab are preserved.
-        var merged = _runtime.Normalized();
-        foreach (var tab in _editableTabs)
-            tab.WriteInto(merged);
-
+        var merged = BuildMerged();
         var result = _configuration.Save(merged);
         if (!result.Success)
         {
@@ -222,6 +220,22 @@ public sealed class SettingsSession
         return BuildView();
     }
 
+    /// <summary>
+    /// Builds the merged <see cref="AppSettings"/> that an Apply/OK would persist: a fresh
+    /// normalized copy of the runtime with every editable tab's working slice written in,
+    /// so disjoint slices (General vs Global Hotkeys) combine without clobbering and
+    /// future fields not owned by any tab are preserved. Used by <see cref="Persist"/> to
+    /// save; the cross-tab Apply/OK gate is the per-tab composed check in
+    /// <see cref="ComposedIsValid"/>, so the gate and the persist see the same validity.
+    /// </summary>
+    private AppSettings BuildMerged()
+    {
+        var merged = _runtime.Normalized();
+        foreach (var tab in _editableTabs)
+            tab.WriteInto(merged);
+        return merged;
+    }
+
     // ── View assembly ───────────────────────────────────────────────────
 
     /// <summary>
@@ -236,35 +250,50 @@ public sealed class SettingsSession
         return BuildView();
     }
 
-    private SettingsView BuildView() => new(
-        SaveLocation: _general.SaveLocation,
-        FilenameTemplate: _general.FilenameTemplate,
-        FilenameTemplatePreview: _general.FilenameTemplatePreview,
-        SaveLocationError: _general.SaveLocationError,
-        FilenameTemplateError: _general.FilenameTemplateError,
+    private SettingsView BuildView()
+    {
+        // Composed validity across all tabs (each tab derives IsValid from
+        // AppSettings.Validate()). Computed once and shared by both gates so Apply and OK
+        // always agree, and any edit on any tab re-evaluates them together.
+        bool composedIsValid = ComposedIsValid;
+        return new SettingsView(
+            SaveLocation: _general.SaveLocation,
+            FilenameTemplate: _general.FilenameTemplate,
+            FilenameTemplatePreview: _general.FilenameTemplatePreview,
+            SaveLocationError: _general.SaveLocationError,
+            FilenameTemplateError: _general.FilenameTemplateError,
 
-        GlobalHotkeyRows: _globalHotkeyTab.GetRows(),
+            GlobalHotkeyRows: _globalHotkeyTab.GetRows(),
 
-        Export: new ExportTabContent(
-            Heading: _export.Heading,
-            FormatName: _export.FormatName,
-            FileExtension: _export.FileExtension,
-            FormatDescription: _export.FormatDescription,
-            PlannedFormatsNote: _export.PlannedFormatsNote),
-        Interface: new InterfaceTabContent(
-            Heading: _interface.Heading,
-            Message: _interface.Message,
-            PlannedSettingsNote: _interface.PlannedSettingsNote),
+            Export: new ExportTabContent(
+                Heading: _export.Heading,
+                FormatName: _export.FormatName,
+                FileExtension: _export.FileExtension,
+                FormatDescription: _export.FormatDescription,
+                PlannedFormatsNote: _export.PlannedFormatsNote),
+            Interface: new InterfaceTabContent(
+                Heading: _interface.Heading,
+                Message: _interface.Message,
+                PlannedSettingsNote: _interface.PlannedSettingsNote),
 
-        CanApply: ComposedIsValid,
-        CanConfirm: ComposedIsValid,
-        CanCancel: true,
-        CanReset: true,
+            CanApply: composedIsValid,
+            CanConfirm: composedIsValid,
+            CanCancel: true,
+            CanReset: true,
 
-        StatusMessage: _statusMessage,
-        StatusIsError: _statusIsError,
-        ShouldClose: _shouldClose);
+            StatusMessage: _statusMessage,
+            StatusIsError: _statusIsError,
+            ShouldClose: _shouldClose);
+    }
 
+    /// <summary>
+    /// The composed validity check across all editable tabs. Each tab's <see cref="EditableTabSession.IsValid"/>
+    /// is derived from <see cref="AppSettings.Validate"/> (the source of truth for
+    /// persisted-setting validity), so this AND across tabs is what gates Apply/OK: a
+    /// validation error on any tab — a relative Save Location on General, or (in future)
+    /// a rule on Global Hotkeys — disables both verbs, and because every Edit rebuilds the
+    /// View, any tab's validity change re-evaluates the gate.
+    /// </summary>
     private bool ComposedIsValid
     {
         get

@@ -162,12 +162,19 @@ internal sealed class GlobalHotkeyTabSettings : EditableTabSession
     // ── Validation, gating, dirty tracking ──────────────────────────────
 
     /// <summary>
-    /// Always valid: per-Global-Hotkey enabled states are booleans with no invalid value.
+    /// True when the working per-Global-Hotkey enabled states pass validation. Derived
+    /// from <see cref="AppSettings.Validate"/> (the source of truth) so this tab is never
+    /// "valid by accident": today only an out-of-range route key — unreachable through
+    /// normal editing — can fail, but the rule flows straight through the composed gate if
+    /// one is ever added. See <see cref="AppSettings.Validate"/>.
     /// </summary>
-    public override bool IsValid => true;
+    public override bool IsValid => SliceIssues().Count == 0;
 
-    /// <summary>First error is always null — enabled states cannot be invalid.</summary>
-    public override string? FirstError => null;
+    /// <summary>
+    /// First validation error for this tab's enabled states, or null when valid. Sourced
+    /// from <see cref="AppSettings.Validate"/>.
+    /// </summary>
+    public override string? FirstError => SliceIssues().FirstOrDefault()?.Message;
 
     /// <summary>True when any working enabled state differs from its last applied baseline.</summary>
     public override bool IsDirty

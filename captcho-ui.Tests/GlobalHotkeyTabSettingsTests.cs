@@ -267,15 +267,47 @@ public class GlobalHotkeyTabSettingsTests
         Assert.False(tab.IsDirty);
     }
 
-    // ── Validation / gating (booleans are always valid) ─────────────────
+    // ── Validation / gating: derived from AppSettings.Validate (#13) ────
 
     [Fact]
-    public void IsValid_AlwaysTrue_AndHasNoFirstError()
+    public void IsValid_BooleansHaveNoInvalidValue_IsTrueWithNoFirstError()
     {
         var tab = NewTab(new AppSettings());
 
         Assert.True(tab.IsValid);
         Assert.Null(tab.FirstError);
+    }
+
+    [Fact]
+    public void IsValid_RemainsTrueAfterToggling()
+    {
+        // Toggling re-evaluates the gate; booleans never produce a validation issue, so
+        // the hotkey tab keeps IsValid true across edits — proving the composed gate
+        // considers this tab without the tab being able to break it.
+        var tab = NewTab(new AppSettings());
+
+        tab.EditEnabled(GlobalHotkeyRouteMap.IdPrintScreen, enabled: false);
+
+        Assert.True(tab.IsValid);
+        Assert.Null(tab.FirstError);
+    }
+
+    [Fact]
+    public void IsValid_UnknownRouteInWorkingState_DerivedFromValidate_IsFalse()
+    {
+        // The unknown-route rule lives only in AppSettings.Validate. The tab flagging it
+        // proves IsValid is derived from Validate (the source of truth), not hardcoded.
+        var source = new AppSettings
+        {
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool>
+            {
+                [(GlobalHotkeyRoute)999] = true,
+            },
+        };
+        var tab = NewTab(source);
+
+        Assert.False(tab.IsValid);
+        Assert.NotNull(tab.FirstError);
     }
 
     // ── WriteInto merges only this tab's slice ──────────────────────────

@@ -117,6 +117,110 @@ public class SettingsSessionTests
         Assert.True(session.View.CanReset);
     }
 
+    // ── AC #13: a save-location edit and a hotkey toggle each flow through the ──
+    //    composed gate (AppSettings.Validate on the merged settings is the source). ──
+
+    [Fact]
+    public void ComposedGate_SaveLocationEdit_TogglesApplyAndConfirm()
+    {
+        // AC: a save-location edit correctly enables/disables OK and Apply through the
+        // composed gate. A relative path is invalid per AppSettings.Validate, so both
+        // verbs disable; restoring an absolute path re-enables both.
+        var session = NewSession(AppSettings.WithDefaults());
+
+        Assert.True(session.View.CanApply);
+        Assert.True(session.View.CanConfirm);
+
+        var disabled = session.EditSaveLocation("relative/path");
+
+        Assert.False(disabled.CanApply);
+        Assert.False(disabled.CanConfirm);
+        Assert.NotNull(disabled.SaveLocationError);
+
+        var reenabled = session.EditSaveLocation(@"D:\Absolute");
+
+        Assert.True(reenabled.CanApply);
+        Assert.True(reenabled.CanConfirm);
+        Assert.Null(reenabled.SaveLocationError);
+    }
+
+    [Fact]
+    public void ComposedGate_GlobalHotkeyToggle_RecomputesApplyAndConfirm()
+    {
+        // AC #13: a hotkey toggle flows through the composed gate. A toggle only flips a
+        // boolean, and boolean enabled-states have no invalid value, so the gate stays
+        // enabled — but it must be re-evaluated against the hotkey tab, not held over from
+        // the General tab. The verb staying enabled across the toggle proves the hotkey tab
+        // participates in the composed check; the General-tab edit afterwards then proving
+        // both tabs are considered in the same composed result covers the disable half.
+        var session = NewSession(AppSettings.WithDefaults());
+
+        var afterToggle = session.EditGlobalHotkeyEnabled(GlobalHotkeyRouteMap.IdPrintScreen, enabled: false);
+
+        Assert.True(afterToggle.CanApply);
+        Assert.True(afterToggle.CanConfirm);
+        Assert.False(afterToggle.GlobalHotkeyRows.Single(r => r.Id == GlobalHotkeyRouteMap.IdPrintScreen).IsEnabled);
+
+        // The gate still reflects a General-tab error after the hotkey toggle — both tabs
+        // are considered in the same composed result.
+        var disabled = session.EditFilenameTemplate("");
+
+        Assert.False(disabled.CanApply);
+        Assert.False(disabled.CanConfirm);
+
+        var reenabled = session.EditFilenameTemplate(ExportDefaults.DefaultFilenameTemplate);
+
+        Assert.True(reenabled.CanApply);
+        Assert.True(reenabled.CanConfirm);
+    }
+
+    [Fact]
+    public void ComposedGate_HotkeyTabInvalid_DisablesApplyAndConfirm()
+    {
+        // AC #13, "any tab": the gate disables when the Global Hotkeys tab is the offender,
+        // not just the General tab. A toggle can't reach an invalid hotkey state (booleans
+        // have no invalid value), so this seeds the runtime with the one state
+        // AppSettings.Validate rejects on the hotkey field — an out-of-range route — and
+        // opens the session. Both verbs are disabled on open, proving the hotkey tab's
+        // validity feeds the composed gate. (The General tab stays valid throughout.)
+        var runtime = new AppSettings
+        {
+            GlobalHotkeyEnabledStates = new Dictionary<GlobalHotkeyRoute, bool>
+            {
+                [(GlobalHotkeyRoute)999] = true,
+            },
+        };
+        var session = NewSession(runtime);
+
+        var view = session.View;
+
+        Assert.False(view.CanApply);
+        Assert.False(view.CanConfirm);
+
+        // Cancelling reverts to the (still-invalid) baseline, so the gate stays disabled —
+        // the hotkey tab's invalid state is the cause, independent of the General tab.
+        var afterCancel = session.Cancel();
+        Assert.False(afterCancel.CanApply);
+        Assert.False(afterCancel.CanConfirm);
+    }
+
+    [Fact]
+    public void ComposedGate_InvalidBlocksApplyWithValidationStatus()
+    {
+        // The persisted-validity source (AppSettings.Validate) also drives the verb's
+        // status when an invalid Apply is attempted: nothing persists and the first
+        // issue's message surfaces.
+        var recorder = new FakeConfiguration();
+        var session = new SettingsSession(AppSettings.WithDefaults(), recorder, new RecordingGlobalHotkeyAdapter());
+
+        session.EditSaveLocation("relative/path");
+        var view = session.Apply();
+
+        Assert.Equal(0, recorder.CallCount);
+        Assert.True(view.StatusIsError);
+        Assert.Contains("absolute", view.StatusMessage);
+    }
+
     // ── Edits return a refreshed view ──────────────────────────────────
 
     [Fact]
