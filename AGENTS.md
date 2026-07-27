@@ -23,3 +23,8 @@ WinUI 3 (`Microsoft.WindowsAppSDK`), so it cannot build or run on Linux.
 - C# diagnostics come from `dotnet build`/`dotnet test`, not an LSP: the built-in csharp
   server can't start in WSL (no native Linux .NET SDK on PATH) and couldn't resolve the
   WinUI/`net8.0-windows` target anyway. `lsp` is left enabled for other file types.
+
+### Tool Calling Rules
+- Execute tool calls strictly using standard JSON function signatures.
+- Never wrap function calls inside standard markdown text or prose unless invoked via the tool channel.
+- Complete tool calls atomically in a single turn. Do not stop generation mid-arguments.
