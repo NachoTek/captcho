@@ -60,14 +60,6 @@ public class WindowResolverTests
     // ── Label builder fallbacks ──────────────────────────────────────────
 
     [Fact]
-    public void BuildActiveWindowLabel_ContainsModeText()
-    {
-        // In any environment (even headless), the label must contain the mode name
-        string label = WindowResolver.BuildActiveWindowLabel();
-        Assert.Contains("Active Window", label);
-    }
-
-    [Fact]
     public void BuildWindowUnderCursorLabel_ContainsModeText()
     {
         string label = WindowResolver.BuildWindowUnderCursorLabel();
@@ -107,14 +99,6 @@ public class WindowResolverTests
     // ── Label format structure ───────────────────────────────────────────
 
     [Fact]
-    public void BuildActiveWindowLabel_NeverNull()
-    {
-        string label = WindowResolver.BuildActiveWindowLabel();
-        Assert.NotNull(label);
-        Assert.NotEqual("", label);
-    }
-
-    [Fact]
     public void BuildWindowUnderCursorLabel_NeverNull()
     {
         string label = WindowResolver.BuildWindowUnderCursorLabel();
@@ -123,15 +107,6 @@ public class WindowResolverTests
     }
 
     // ── Handle resolver no-throw ─────────────────────────────────────────
-
-    [Fact]
-    public void GetActiveWindowHandle_DoesNotThrow()
-    {
-        // Just verify no exception in headless environment
-        IntPtr hwnd = WindowResolver.GetActiveWindowHandle();
-        // Value may be zero or a real handle depending on environment
-        Assert.True(true);
-    }
 
     [Fact]
     public void GetWindowUnderCursorHandle_DoesNotThrow()

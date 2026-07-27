@@ -54,10 +54,11 @@ public sealed partial class MainWindow : Window
     private readonly CapturePreviewService _captureService = new();
 
     /// <summary>
-    /// Production runtime workflow session. Owns Full Desktop Capture Mode
-    /// routing, operation state, the captured Frame, and the preview
-    /// transition. WinUI keeps an event/rendering role only — workflow rules
-    /// live in the session so they can be covered by headless tests.
+    /// Production runtime workflow session. Owns Capture Mode routing (Full
+    /// Desktop and Active Window today), operation state, the captured Frame,
+    /// and the preview transition. WinUI keeps an event/rendering role only —
+    /// workflow rules live in the session so they can be covered by headless
+    /// tests.
     /// </summary>
     private readonly CaptureWorkflowSession<WriteableBitmap> _workflowSession =
         new CaptureWorkflowSession<WriteableBitmap>(new WindowsCaptureAdapter(), new WriteableBitmapPreviewAdapter());
@@ -304,7 +305,7 @@ public sealed partial class MainWindow : Window
                 _ = RunDelayedCaptureAsync(_captureService.CaptureCurrentMonitorAsync);
                 break;
             case GlobalHotkeyRoute.ActiveWindow:
-                _ = RunDelayedCaptureAsync(_captureService.CaptureActiveWindowAsync);
+                _ = RunActiveWindowWorkflowAsync();
                 break;
             case GlobalHotkeyRoute.FullDesktop:
                 _ = RunFullDesktopWorkflowAsync();
@@ -383,10 +384,10 @@ public sealed partial class MainWindow : Window
         await RunDelayedCaptureAsync(_captureService.CaptureCurrentMonitorAsync);
     }
 
-    /// <summary>Handles "Active Window" click.</summary>
+    /// <summary>Handles "Active Window" click — routes through the production workflow session.</summary>
     private async void ActiveWindow_Click(object sender, RoutedEventArgs e)
     {
-        await RunDelayedCaptureAsync(_captureService.CaptureActiveWindowAsync);
+        await RunActiveWindowWorkflowAsync();
     }
 
     /// <summary>Handles "Window Under Cursor" click.</summary>
@@ -636,6 +637,14 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private Task RunFullDesktopWorkflowAsync() =>
         RunWorkflowWithCountdownAsync(_workflowSession.CaptureFullDesktopAsync, ApplyWorkflowResult);
+
+    /// <summary>
+    /// Routes an Active Window Trigger through the same production workflow
+    /// session as Full Desktop. The WinUI layer keeps the same thin
+    /// event/rendering role — it does not branch on Active Window behavior.
+    /// </summary>
+    private Task RunActiveWindowWorkflowAsync() =>
+        RunWorkflowWithCountdownAsync(_workflowSession.CaptureActiveWindowAsync, ApplyWorkflowResult);
 
     /// <summary>
     /// Shared orchestration scaffold for any production workflow route: drives

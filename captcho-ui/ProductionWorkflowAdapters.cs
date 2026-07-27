@@ -30,19 +30,38 @@ public sealed class WindowsCaptureAdapter : IWorkflowCaptureAdapter
     /// carrying the Frame and dimensions on success or a user-visible error
     /// on failure. Never throws for expected failures.
     /// </summary>
-    public CaptureFrameResult CaptureFullDesktop()
+    public CaptureFrameResult CaptureFullDesktop() =>
+        Capture("Full Desktop", SafeCaptureResult.CaptureAllMonitors);
+
+    /// <summary>
+    /// Captures the current eligible active (foreground) window and returns a
+    /// CaptureFrameResult carrying the Frame and dimensions on success or a
+    /// user-visible error on failure — including the "no eligible active
+    /// window" case, which the native engine surfaces as a failed status.
+    /// Never throws for expected failures.
+    /// </summary>
+    public CaptureFrameResult CaptureActiveWindow() =>
+        Capture("Active Window", SafeCaptureResult.CaptureActiveWindow);
+
+    /// <summary>
+    /// Shared native-capture-to-Frame conversion for both immediate-capture
+    /// routes. Runs the supplied SafeCaptureResult factory, strips stride
+    /// padding, and translates expected failures into CaptureFrameResult.Fail.
+    /// The <paramref name="mode"/> label scopes diagnostics for error messages.
+    /// </summary>
+    private static CaptureFrameResult Capture(string mode, Func<SafeCaptureResult> capture)
     {
         var sw = Stopwatch.StartNew();
         try
         {
-            using var result = SafeCaptureResult.CaptureAllMonitors();
+            using var result = capture();
             sw.Stop();
 
             if (!result.IsSuccess)
             {
                 return CaptureFrameResult.Fail(
                     string.IsNullOrEmpty(result.ErrorMessage)
-                        ? $"Capture failed: {result.Status}"
+                        ? $"{mode} capture failed: {result.Status}"
                         : result.ErrorMessage);
             }
 

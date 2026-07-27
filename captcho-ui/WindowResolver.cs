@@ -28,9 +28,6 @@ public static class WindowResolver
     private const uint GA_ROOT = 2;
 
     [DllImport("user32.dll")]
-    private static extern IntPtr GetForegroundWindow();
-
-    [DllImport("user32.dll")]
     private static extern bool GetCursorPos(out POINT lpPoint);
 
     [DllImport("user32.dll")]
@@ -52,22 +49,6 @@ public static class WindowResolver
 
     /// <summary>Maximum characters for a sanitized window title label.</summary>
     private const int MaxTitleLength = 60;
-
-    /// <summary>
-    /// Gets the HWND of the currently active (foreground) window.
-    /// Returns IntPtr.Zero if no foreground window is available.
-    /// </summary>
-    public static IntPtr GetActiveWindowHandle()
-    {
-        try
-        {
-            return GetForegroundWindow();
-        }
-        catch
-        {
-            return IntPtr.Zero;
-        }
-    }
 
     /// <summary>
     /// Gets the HWND of the top-level window under the mouse cursor.
@@ -176,26 +157,6 @@ public static class WindowResolver
         {
             return "";
         }
-    }
-
-    /// <summary>
-    /// Builds a descriptive mode label for the active window capture.
-    /// Includes the sanitized title and handle when available.
-    /// Falls back to "Active Window" alone when metadata is unavailable.
-    /// </summary>
-    public static string BuildActiveWindowLabel()
-    {
-        IntPtr hwnd = GetActiveWindowHandle();
-        string title = GetTitle(hwnd);
-        string handle = FormatHandle(hwnd);
-
-        if (string.IsNullOrEmpty(title) && string.IsNullOrEmpty(handle))
-            return "Active Window";
-
-        if (string.IsNullOrEmpty(title))
-            return $"Active Window [{handle}]";
-
-        return $"Active Window — {title}";
     }
 
     /// <summary>

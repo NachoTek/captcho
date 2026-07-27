@@ -163,18 +163,6 @@ public sealed class CapturePreviewService
     }
 
     /// <summary>
-    /// Captures the currently active (foreground) window and converts to displayable form.
-    /// Uses WindowResolver for a descriptive mode label with title and handle.
-    /// Native capture runs on a background thread; WriteableBitmap is created on the calling (UI) thread.
-    /// </summary>
-    public async Task<CapturePreviewResult> CaptureActiveWindowAsync()
-    {
-        string mode = WindowResolver.BuildActiveWindowLabel();
-        var raw = await Task.Run(() => CaptureRaw(mode, SafeCaptureResult.CaptureActiveWindow));
-        return await BuildDisplayResultAsync(raw);
-    }
-
-    /// <summary>
     /// Captures the top-level window under the mouse cursor and converts to displayable form.
     /// Uses WindowResolver for a descriptive mode label with title and handle.
     /// Native capture runs on a background thread; WriteableBitmap is created on the calling (UI) thread.

@@ -1,13 +1,14 @@
 // CaptureWorkflowSession.cs — WinUI-free runtime workflow session.
 //
 // The agreed high-level behavioral seam for capture and post-capture behavior.
-// Owns Capture Mode routing for the Full Desktop Trigger, operation state
-// (concurrency guard), the captured Frame, and the preview transition. Exposes
-// operation-in-progress and failure outcomes consistently so the WinUI layer
-// can present a retryable, user-visible state. Platform-specific work — native
-// pixel acquisition and presenting the Frame to a XAML Image — is supplied
-// through narrow adapters, mirroring the CliCaptureService shape at the GUI's
-// higher Capture-through-completion boundary.
+// Owns Capture Mode routing for the immediate-capture Triggers (Full Desktop
+// and Active Window today), operation state (concurrency guard), the captured
+// Frame, and the preview transition. Exposes operation-in-progress and failure
+// outcomes consistently so the WinUI layer can present a retryable,
+// user-visible state. Platform-specific work — native pixel acquisition and
+// presenting the Frame to a XAML Image — is supplied through narrow adapters,
+// mirroring the CliCaptureService shape at the GUI's higher
+// Capture-through-completion boundary.
 //
 // The session is generic over the preview's display token (TImage) so it stays
 // free of WinUI types while production still gets a strongly-typed
@@ -204,6 +205,15 @@ public interface IWorkflowCaptureAdapter
     /// through CaptureFrameResult.Fail instead.
     /// </summary>
     CaptureFrameResult CaptureFullDesktop();
+
+    /// <summary>
+    /// Captures the current eligible active (foreground) window into a Frame.
+    /// Implementations must not throw for expected failures — surface them
+    /// through CaptureFrameResult.Fail instead (including the "no eligible
+    /// active window" case, so the workflow can report it as CaptureFailed
+    /// without retaining stale Frame or operation state).
+    /// </summary>
+    CaptureFrameResult CaptureActiveWindow();
 }
 
 /// <summary>
@@ -240,6 +250,9 @@ public sealed class CaptureWorkflowSession<TImage>
 {
     /// <summary>Domain Capture Mode label for the Full Desktop route.</summary>
     public const string FullDesktopMode = "Full Desktop";
+
+    /// <summary>Domain Capture Mode label for the Active Window route.</summary>
+    public const string ActiveWindowMode = "Active Window";
 
     private readonly IWorkflowCaptureAdapter _capture;
     private readonly IPreviewAdapter<TImage> _preview;
@@ -280,11 +293,34 @@ public sealed class CaptureWorkflowSession<TImage>
     /// transition, and exposes operation-in-progress and failure outcomes
     /// consistently. Never throws for expected failures.
     /// </summary>
-    public async Task<WorkflowResult<TImage>> CaptureFullDesktopAsync()
+    public Task<WorkflowResult<TImage>> CaptureFullDesktopAsync() =>
+        RouteCaptureAsync(FullDesktopMode, _capture.CaptureFullDesktop);
+
+    /// <summary>
+    /// Routes an Active Window Trigger through the same production workflow as
+    /// Full Desktop: captures the current eligible active window, owns the
+    /// resulting Frame, drives the preview transition, and exposes
+    /// operation-in-progress and failure outcomes consistently. An unavailable
+    /// target (no eligible active window) is surfaced by the capture adapter as
+    /// a CaptureFailed outcome, so no stale Frame or operation state is
+    /// retained. Never throws for expected failures.
+    /// </summary>
+    public Task<WorkflowResult<TImage>> CaptureActiveWindowAsync() =>
+        RouteCaptureAsync(ActiveWindowMode, _capture.CaptureActiveWindow);
+
+    /// <summary>
+    /// Shared Capture Mode routing for an immediate-capture Trigger (no Target
+    /// Selection). Owns the operation guard, Capture, Frame ownership, and the
+    /// preview transition. Both Full Desktop and Active Window route through
+    /// this so their behavior — and their test coverage — stays symmetric at
+    /// the seam.
+    /// </summary>
+    private async Task<WorkflowResult<TImage>> RouteCaptureAsync(
+        string mode, Func<CaptureFrameResult> captureFunc)
     {
         if (!TryBeginOperation())
         {
-            return WorkflowResultFor(FullDesktopMode, WorkflowStatus.OperationInProgress,
+            return WorkflowResultFor(mode, WorkflowStatus.OperationInProgress,
                 error: "A capture is already in progress.");
         }
 
@@ -294,10 +330,10 @@ public sealed class CaptureWorkflowSession<TImage>
             // Capture runs on the thread pool — the adapter may block on native
             // pixel acquisition. The session's caller (the UI thread, in
             // production) is freed for the duration.
-            var captureResult = await RunOffThread(() => _capture.CaptureFullDesktop());
+            var captureResult = await RunOffThread(captureFunc);
             if (!captureResult.Success)
             {
-                return WorkflowResultFor(FullDesktopMode, WorkflowStatus.CaptureFailed,
+                return WorkflowResultFor(mode, WorkflowStatus.CaptureFailed,
                     error: captureResult.Error,
                     captureMs: captureResult.ElapsedMs,
                     totalMs: totalSw.Elapsed.TotalMilliseconds);
@@ -313,7 +349,7 @@ public sealed class CaptureWorkflowSession<TImage>
             if (!previewResult.Success)
             {
                 // Frame is preserved for retry — see WorkflowResult.Frame doc.
-                return WorkflowResultFor(FullDesktopMode, WorkflowStatus.PreviewFailed,
+                return WorkflowResultFor(mode, WorkflowStatus.PreviewFailed,
                     frame: frame,
                     dimensions: captureResult.Dimensions,
                     error: previewResult.Error,
@@ -322,7 +358,7 @@ public sealed class CaptureWorkflowSession<TImage>
                     totalMs: totalSw.Elapsed.TotalMilliseconds);
             }
 
-            return WorkflowResultFor(FullDesktopMode, WorkflowStatus.Succeeded,
+            return WorkflowResultFor(mode, WorkflowStatus.Succeeded,
                 frame: frame,
                 dimensions: captureResult.Dimensions,
                 previewImage: previewResult.Image,
