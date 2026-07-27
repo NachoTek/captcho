@@ -1,18 +1,19 @@
 // CaptureWorkflowSession.cs — WinUI-free runtime workflow session.
 //
 // The agreed high-level behavioral seam for capture and post-capture behavior.
-// Owns Capture Mode routing for the Full Desktop, Active Window, and Selection
-// Triggers; operation state (concurrency guard); the captured Frame; and the
-// preview transition. For Selection, the interactive overlay is supplied as a
-// narrow adapter that returns confirmed geometry or cancellation, after which
-// the workflow owns Capture, the Frame, and the preview transition — the
-// overlay itself never performs Capture or owns post-capture state. Exposes
-// operation-in-progress, cancellation, and failure outcomes consistently so
-// the WinUI layer can present a retryable, user-visible state. Platform-
-// specific work — native pixel acquisition, the Selection overlay, and
-// presenting the Frame to a XAML Image — is supplied through narrow adapters,
-// mirroring the CliCaptureService shape at the GUI's higher
-// Capture-through-completion boundary.
+// Owns Capture Mode routing for the Full Desktop, Active Window, Selection,
+// Selected Monitor, and Selected Window Triggers; operation state (concurrency
+// guard); the captured Frame; and the preview transition. For the interactive
+// modes, the overlay is supplied as a narrow adapter that returns confirmed
+// target geometry/outcome or cancellation, after which the workflow owns
+// Capture, the Frame, and the preview transition — the overlay itself never
+// performs Capture or owns post-capture state. Exposes operation-in-progress,
+// cancellation, and failure outcomes consistently so the WinUI layer can
+// present a retryable, user-visible state. Platform-specific work — native
+// pixel acquisition, the interactive overlays, and presenting the Frame to a
+// XAML Image — is supplied through narrow adapters, mirroring the
+// CliCaptureService shape at the GUI's higher Capture-through-completion
+// boundary.
 //
 // The session is generic over the preview's display token (TImage) so it stays
 // free of WinUI types while production still gets a strongly-typed
@@ -272,6 +273,19 @@ public interface IWorkflowCaptureAdapter
     /// through CaptureFrameResult.Fail instead.
     /// </summary>
     CaptureFrameResult CaptureMonitor(MonitorTarget target);
+
+    /// <summary>
+    /// Captures a single Selected Window into a Frame. The target carries the
+    /// window's stable HWND (the identity the picker confirmed), its title, and
+    /// its full Virtual Desktop bounds (which may cross monitor boundaries and
+    /// sit at negative coordinates). Capture is performed by handle so the
+    /// frozen Frame matches the window the user clicked even if later window
+    /// movement would have moved its bounds. Implementations must not throw for
+    /// expected failures — surface them through CaptureFrameResult.Fail instead
+    /// (including the "window vanished before capture" case, so the workflow
+    /// can report it as CaptureFailed without retaining stale state).
+    /// </summary>
+    CaptureFrameResult CaptureWindow(WindowTarget target);
 }
 
 /// <summary>
@@ -356,6 +370,119 @@ public interface IMonitorPickerOverlayAdapter
 }
 
 /// <summary>
+/// Immutable Selected Window target in Virtual Desktop coordinates — the
+/// contract type that crosses the WinUI-free workflow seam from the window
+/// picker overlay. <see cref="Handle"/> is the stable HWND identity the picker
+/// confirmed (and re-validates against a fresh snapshot at click time so a
+/// window that disappeared can never be captured as a stale target); the
+/// capture engine receives it directly. The signed X/Y origin and unsigned
+/// Width/Height carry the window's full bounds, which may cross monitor
+/// boundaries and sit at negative Virtual Desktop coordinates. The title is the
+/// pointer-adjacent text the picker showed for the hovered window, surfaced for
+/// diagnostics and tests.
+/// </summary>
+public sealed record WindowTarget
+{
+    /// <summary>
+    /// The stable HWND the picker confirmed. Captured by handle so the Frame
+    /// matches the window the user clicked.
+    /// </summary>
+    public IntPtr Handle { get; init; }
+
+    /// <summary>
+    /// Pointer-adjacent title the picker displayed for this window. Carried for
+    /// diagnostics and contract tests; the workflow does not interpret it.
+    /// </summary>
+    public string Title { get; init; } = "";
+
+    /// <summary>Left edge of the window in Virtual Desktop pixels.</summary>
+    public int X { get; init; }
+
+    /// <summary>Top edge of the window in Virtual Desktop pixels.</summary>
+    public int Y { get; init; }
+
+    /// <summary>Window width in pixels. Always positive.</summary>
+    public uint Width { get; init; }
+
+    /// <summary>Window height in pixels. Always positive.</summary>
+    public uint Height { get; init; }
+}
+
+/// <summary>
+/// Outcome of a Selected Window picker interaction that the overlay adapter
+/// returns to the workflow. <see cref="WindowConfirmed"/> carries a confirmed
+/// <see cref="WindowTarget"/>; <see cref="EmptyDesktopFallback"/> is the
+/// click-on-empty-desktop case that the workflow routes to a Full Desktop
+/// capture (including the taskbar). Cancellation (Escape) is signaled by a null
+/// result from the adapter rather than an outcome, matching the Selection and
+/// Selected Monitor overlay adapters.
+/// </summary>
+public enum WindowPickerOutcome
+{
+    /// <summary>
+    /// The user clicked an eligible window. The target's HWND is captured by
+    /// handle.
+    /// </summary>
+    WindowConfirmed,
+
+    /// <summary>
+    /// The user clicked empty desktop (no eligible window). The workflow
+    /// captures Full Desktop including the taskbar.
+    /// </summary>
+    EmptyDesktopFallback,
+}
+
+/// <summary>
+/// Result of a Selected Window picker interaction. Set by the overlay adapter
+/// for both confirming outcomes; null (from the adapter) signals cancellation.
+/// <see cref="Target"/> is set only when <see cref="Outcome"/> is
+/// <see cref="WindowPickerOutcome.WindowConfirmed"/>.
+/// </summary>
+public sealed record WindowPickerResult
+{
+    /// <summary>
+    /// Which confirming outcome the picker produced. Cancellation is signalled
+    /// by a null <see cref="WindowPickerResult"/> from the adapter, not by an
+    /// outcome value.
+    /// </summary>
+    public WindowPickerOutcome Outcome { get; init; }
+
+    /// <summary>
+    /// The confirmed window target. Set only for
+    /// <see cref="WindowPickerOutcome.WindowConfirmed"/>; null for
+    /// <see cref="WindowPickerOutcome.EmptyDesktopFallback"/>.
+    /// </summary>
+    public WindowTarget? Target { get; init; }
+}
+
+/// <summary>
+/// Narrow adapter over the interactive Selected Window picker overlay.
+/// Production shows a scrimmed Win32 layered window that highlights the hovered
+/// window's full bounds and title; tests supply fakes that return a canned
+/// window confirmation, an empty-desktop fallback, or cancellation. The overlay
+/// adapter's only job is to return the confirming outcome (or cancellation) —
+/// it must NOT perform Capture or own any post-capture state, because the
+/// runtime workflow owns Capture, the Frame, and the preview transition. A
+/// click on an eligible window yields
+/// <see cref="WindowPickerOutcome.WindowConfirmed"/>; a click on empty desktop
+/// yields <see cref="WindowPickerOutcome.EmptyDesktopFallback"/> (the workflow
+/// routes that to a Full Desktop capture); Escape dismisses with a null result.
+/// Invoked on the workflow caller's thread (the UI thread in production), since
+/// the overlay runs a modal Win32 message loop.
+/// </summary>
+public interface IWindowPickerOverlayAdapter
+{
+    /// <summary>
+    /// Shows the Selected Window picker overlay and returns the confirming
+    /// outcome, or null if the user cancelled (Escape or overlay dismissal).
+    /// Returning null must not produce a Frame or any delivery side effect.
+    /// Implementations must not throw — surface unexpected failures as a null
+    /// result so the workflow reports cancellation rather than crashing.
+    /// </summary>
+    Task<WindowPickerResult?> ShowAsync();
+}
+
+/// <summary>
 /// Narrow adapter over presenting a captured Frame to the live preview. The
 /// production implementation converts the Frame into a WinUI WriteableBitmap;
 /// the session itself stays WinUI-free by talking to this interface.
@@ -399,10 +526,14 @@ public sealed class CaptureWorkflowSession<TImage>
     /// <summary>Domain Capture Mode label for the Selected Monitor route.</summary>
     public const string SelectedMonitorMode = "Selected Monitor";
 
+    /// <summary>Domain Capture Mode label for the Selected Window route.</summary>
+    public const string SelectedWindowMode = "Selected Window";
+
     private readonly IWorkflowCaptureAdapter _capture;
     private readonly IPreviewAdapter<TImage> _preview;
     private readonly ISelectionOverlayAdapter _selectionOverlay;
     private readonly IMonitorPickerOverlayAdapter _monitorPickerOverlay;
+    private readonly IWindowPickerOverlayAdapter _windowPickerOverlay;
 
     // Operation-state guard. 0 = idle, non-zero = an operation is in flight.
     // Manipulated only through Interlocked so concurrent Triggers are rejected
@@ -427,21 +558,23 @@ public sealed class CaptureWorkflowSession<TImage>
 
     /// <summary>
     /// Creates a workflow session bound to the supplied platform adapters.
-    /// The Selection and Selected Monitor overlay adapters are required even
-    /// for routes that do not use them (Full Desktop, Active Window), so
-    /// production wires every platform adapter exactly once at construction
-    /// and tests inject fakes uniformly.
+    /// The Selection, Selected Monitor, and Selected Window overlay adapters
+    /// are required even for routes that do not use them (Full Desktop, Active
+    /// Window), so production wires every platform adapter exactly once at
+    /// construction and tests inject fakes uniformly.
     /// </summary>
     public CaptureWorkflowSession(
         IWorkflowCaptureAdapter capture,
         IPreviewAdapter<TImage> preview,
         ISelectionOverlayAdapter selectionOverlay,
-        IMonitorPickerOverlayAdapter monitorPickerOverlay)
+        IMonitorPickerOverlayAdapter monitorPickerOverlay,
+        IWindowPickerOverlayAdapter windowPickerOverlay)
     {
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
         _preview = preview ?? throw new ArgumentNullException(nameof(preview));
         _selectionOverlay = selectionOverlay ?? throw new ArgumentNullException(nameof(selectionOverlay));
         _monitorPickerOverlay = monitorPickerOverlay ?? throw new ArgumentNullException(nameof(monitorPickerOverlay));
+        _windowPickerOverlay = windowPickerOverlay ?? throw new ArgumentNullException(nameof(windowPickerOverlay));
     }
 
     /// <summary>
@@ -603,6 +736,87 @@ public sealed class CaptureWorkflowSession<TImage>
             }
 
             return WorkflowResultFor(SelectedMonitorMode, WorkflowStatus.Succeeded,
+                frame: frame,
+                dimensions: captureResult.Dimensions,
+                previewImage: previewResult.Image,
+                captureMs: captureResult.ElapsedMs,
+                displayMs: previewResult.ElapsedMs,
+                totalMs: totalSw.Elapsed.TotalMilliseconds);
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    /// <summary>
+    /// Routes a Selected Window Trigger through the production workflow. The
+    /// interactive window picker overlay is shown first; on confirmation the
+    /// workflow owns Capture of the returned target, the resulting Frame, and
+    /// the preview transition. The picker's three outcomes map as follows:
+    /// cancellation (Escape or overlay dismissal) ends the workflow with
+    /// <see cref="WorkflowStatus.Cancelled"/>; a confirmed window is captured by
+    /// handle; an empty-desktop click is routed to a Full Desktop capture
+    /// (including the taskbar). Mixed-DPI, cross-monitor, and negative-
+    /// coordinate window bounds are preserved. Never throws for expected
+    /// failures.
+    /// </summary>
+    public async Task<WorkflowResult<TImage>> CaptureSelectedWindowAsync()
+    {
+        if (!TryBeginOperation())
+        {
+            return WorkflowResultFor(SelectedWindowMode, WorkflowStatus.OperationInProgress,
+                error: "A capture is already in progress.");
+        }
+
+        var totalSw = Stopwatch.StartNew();
+        try
+        {
+            // The picker runs on the caller's thread (the UI thread in
+            // production), where the modal Win32 message loop must live. The
+            // adapter returns a confirming outcome (window or empty-desktop
+            // fallback) or null for cancellation (Escape).
+            var result = await _windowPickerOverlay.ShowAsync();
+
+            if (result is null)
+            {
+                return WorkflowResultFor(SelectedWindowMode, WorkflowStatus.Cancelled,
+                    error: "Selected Window cancelled.",
+                    totalMs: totalSw.Elapsed.TotalMilliseconds);
+            }
+
+            // A confirmed window is captured by handle; an empty-desktop click
+            // routes to Full Desktop (including the taskbar). The route label
+            // stays "Selected Window" in both cases — the user invoked this
+            // route, and the fallback is an internal capture-path detail.
+            var captureResult = result.Outcome == WindowPickerOutcome.EmptyDesktopFallback
+                ? await RunOffThread(() => _capture.CaptureFullDesktop())
+                : await RunOffThread(() => _capture.CaptureWindow(result.Target!));
+
+            if (!captureResult.Success)
+            {
+                return WorkflowResultFor(SelectedWindowMode, WorkflowStatus.CaptureFailed,
+                    error: captureResult.Error,
+                    captureMs: captureResult.ElapsedMs,
+                    totalMs: totalSw.Elapsed.TotalMilliseconds);
+            }
+
+            var frame = captureResult.Frame!;
+            _lastFrame = frame;
+
+            var previewResult = _preview.Present(frame);
+            if (!previewResult.Success)
+            {
+                return WorkflowResultFor(SelectedWindowMode, WorkflowStatus.PreviewFailed,
+                    frame: frame,
+                    dimensions: captureResult.Dimensions,
+                    error: previewResult.Error,
+                    captureMs: captureResult.ElapsedMs,
+                    displayMs: previewResult.ElapsedMs,
+                    totalMs: totalSw.Elapsed.TotalMilliseconds);
+            }
+
+            return WorkflowResultFor(SelectedWindowMode, WorkflowStatus.Succeeded,
                 frame: frame,
                 dimensions: captureResult.Dimensions,
                 previewImage: previewResult.Image,

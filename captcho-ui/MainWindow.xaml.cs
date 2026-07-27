@@ -174,13 +174,15 @@ public sealed partial class MainWindow : Window
 
         // Construct the runtime workflow session with all production
         // adapters: native pixel acquisition, the Selection overlay, the
-        // Selected Monitor picker overlay, and the preview transition. The
-        // session owns Capture Mode routing from here.
+        // Selected Monitor picker overlay, the Selected Window picker overlay,
+        // and the preview transition. The session owns Capture Mode routing
+        // from here.
         _workflowSession = new CaptureWorkflowSession<WriteableBitmap>(
             new WindowsCaptureAdapter(),
             new WriteableBitmapPreviewAdapter(),
             new RegionSelectionOverlayAdapter(),
-            new MonitorPickerOverlayAdapter());
+            new MonitorPickerOverlayAdapter(),
+            new WindowPickerOverlayAdapter());
 
         // Initialize Global Hotkeys after the window has an HWND.
         // In WinUI 3, the HWND is available immediately after construction.
@@ -415,6 +417,12 @@ public sealed partial class MainWindow : Window
     private async void SelectedMonitor_Click(object sender, RoutedEventArgs e)
     {
         await RunSelectedMonitorWorkflowAsync();
+    }
+
+    /// <summary>Handles "Selected Window" click — routes through the production workflow session.</summary>
+    private async void SelectedWindow_Click(object sender, RoutedEventArgs e)
+    {
+        await RunSelectedWindowWorkflowAsync();
     }
 
     /// <summary>Handles "Cancel" button click during countdown.</summary>
@@ -793,6 +801,21 @@ public sealed partial class MainWindow : Window
     private Task RunSelectedMonitorWorkflowAsync() =>
         RunWorkflowWithCountdownAsync(_workflowSession.CaptureSelectedMonitorAsync, ApplyWorkflowResult);
 
+    /// <summary>
+    /// Routes a Selected Window Trigger through the production workflow
+    /// session. The session owns the entire route: it shows the window picker
+    /// overlay, captures the confirmed window by handle (or routes an
+    /// empty-desktop click to a Full Desktop capture), owns the resulting
+    /// Frame, and drives the preview transition. This WinUI method keeps the
+    /// same thin event/rendering role as the other routes — it drives the
+    /// optional delay countdown and binds the returned WorkflowResult. On
+    /// cancellation (Escape) the session returns
+    /// <see cref="WorkflowStatus.Cancelled"/>, surfaced as user-visible status
+    /// text with no Frame or delivery side effects.
+    /// </summary>
+    private Task RunSelectedWindowWorkflowAsync() =>
+        RunWorkflowWithCountdownAsync(_workflowSession.CaptureSelectedWindowAsync, ApplyWorkflowResult);
+
     // ── Countdown phase ──────────────────────────────────────────────
 
     /// <summary>
@@ -900,6 +923,7 @@ public sealed partial class MainWindow : Window
         WindowUnderCursorButton.IsEnabled = enabled;
         RegionCaptureButton.IsEnabled = enabled;
         SelectedMonitorButton.IsEnabled = enabled;
+        SelectedWindowButton.IsEnabled = enabled;
     }
 
     /// <summary>

@@ -55,7 +55,7 @@ _Avoid_: Output, save, deliver
 ### Workflow
 
 **Workflow Session**:
-The WinUI-free runtime component that owns Capture Mode routing, operation state, and the captured Frame. The Full Desktop, Active Window, Selection, and Selected Monitor routes are wired through it today; Selected Window, Annotation, OCR/QR, saved-file identity, manual and automatic Export actions, and the exit decision will move behind it as their tickets land. WinUI windows and Win32 layered windows are thin event/rendering adapters over the Workflow Session and must not duplicate workflow rules.
+The WinUI-free runtime component that owns Capture Mode routing, operation state, and the captured Frame. The Full Desktop, Active Window, Selection, Selected Monitor, and Selected Window routes are wired through it today; Annotation, OCR/QR, saved-file identity, manual and automatic Export actions, and the exit decision will move behind it as their tickets land. WinUI windows and Win32 layered windows are thin event/rendering adapters over the Workflow Session and must not duplicate workflow rules.
 _Avoid_: Mediator, controller, view model
 
 **Capture Mode Routing**:

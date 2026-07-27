@@ -44,6 +44,10 @@ internal sealed class FakeCaptureAdapter : IWorkflowCaptureAdapter
     public CaptureFrameResult? NextMonitorResult { get; set; }
     public MonitorTarget? LastMonitorTarget { get; private set; }
 
+    public int WindowCallCount { get; private set; }
+    public CaptureFrameResult? NextWindowResult { get; set; }
+    public WindowTarget? LastWindowTarget { get; private set; }
+
     public CaptureFrameResult CaptureFullDesktop()
     {
         CallCount++;
@@ -68,6 +72,13 @@ internal sealed class FakeCaptureAdapter : IWorkflowCaptureAdapter
         MonitorCallCount++;
         LastMonitorTarget = target;
         return NextMonitorResult ?? CaptureFrameResult.Fail("FakeCaptureAdapter: NextMonitorResult not configured.");
+    }
+
+    public CaptureFrameResult CaptureWindow(WindowTarget target)
+    {
+        WindowCallCount++;
+        LastWindowTarget = target;
+        return NextWindowResult ?? CaptureFrameResult.Fail("FakeCaptureAdapter: NextWindowResult not configured.");
     }
 }
 
@@ -174,6 +185,32 @@ internal sealed class SlowGateCaptureAdapter : IWorkflowCaptureAdapter
         _release.Task.Wait();
         return _inner.CaptureMonitor(target);
     }
+
+    public CaptureFrameResult CaptureWindow(WindowTarget target)
+    {
+        _started.TrySetResult(true);
+        _release.Task.Wait();
+        return _inner.CaptureWindow(target);
+    }
+}
+
+/// <summary>
+/// Fake window picker overlay adapter. Returns a configurable confirming
+/// result (a window target or an empty-desktop fallback) or null for
+/// cancellation, and records call count. <see cref="NextResult"/> defaults to
+/// null (cancellation) so non-Selected-Window tests can wire the fake without
+/// specifying behaviour.
+/// </summary>
+internal sealed class FakeWindowPickerOverlayAdapter : IWindowPickerOverlayAdapter
+{
+    public int CallCount { get; private set; }
+    public WindowPickerResult? NextResult { get; set; }
+
+    public Task<WindowPickerResult?> ShowAsync()
+    {
+        CallCount++;
+        return Task.FromResult(NextResult);
+    }
 }
 
 // ── Success tests ───────────────────────────────────────────────────────
@@ -196,7 +233,7 @@ public class CaptureWorkflowSessionSuccessTests
     [Fact]
     public async Task CaptureFullDesktopAsync_OnSuccess_ReturnsSucceededStatus()
     {
-        var session = new CaptureWorkflowSession<object>(SuccessCapture(), SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(SuccessCapture(), SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureFullDesktopAsync();
 
@@ -208,7 +245,7 @@ public class CaptureWorkflowSessionSuccessTests
     public async Task CaptureFullDesktopAsync_OnSuccess_RoutesThroughCaptureAdapter()
     {
         var capture = SuccessCapture();
-        var session = new CaptureWorkflowSession<object>(capture, SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureFullDesktopAsync();
 
@@ -220,7 +257,7 @@ public class CaptureWorkflowSessionSuccessTests
     {
         var expectedDisplayToken = new object();
         var preview = SuccessPreview(expectedDisplayToken);
-        var session = new CaptureWorkflowSession<object>(SuccessCapture(), preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(SuccessCapture(), preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureFullDesktopAsync();
 
@@ -231,7 +268,7 @@ public class CaptureWorkflowSessionSuccessTests
     [Fact]
     public async Task CaptureFullDesktopAsync_OnSuccess_ReportsFullDesktopMode()
     {
-        var session = new CaptureWorkflowSession<object>(SuccessCapture(), SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(SuccessCapture(), SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureFullDesktopAsync();
 
@@ -241,7 +278,7 @@ public class CaptureWorkflowSessionSuccessTests
     [Fact]
     public async Task CaptureFullDesktopAsync_OnSuccess_ReportsDimensionsFromFrame()
     {
-        var session = new CaptureWorkflowSession<object>(SuccessCapture(), SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(SuccessCapture(), SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureFullDesktopAsync();
 
@@ -256,7 +293,7 @@ public class CaptureWorkflowSessionSuccessTests
         {
             NextResult = CaptureFrameResult.Ok(frame, "8×4", 1.0),
         };
-        var session = new CaptureWorkflowSession<object>(capture, SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureFullDesktopAsync();
 
@@ -272,7 +309,7 @@ public class CaptureWorkflowSessionSuccessTests
             NextResult = CaptureFrameResult.Ok(frame, "8×4", 1.0),
         };
         var preview = SuccessPreview(new object());
-        var session = new CaptureWorkflowSession<object>(capture, preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureFullDesktopAsync();
 
@@ -282,7 +319,7 @@ public class CaptureWorkflowSessionSuccessTests
     [Fact]
     public async Task CaptureFullDesktopAsync_OnSuccess_NoErrorIsReported()
     {
-        var session = new CaptureWorkflowSession<object>(SuccessCapture(), SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(SuccessCapture(), SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureFullDesktopAsync();
 
@@ -297,7 +334,7 @@ public class CaptureWorkflowSessionSuccessTests
         {
             NextResult = CaptureFrameResult.Ok(frame, "8×4", 1.0),
         };
-        var session = new CaptureWorkflowSession<object>(capture, SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureFullDesktopAsync();
 
@@ -325,7 +362,7 @@ public class CaptureWorkflowSessionOperationGuardTests
         var started = new TaskCompletionSource<bool>();
         var release = new TaskCompletionSource<bool>();
         var slowCapture = new SlowGateCaptureAdapter(started, release, ImmediateCapture());
-        var session = new CaptureWorkflowSession<object>(slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = session.CaptureFullDesktopAsync();
         await started.Task;
@@ -350,7 +387,7 @@ public class CaptureWorkflowSessionOperationGuardTests
         var release = new TaskCompletionSource<bool>();
         var innerCapture = ImmediateCapture();
         var slowCapture = new SlowGateCaptureAdapter(started, release, innerCapture);
-        var session = new CaptureWorkflowSession<object>(slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = session.CaptureFullDesktopAsync();
         await started.Task;
@@ -369,7 +406,7 @@ public class CaptureWorkflowSessionOperationGuardTests
         var started = new TaskCompletionSource<bool>();
         var release = new TaskCompletionSource<bool>();
         var slowCapture = new SlowGateCaptureAdapter(started, release, ImmediateCapture());
-        var session = new CaptureWorkflowSession<object>(slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = session.CaptureFullDesktopAsync();
         await started.Task;
@@ -387,7 +424,7 @@ public class CaptureWorkflowSessionOperationGuardTests
         var started = new TaskCompletionSource<bool>();
         var release = new TaskCompletionSource<bool>();
         var slowCapture = new SlowGateCaptureAdapter(started, release, ImmediateCapture());
-        var session = new CaptureWorkflowSession<object>(slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = session.CaptureFullDesktopAsync();
         await started.Task;
@@ -403,7 +440,7 @@ public class CaptureWorkflowSessionOperationGuardTests
     public async Task AfterCompletion_SessionAcceptsNextTrigger()
     {
         var capture = ImmediateCapture();
-        var session = new CaptureWorkflowSession<object>(capture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = await session.CaptureFullDesktopAsync();
         var second = await session.CaptureFullDesktopAsync();
@@ -426,7 +463,7 @@ public class CaptureWorkflowSessionCaptureFailureTests
             NextResult = CaptureFrameResult.Fail("Native capture unavailable."),
         };
         var preview = new FakePreviewAdapter();
-        var session = new CaptureWorkflowSession<object>(capture, preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureFullDesktopAsync();
 
@@ -441,7 +478,7 @@ public class CaptureWorkflowSessionCaptureFailureTests
         {
             NextResult = CaptureFrameResult.Fail("Native capture unavailable."),
         };
-        var session = new CaptureWorkflowSession<object>(capture, new FakePreviewAdapter(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, new FakePreviewAdapter(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureFullDesktopAsync();
 
@@ -456,7 +493,7 @@ public class CaptureWorkflowSessionCaptureFailureTests
             NextResult = CaptureFrameResult.Fail("failed."),
         };
         var preview = new FakePreviewAdapter();
-        var session = new CaptureWorkflowSession<object>(capture, preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureFullDesktopAsync();
 
@@ -470,7 +507,7 @@ public class CaptureWorkflowSessionCaptureFailureTests
         {
             NextResult = CaptureFrameResult.Fail("failed."),
         };
-        var session = new CaptureWorkflowSession<object>(capture, new FakePreviewAdapter(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, new FakePreviewAdapter(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureFullDesktopAsync();
 
@@ -484,7 +521,7 @@ public class CaptureWorkflowSessionCaptureFailureTests
         {
             NextResult = CaptureFrameResult.Fail("failed."),
         };
-        var session = new CaptureWorkflowSession<object>(capture, new FakePreviewAdapter(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, new FakePreviewAdapter(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureFullDesktopAsync();
 
@@ -498,7 +535,7 @@ public class CaptureWorkflowSessionCaptureFailureTests
         {
             NextResult = CaptureFrameResult.Fail("transient."),
         };
-        var session = new CaptureWorkflowSession<object>(failingCapture, new FakePreviewAdapter(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(failingCapture, new FakePreviewAdapter(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = await session.CaptureFullDesktopAsync();
         Assert.Equal(WorkflowStatus.CaptureFailed, first.Status);
@@ -527,7 +564,7 @@ public class CaptureWorkflowSessionPreviewFailureTests
         {
             NextResult = PreviewPresentResult<object>.Fail("Display conversion failed."),
         };
-        var session = new CaptureWorkflowSession<object>(capture, preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureFullDesktopAsync();
 
@@ -546,7 +583,7 @@ public class CaptureWorkflowSessionPreviewFailureTests
         {
             NextResult = PreviewPresentResult<object>.Fail("Display conversion failed."),
         };
-        var session = new CaptureWorkflowSession<object>(capture, preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureFullDesktopAsync();
 
@@ -569,7 +606,7 @@ public class CaptureWorkflowSessionPreviewFailureTests
         {
             NextResult = PreviewPresentResult<object>.Fail("Display conversion failed."),
         };
-        var session = new CaptureWorkflowSession<object>(capture, preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureFullDesktopAsync();
 
@@ -588,7 +625,7 @@ public class CaptureWorkflowSessionPreviewFailureTests
         {
             NextResult = PreviewPresentResult<object>.Fail("Display conversion failed."),
         };
-        var session = new CaptureWorkflowSession<object>(capture, failingPreview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, failingPreview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = await session.CaptureFullDesktopAsync();
         Assert.Equal(WorkflowStatus.PreviewFailed, first.Status);
@@ -626,7 +663,7 @@ public class CaptureWorkflowSessionActiveWindowTests
     [Fact]
     public async Task CaptureActiveWindowAsync_OnSuccess_ReturnsSucceededStatus()
     {
-        var session = new CaptureWorkflowSession<object>(SuccessCapture(), SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(SuccessCapture(), SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureActiveWindowAsync();
 
@@ -638,7 +675,7 @@ public class CaptureWorkflowSessionActiveWindowTests
     public async Task CaptureActiveWindowAsync_OnSuccess_RoutesThroughCaptureAdapter()
     {
         var capture = SuccessCapture();
-        var session = new CaptureWorkflowSession<object>(capture, SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureActiveWindowAsync();
 
@@ -652,7 +689,7 @@ public class CaptureWorkflowSessionActiveWindowTests
     {
         var expectedDisplayToken = new object();
         var preview = SuccessPreview(expectedDisplayToken);
-        var session = new CaptureWorkflowSession<object>(SuccessCapture(), preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(SuccessCapture(), preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureActiveWindowAsync();
 
@@ -663,7 +700,7 @@ public class CaptureWorkflowSessionActiveWindowTests
     [Fact]
     public async Task CaptureActiveWindowAsync_OnSuccess_ReportsActiveWindowMode()
     {
-        var session = new CaptureWorkflowSession<object>(SuccessCapture(), SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(SuccessCapture(), SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureActiveWindowAsync();
 
@@ -678,7 +715,7 @@ public class CaptureWorkflowSessionActiveWindowTests
         {
             NextActiveWindowResult = CaptureFrameResult.Ok(frame, "6×3", 1.0),
         };
-        var session = new CaptureWorkflowSession<object>(capture, SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureActiveWindowAsync();
 
@@ -693,7 +730,7 @@ public class CaptureWorkflowSessionActiveWindowTests
         {
             NextActiveWindowResult = CaptureFrameResult.Ok(frame, "6×3", 1.0),
         };
-        var session = new CaptureWorkflowSession<object>(capture, SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureActiveWindowAsync();
 
@@ -711,7 +748,7 @@ public class CaptureWorkflowSessionActiveWindowTests
             NextActiveWindowResult = CaptureFrameResult.Fail("No eligible active window."),
         };
         var preview = new FakePreviewAdapter();
-        var session = new CaptureWorkflowSession<object>(capture, preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureActiveWindowAsync();
 
@@ -732,7 +769,7 @@ public class CaptureWorkflowSessionActiveWindowTests
         {
             NextActiveWindowResult = CaptureFrameResult.Ok(firstFrame, "6×3", 1.0),
         };
-        var session = new CaptureWorkflowSession<object>(capture, SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, SuccessPreview(new object()), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureActiveWindowAsync();
         Assert.Same(firstFrame, session.LastFrame);
@@ -751,7 +788,7 @@ public class CaptureWorkflowSessionActiveWindowTests
         {
             NextActiveWindowResult = CaptureFrameResult.Fail("transient."),
         };
-        var session = new CaptureWorkflowSession<object>(failingCapture, new FakePreviewAdapter(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(failingCapture, new FakePreviewAdapter(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = await session.CaptureActiveWindowAsync();
         Assert.Equal(WorkflowStatus.CaptureFailed, first.Status);
@@ -776,7 +813,7 @@ public class CaptureWorkflowSessionActiveWindowTests
         {
             NextResult = PreviewPresentResult<object>.Fail("Display conversion failed."),
         };
-        var session = new CaptureWorkflowSession<object>(capture, preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureActiveWindowAsync();
 
@@ -795,7 +832,7 @@ public class CaptureWorkflowSessionActiveWindowTests
         {
             NextResult = PreviewPresentResult<object>.Fail("Display conversion failed."),
         };
-        var session = new CaptureWorkflowSession<object>(capture, preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, preview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureActiveWindowAsync();
 
@@ -814,7 +851,7 @@ public class CaptureWorkflowSessionActiveWindowTests
         {
             NextResult = PreviewPresentResult<object>.Fail("Display conversion failed."),
         };
-        var session = new CaptureWorkflowSession<object>(capture, failingPreview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, failingPreview, new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = await session.CaptureActiveWindowAsync();
         Assert.Equal(WorkflowStatus.PreviewFailed, first.Status);
@@ -853,7 +890,7 @@ public class CaptureWorkflowSessionCrossRouteGuardTests
         var release = new TaskCompletionSource<bool>();
         var innerCapture = ImmediateCapture();
         var slowCapture = new SlowGateCaptureAdapter(started, release, innerCapture);
-        var session = new CaptureWorkflowSession<object>(slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = session.CaptureFullDesktopAsync();
         await started.Task;
@@ -878,7 +915,7 @@ public class CaptureWorkflowSessionCrossRouteGuardTests
         var release = new TaskCompletionSource<bool>();
         var innerCapture = ImmediateCapture();
         var slowCapture = new SlowGateCaptureAdapter(started, release, innerCapture);
-        var session = new CaptureWorkflowSession<object>(slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = session.CaptureActiveWindowAsync();
         await started.Task;
@@ -899,7 +936,7 @@ public class CaptureWorkflowSessionCrossRouteGuardTests
     public async Task AfterActiveWindowCompletes_FullDesktopTriggerIsAccepted()
     {
         var capture = ImmediateCapture();
-        var session = new CaptureWorkflowSession<object>(capture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = await session.CaptureActiveWindowAsync();
         var second = await session.CaptureFullDesktopAsync();
@@ -952,7 +989,7 @@ public class CaptureWorkflowSessionSelectionTests
     public async Task CaptureSelectionAsync_OnConfirm_ReturnsSucceededStatus()
     {
         var session = new CaptureWorkflowSession<object>(
-            SuccessCapture(), SuccessPreview(new object()), ConfirmingOverlay(Geometry(10, 20, 800, 600)), new FakeMonitorPickerOverlayAdapter());
+            SuccessCapture(), SuccessPreview(new object()), ConfirmingOverlay(Geometry(10, 20, 800, 600)), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectionAsync();
 
@@ -965,7 +1002,7 @@ public class CaptureWorkflowSessionSelectionTests
     {
         var overlay = ConfirmingOverlay(Geometry(0, 0, 100, 100));
         var session = new CaptureWorkflowSession<object>(
-            SuccessCapture(), SuccessPreview(new object()), overlay, new FakeMonitorPickerOverlayAdapter());
+            SuccessCapture(), SuccessPreview(new object()), overlay, new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureSelectionAsync();
 
@@ -978,7 +1015,7 @@ public class CaptureWorkflowSessionSelectionTests
         var capture = SuccessCapture();
         var geometry = Geometry(100, 200, 800, 600);
         var session = new CaptureWorkflowSession<object>(
-            capture, SuccessPreview(new object()), ConfirmingOverlay(geometry), new FakeMonitorPickerOverlayAdapter());
+            capture, SuccessPreview(new object()), ConfirmingOverlay(geometry), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureSelectionAsync();
 
@@ -994,7 +1031,7 @@ public class CaptureWorkflowSessionSelectionTests
         var expectedDisplayToken = new object();
         var preview = SuccessPreview(expectedDisplayToken);
         var session = new CaptureWorkflowSession<object>(
-            SuccessCapture(), preview, ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter());
+            SuccessCapture(), preview, ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectionAsync();
 
@@ -1006,7 +1043,7 @@ public class CaptureWorkflowSessionSelectionTests
     public async Task CaptureSelectionAsync_OnConfirm_ReportsSelectionMode()
     {
         var session = new CaptureWorkflowSession<object>(
-            SuccessCapture(), SuccessPreview(new object()), ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter());
+            SuccessCapture(), SuccessPreview(new object()), ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectionAsync();
 
@@ -1022,7 +1059,7 @@ public class CaptureWorkflowSessionSelectionTests
             NextSelectionResult = CaptureFrameResult.Ok(frame, "10×7", 1.0),
         };
         var session = new CaptureWorkflowSession<object>(
-            capture, SuccessPreview(new object()), ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter());
+            capture, SuccessPreview(new object()), ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectionAsync();
 
@@ -1038,7 +1075,7 @@ public class CaptureWorkflowSessionSelectionTests
             NextSelectionResult = CaptureFrameResult.Ok(frame, "10×7", 1.0),
         };
         var session = new CaptureWorkflowSession<object>(
-            capture, SuccessPreview(new object()), ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter());
+            capture, SuccessPreview(new object()), ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureSelectionAsync();
 
@@ -1057,7 +1094,7 @@ public class CaptureWorkflowSessionSelectionTests
     {
         var capture = SuccessCapture();
         var session = new CaptureWorkflowSession<object>(
-            capture, SuccessPreview(new object()), ConfirmingOverlay(Geometry(-1920, -1080, 1920, 1080)), new FakeMonitorPickerOverlayAdapter());
+            capture, SuccessPreview(new object()), ConfirmingOverlay(Geometry(-1920, -1080, 1920, 1080)), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureSelectionAsync();
 
@@ -1075,7 +1112,7 @@ public class CaptureWorkflowSessionSelectionTests
         // case. The signed origin and full span must reach capture unchanged.
         var capture = SuccessCapture();
         var session = new CaptureWorkflowSession<object>(
-            capture, SuccessPreview(new object()), ConfirmingOverlay(Geometry(-960, 0, 2880, 1080)), new FakeMonitorPickerOverlayAdapter());
+            capture, SuccessPreview(new object()), ConfirmingOverlay(Geometry(-960, 0, 2880, 1080)), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureSelectionAsync();
 
@@ -1093,7 +1130,7 @@ public class CaptureWorkflowSessionSelectionTests
     {
         var cancellingOverlay = new FakeSelectionOverlayAdapter(); // NextGeometry defaults to null
         var session = new CaptureWorkflowSession<object>(
-            SuccessCapture(), SuccessPreview(new object()), cancellingOverlay, new FakeMonitorPickerOverlayAdapter());
+            SuccessCapture(), SuccessPreview(new object()), cancellingOverlay, new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectionAsync();
 
@@ -1107,7 +1144,7 @@ public class CaptureWorkflowSessionSelectionTests
         var cancellingOverlay = new FakeSelectionOverlayAdapter();
         var capture = SuccessCapture();
         var session = new CaptureWorkflowSession<object>(
-            capture, SuccessPreview(new object()), cancellingOverlay, new FakeMonitorPickerOverlayAdapter());
+            capture, SuccessPreview(new object()), cancellingOverlay, new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureSelectionAsync();
 
@@ -1122,7 +1159,7 @@ public class CaptureWorkflowSessionSelectionTests
         var cancellingOverlay = new FakeSelectionOverlayAdapter();
         var preview = SuccessPreview(new object());
         var session = new CaptureWorkflowSession<object>(
-            SuccessCapture(), preview, cancellingOverlay, new FakeMonitorPickerOverlayAdapter());
+            SuccessCapture(), preview, cancellingOverlay, new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureSelectionAsync();
 
@@ -1134,7 +1171,7 @@ public class CaptureWorkflowSessionSelectionTests
     {
         var cancellingOverlay = new FakeSelectionOverlayAdapter();
         var session = new CaptureWorkflowSession<object>(
-            SuccessCapture(), SuccessPreview(new object()), cancellingOverlay, new FakeMonitorPickerOverlayAdapter());
+            SuccessCapture(), SuccessPreview(new object()), cancellingOverlay, new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectionAsync();
 
@@ -1146,7 +1183,7 @@ public class CaptureWorkflowSessionSelectionTests
     {
         var cancellingOverlay = new FakeSelectionOverlayAdapter();
         var session = new CaptureWorkflowSession<object>(
-            SuccessCapture(), SuccessPreview(new object()), cancellingOverlay, new FakeMonitorPickerOverlayAdapter());
+            SuccessCapture(), SuccessPreview(new object()), cancellingOverlay, new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectionAsync();
 
@@ -1158,7 +1195,7 @@ public class CaptureWorkflowSessionSelectionTests
     {
         var cancellingOverlay = new FakeSelectionOverlayAdapter();
         var session = new CaptureWorkflowSession<object>(
-            SuccessCapture(), SuccessPreview(new object()), cancellingOverlay, new FakeMonitorPickerOverlayAdapter());
+            SuccessCapture(), SuccessPreview(new object()), cancellingOverlay, new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = await session.CaptureSelectionAsync();
         Assert.Equal(WorkflowStatus.Cancelled, first.Status);
@@ -1180,7 +1217,7 @@ public class CaptureWorkflowSessionSelectionTests
             NextSelectionResult = CaptureFrameResult.Fail("Native region capture unavailable."),
         };
         var session = new CaptureWorkflowSession<object>(
-            capture, new FakePreviewAdapter(), ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter());
+            capture, new FakePreviewAdapter(), ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectionAsync();
 
@@ -1198,7 +1235,7 @@ public class CaptureWorkflowSessionSelectionTests
         };
         var preview = new FakePreviewAdapter();
         var session = new CaptureWorkflowSession<object>(
-            capture, preview, ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter());
+            capture, preview, ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureSelectionAsync();
 
@@ -1213,7 +1250,7 @@ public class CaptureWorkflowSessionSelectionTests
             NextSelectionResult = CaptureFrameResult.Fail("transient."),
         };
         var session = new CaptureWorkflowSession<object>(
-            failingCapture, new FakePreviewAdapter(), ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter());
+            failingCapture, new FakePreviewAdapter(), ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = await session.CaptureSelectionAsync();
         Assert.Equal(WorkflowStatus.CaptureFailed, first.Status);
@@ -1241,7 +1278,7 @@ public class CaptureWorkflowSessionSelectionTests
             NextResult = PreviewPresentResult<object>.Fail("Display conversion failed."),
         };
         var session = new CaptureWorkflowSession<object>(
-            capture, failingPreview, ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter());
+            capture, failingPreview, ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectionAsync();
 
@@ -1261,7 +1298,7 @@ public class CaptureWorkflowSessionSelectionTests
             NextResult = PreviewPresentResult<object>.Fail("Display conversion failed."),
         };
         var session = new CaptureWorkflowSession<object>(
-            capture, failingPreview, ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter());
+            capture, failingPreview, ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectionAsync();
 
@@ -1281,7 +1318,7 @@ public class CaptureWorkflowSessionSelectionTests
             NextResult = PreviewPresentResult<object>.Fail("Display conversion failed."),
         };
         var session = new CaptureWorkflowSession<object>(
-            capture, failingPreview, ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter());
+            capture, failingPreview, ConfirmingOverlay(Geometry(0, 0, 10, 10)), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = await session.CaptureSelectionAsync();
         Assert.Equal(WorkflowStatus.PreviewFailed, first.Status);
@@ -1326,7 +1363,7 @@ public class CaptureWorkflowSessionSelectionCrossRouteGuardTests
         var release = new TaskCompletionSource<bool>();
         var innerCapture = ImmediateCapture();
         var slowCapture = new SlowGateCaptureAdapter(started, release, innerCapture);
-        var session = new CaptureWorkflowSession<object>(slowCapture, ImmediatePreview(), ImmediateOverlay(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(slowCapture, ImmediatePreview(), ImmediateOverlay(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = session.CaptureFullDesktopAsync();
         await started.Task;
@@ -1355,7 +1392,7 @@ public class CaptureWorkflowSessionSelectionCrossRouteGuardTests
         var release = new TaskCompletionSource<bool>();
         var innerCapture = ImmediateCapture();
         var slowCapture = new SlowGateCaptureAdapter(started, release, innerCapture);
-        var session = new CaptureWorkflowSession<object>(slowCapture, ImmediatePreview(), ImmediateOverlay(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(slowCapture, ImmediatePreview(), ImmediateOverlay(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = session.CaptureSelectionAsync();
         await started.Task;
@@ -1379,7 +1416,7 @@ public class CaptureWorkflowSessionSelectionCrossRouteGuardTests
         var release = new TaskCompletionSource<bool>();
         var innerCapture = ImmediateCapture();
         var slowCapture = new SlowGateCaptureAdapter(started, release, innerCapture);
-        var session = new CaptureWorkflowSession<object>(slowCapture, ImmediatePreview(), ImmediateOverlay(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(slowCapture, ImmediatePreview(), ImmediateOverlay(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = session.CaptureActiveWindowAsync();
         await started.Task;
@@ -1400,7 +1437,7 @@ public class CaptureWorkflowSessionSelectionCrossRouteGuardTests
     public async Task AfterSelectionCompletes_FullDesktopTriggerIsAccepted()
     {
         var capture = ImmediateCapture();
-        var session = new CaptureWorkflowSession<object>(capture, ImmediatePreview(), ImmediateOverlay(), new FakeMonitorPickerOverlayAdapter());
+        var session = new CaptureWorkflowSession<object>(capture, ImmediatePreview(), ImmediateOverlay(), new FakeMonitorPickerOverlayAdapter(), new FakeWindowPickerOverlayAdapter());
 
         var first = await session.CaptureSelectionAsync();
         var second = await session.CaptureFullDesktopAsync();
@@ -1456,7 +1493,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
     {
         var session = new CaptureWorkflowSession<object>(
             SuccessCapture(), SuccessPreview(new object()),
-            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 1920, 1080)));
+            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 1920, 1080)), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectedMonitorAsync();
 
@@ -1470,7 +1507,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         var picker = ConfirmingPicker(Monitor(0, 0, 100, 100));
         var session = new CaptureWorkflowSession<object>(
             SuccessCapture(), SuccessPreview(new object()),
-            new FakeSelectionOverlayAdapter(), picker);
+            new FakeSelectionOverlayAdapter(), picker, new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureSelectedMonitorAsync();
 
@@ -1484,7 +1521,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         var target = Monitor(0, 0, 1920, 1080);
         var session = new CaptureWorkflowSession<object>(
             capture, SuccessPreview(new object()),
-            new FakeSelectionOverlayAdapter(), ConfirmingPicker(target));
+            new FakeSelectionOverlayAdapter(), ConfirmingPicker(target), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureSelectedMonitorAsync();
 
@@ -1502,7 +1539,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         var preview = SuccessPreview(expectedDisplayToken);
         var session = new CaptureWorkflowSession<object>(
             SuccessCapture(), preview,
-            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)));
+            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectedMonitorAsync();
 
@@ -1515,7 +1552,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
     {
         var session = new CaptureWorkflowSession<object>(
             SuccessCapture(), SuccessPreview(new object()),
-            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)));
+            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectedMonitorAsync();
 
@@ -1532,7 +1569,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         };
         var session = new CaptureWorkflowSession<object>(
             capture, SuccessPreview(new object()),
-            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)));
+            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectedMonitorAsync();
 
@@ -1549,7 +1586,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         };
         var session = new CaptureWorkflowSession<object>(
             capture, SuccessPreview(new object()),
-            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)));
+            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureSelectedMonitorAsync();
 
@@ -1570,7 +1607,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         var capture = SuccessCapture();
         var session = new CaptureWorkflowSession<object>(
             capture, SuccessPreview(new object()),
-            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(-1920, -1080, 1920, 1080)));
+            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(-1920, -1080, 1920, 1080)), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureSelectedMonitorAsync();
 
@@ -1590,7 +1627,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         var session = new CaptureWorkflowSession<object>(
             capture, SuccessPreview(new object()),
             new FakeSelectionOverlayAdapter(),
-            ConfirmingPicker(Monitor(-2560, 0, 2560, 1440, "Monitor 2 (2560×1440)")));
+            ConfirmingPicker(Monitor(-2560, 0, 2560, 1440, "Monitor 2 (2560×1440)")), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureSelectedMonitorAsync();
 
@@ -1613,7 +1650,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         var cancellingPicker = new FakeMonitorPickerOverlayAdapter(); // NextTarget defaults to null
         var session = new CaptureWorkflowSession<object>(
             SuccessCapture(), SuccessPreview(new object()),
-            new FakeSelectionOverlayAdapter(), cancellingPicker);
+            new FakeSelectionOverlayAdapter(), cancellingPicker, new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectedMonitorAsync();
 
@@ -1628,7 +1665,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         var capture = SuccessCapture();
         var session = new CaptureWorkflowSession<object>(
             capture, SuccessPreview(new object()),
-            new FakeSelectionOverlayAdapter(), cancellingPicker);
+            new FakeSelectionOverlayAdapter(), cancellingPicker, new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureSelectedMonitorAsync();
 
@@ -1645,7 +1682,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         var preview = SuccessPreview(new object());
         var session = new CaptureWorkflowSession<object>(
             SuccessCapture(), preview,
-            new FakeSelectionOverlayAdapter(), cancellingPicker);
+            new FakeSelectionOverlayAdapter(), cancellingPicker, new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureSelectedMonitorAsync();
 
@@ -1658,7 +1695,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         var cancellingPicker = new FakeMonitorPickerOverlayAdapter();
         var session = new CaptureWorkflowSession<object>(
             SuccessCapture(), SuccessPreview(new object()),
-            new FakeSelectionOverlayAdapter(), cancellingPicker);
+            new FakeSelectionOverlayAdapter(), cancellingPicker, new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectedMonitorAsync();
 
@@ -1671,7 +1708,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         var cancellingPicker = new FakeMonitorPickerOverlayAdapter();
         var session = new CaptureWorkflowSession<object>(
             SuccessCapture(), SuccessPreview(new object()),
-            new FakeSelectionOverlayAdapter(), cancellingPicker);
+            new FakeSelectionOverlayAdapter(), cancellingPicker, new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectedMonitorAsync();
 
@@ -1684,7 +1721,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         var cancellingPicker = new FakeMonitorPickerOverlayAdapter();
         var session = new CaptureWorkflowSession<object>(
             SuccessCapture(), SuccessPreview(new object()),
-            new FakeSelectionOverlayAdapter(), cancellingPicker);
+            new FakeSelectionOverlayAdapter(), cancellingPicker, new FakeWindowPickerOverlayAdapter());
 
         var first = await session.CaptureSelectedMonitorAsync();
         Assert.Equal(WorkflowStatus.Cancelled, first.Status);
@@ -1707,7 +1744,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         };
         var session = new CaptureWorkflowSession<object>(
             capture, new FakePreviewAdapter(),
-            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)));
+            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectedMonitorAsync();
 
@@ -1726,7 +1763,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         var preview = new FakePreviewAdapter();
         var session = new CaptureWorkflowSession<object>(
             capture, preview,
-            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)));
+            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)), new FakeWindowPickerOverlayAdapter());
 
         await session.CaptureSelectedMonitorAsync();
 
@@ -1742,7 +1779,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         };
         var session = new CaptureWorkflowSession<object>(
             failingCapture, new FakePreviewAdapter(),
-            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)));
+            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)), new FakeWindowPickerOverlayAdapter());
 
         var first = await session.CaptureSelectedMonitorAsync();
         Assert.Equal(WorkflowStatus.CaptureFailed, first.Status);
@@ -1771,7 +1808,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         };
         var session = new CaptureWorkflowSession<object>(
             capture, failingPreview,
-            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)));
+            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectedMonitorAsync();
 
@@ -1792,7 +1829,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         };
         var session = new CaptureWorkflowSession<object>(
             capture, failingPreview,
-            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)));
+            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)), new FakeWindowPickerOverlayAdapter());
 
         var result = await session.CaptureSelectedMonitorAsync();
 
@@ -1813,7 +1850,7 @@ public class CaptureWorkflowSessionSelectedMonitorTests
         };
         var session = new CaptureWorkflowSession<object>(
             capture, failingPreview,
-            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)));
+            new FakeSelectionOverlayAdapter(), ConfirmingPicker(Monitor(0, 0, 10, 10)), new FakeWindowPickerOverlayAdapter());
 
         var first = await session.CaptureSelectedMonitorAsync();
         Assert.Equal(WorkflowStatus.PreviewFailed, first.Status);
@@ -1860,7 +1897,7 @@ public class CaptureWorkflowSessionSelectedMonitorCrossRouteGuardTests
         var innerCapture = ImmediateCapture();
         var slowCapture = new SlowGateCaptureAdapter(started, release, innerCapture);
         var session = new CaptureWorkflowSession<object>(
-            slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), ImmediatePicker());
+            slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), ImmediatePicker(), new FakeWindowPickerOverlayAdapter());
 
         var first = session.CaptureFullDesktopAsync();
         await started.Task;
@@ -1890,7 +1927,7 @@ public class CaptureWorkflowSessionSelectedMonitorCrossRouteGuardTests
         var innerCapture = ImmediateCapture();
         var slowCapture = new SlowGateCaptureAdapter(started, release, innerCapture);
         var session = new CaptureWorkflowSession<object>(
-            slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), ImmediatePicker());
+            slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), ImmediatePicker(), new FakeWindowPickerOverlayAdapter());
 
         var first = session.CaptureSelectedMonitorAsync();
         await started.Task;
@@ -1919,7 +1956,7 @@ public class CaptureWorkflowSessionSelectedMonitorCrossRouteGuardTests
             NextGeometry = new SelectionGeometry { X = 0, Y = 0, Width = 10, Height = 10 },
         };
         var session = new CaptureWorkflowSession<object>(
-            slowCapture, ImmediatePreview(), selectingOverlay, ImmediatePicker());
+            slowCapture, ImmediatePreview(), selectingOverlay, ImmediatePicker(), new FakeWindowPickerOverlayAdapter());
 
         var first = session.CaptureSelectionAsync();
         await started.Task;
@@ -1941,7 +1978,7 @@ public class CaptureWorkflowSessionSelectedMonitorCrossRouteGuardTests
     {
         var capture = ImmediateCapture();
         var session = new CaptureWorkflowSession<object>(
-            capture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), ImmediatePicker());
+            capture, ImmediatePreview(), new FakeSelectionOverlayAdapter(), ImmediatePicker(), new FakeWindowPickerOverlayAdapter());
 
         var first = await session.CaptureSelectedMonitorAsync();
         var second = await session.CaptureFullDesktopAsync();
@@ -1949,6 +1986,684 @@ public class CaptureWorkflowSessionSelectedMonitorCrossRouteGuardTests
         Assert.Equal(WorkflowStatus.Succeeded, first.Status);
         Assert.Equal(WorkflowStatus.Succeeded, second.Status);
         Assert.Equal(1, capture.MonitorCallCount);
+        Assert.Equal(1, capture.CallCount);
+    }
+}
+
+// ── Selected Window workflow tests ──────────────────────────────────────
+//
+// The runtime CaptureWorkflowSession owns the Selected Window route. The picker
+// overlay adapter returns one of: a confirmed WindowTarget, an empty-desktop
+// fallback, or cancellation (null). On a confirmed window the workflow captures
+// by handle; on empty desktop it routes to a Full Desktop capture (including
+// the taskbar); on cancellation it ends with Cancelled and no Frame. The picker
+// never performs Capture or owns post-capture state. Mixed-DPI, cross-monitor,
+// and negative-coordinate window bounds must reach the capture adapter
+// untouched. Tests observe the returned WorkflowResult and recorded adapter
+// calls — never private fields.
+
+public class CaptureWorkflowSessionSelectedWindowTests
+{
+    private static ContiguousBitmap TestFrame() =>
+        ExportTestHelpers.CreateTestBitmap(16, 9);
+
+    private static WindowTarget Window(long handle, int x, int y, uint w, uint h, string title = "App") => new()
+    {
+        Handle = new IntPtr(handle), X = x, Y = y, Width = w, Height = h, Title = title,
+    };
+
+    // A capture fake configured for both Selected Window outcomes: the window
+    // path hits NextWindowResult; the empty-desktop fallback path hits
+    // NextResult (CaptureFullDesktop).
+    private static FakeCaptureAdapter SuccessCapture(double elapsedMs = 4.0) => new()
+    {
+        NextWindowResult = CaptureFrameResult.Ok(TestFrame(), "16×9", elapsedMs),
+        NextResult = CaptureFrameResult.Ok(TestFrame(), "1920×1080", elapsedMs),
+    };
+
+    private static FakePreviewAdapter SuccessPreview(object displayToken, double elapsedMs = 1.5) => new()
+    {
+        NextResult = PreviewPresentResult<object>.Ok(displayToken, elapsedMs),
+    };
+
+    private static FakeWindowPickerOverlayAdapter ConfirmingPicker(WindowTarget target) => new()
+    {
+        NextResult = new WindowPickerResult
+        {
+            Outcome = WindowPickerOutcome.WindowConfirmed,
+            Target = target,
+        },
+    };
+
+    private static FakeWindowPickerOverlayAdapter FallbackPicker() => new()
+    {
+        NextResult = new WindowPickerResult
+        {
+            Outcome = WindowPickerOutcome.EmptyDesktopFallback,
+        },
+    };
+
+    // ── Confirmation → Capture(window) → Preview success path ──────────
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnConfirm_ReturnsSucceededStatus()
+    {
+        var session = new CaptureWorkflowSession<object>(
+            SuccessCapture(), SuccessPreview(new object()),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(),
+            ConfirmingPicker(Window(0x101, 0, 0, 1920, 1080, "Notepad")));
+
+        var result = await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.True(result.IsSuccess);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnConfirm_ShowsPickerExactlyOnce()
+    {
+        var picker = ConfirmingPicker(Window(0x101, 0, 0, 100, 100));
+        var session = new CaptureWorkflowSession<object>(
+            SuccessCapture(), SuccessPreview(new object()),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), picker);
+
+        await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(1, picker.CallCount);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnConfirm_RoutesTargetThroughCaptureWindow()
+    {
+        var capture = SuccessCapture();
+        var target = Window(0x101, 0, 0, 1920, 1080, "Notepad");
+        var session = new CaptureWorkflowSession<object>(
+            capture, SuccessPreview(new object()),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(),
+            ConfirmingPicker(target));
+
+        await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(1, capture.WindowCallCount);
+        // A confirmed window must not also trigger Full Desktop.
+        Assert.Equal(0, capture.CallCount);
+        Assert.Equal(0, capture.ActiveWindowCallCount);
+        Assert.Equal(0, capture.SelectionCallCount);
+        Assert.Equal(0, capture.MonitorCallCount);
+        Assert.Same(target, capture.LastWindowTarget);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnConfirm_RoutesFrameThroughPreviewAdapter()
+    {
+        var expectedDisplayToken = new object();
+        var preview = SuccessPreview(expectedDisplayToken);
+        var session = new CaptureWorkflowSession<object>(
+            SuccessCapture(), preview,
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(),
+            ConfirmingPicker(Window(0x101, 0, 0, 10, 10)));
+
+        var result = await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(1, preview.CallCount);
+        Assert.Same(expectedDisplayToken, result.PreviewImage);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnConfirm_ReportsSelectedWindowMode()
+    {
+        var session = new CaptureWorkflowSession<object>(
+            SuccessCapture(), SuccessPreview(new object()),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(),
+            ConfirmingPicker(Window(0x101, 0, 0, 10, 10)));
+
+        var result = await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal("Selected Window", result.Mode);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnConfirm_FrameIsTheCapturedFrame()
+    {
+        var frame = TestFrame();
+        var capture = new FakeCaptureAdapter
+        {
+            NextWindowResult = CaptureFrameResult.Ok(frame, "16×9", 1.0),
+        };
+        var session = new CaptureWorkflowSession<object>(
+            capture, SuccessPreview(new object()),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(),
+            ConfirmingPicker(Window(0x101, 0, 0, 10, 10)));
+
+        var result = await session.CaptureSelectedWindowAsync();
+
+        Assert.Same(frame, result.Frame);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnConfirm_LastFrameIsRetainedBySession()
+    {
+        var frame = TestFrame();
+        var capture = new FakeCaptureAdapter
+        {
+            NextWindowResult = CaptureFrameResult.Ok(frame, "16×9", 1.0),
+        };
+        var session = new CaptureWorkflowSession<object>(
+            capture, SuccessPreview(new object()),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(),
+            ConfirmingPicker(Window(0x101, 0, 0, 10, 10)));
+
+        await session.CaptureSelectedWindowAsync();
+
+        Assert.Same(frame, session.LastFrame);
+    }
+
+    // ── Mixed-DPI / cross-monitor / negative-coordinate pass-through ────
+    //
+    // The picker returns a WindowTarget whose bounds may cross monitor
+    // boundaries and sit at negative Virtual Desktop coordinates. The workflow
+    // must forward the handle and the signed origin/bounds to the capture
+    // adapter untouched. This is the case the spec (#29) calls out explicitly.
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_NegativeOrigin_TargetReachesCaptureUnchanged()
+    {
+        var capture = SuccessCapture();
+        var session = new CaptureWorkflowSession<object>(
+            capture, SuccessPreview(new object()),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(),
+            ConfirmingPicker(Window(0x42, -1200, -800, 1080, 700, "Secondary")));
+
+        await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(new IntPtr(0x42), capture.LastWindowTarget!.Handle);
+        Assert.Equal(-1200, capture.LastWindowTarget.X);
+        Assert.Equal(-800, capture.LastWindowTarget.Y);
+        Assert.Equal(1080u, capture.LastWindowTarget.Width);
+        Assert.Equal(700u, capture.LastWindowTarget.Height);
+        Assert.Equal("Secondary", capture.LastWindowTarget.Title);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_CrossMonitorBounds_TargetReachesCaptureUnchanged()
+    {
+        var capture = SuccessCapture();
+        // A window stretched across two monitors (primary ends at 1920).
+        var session = new CaptureWorkflowSession<object>(
+            capture, SuccessPreview(new object()),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(),
+            ConfirmingPicker(Window(0x7, 480, 200, 2880, 800, "Stretched")));
+
+        await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(480, capture.LastWindowTarget!.X);
+        Assert.Equal(2880u, capture.LastWindowTarget.Width);
+    }
+
+    // ── Empty-desktop fallback → Capture(Full Desktop) ─────────────────
+    //
+    // A click on empty desktop routes to a Full Desktop capture including the
+    // taskbar. The route label stays "Selected Window" — the user invoked this
+    // route, and the fallback is an internal capture-path detail.
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnEmptyDesktopFallback_ReturnsSucceededStatus()
+    {
+        var session = new CaptureWorkflowSession<object>(
+            SuccessCapture(), SuccessPreview(new object()),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(),
+            FallbackPicker());
+
+        var result = await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.True(result.IsSuccess);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnEmptyDesktopFallback_RoutesThroughCaptureFullDesktop()
+    {
+        var capture = SuccessCapture();
+        var session = new CaptureWorkflowSession<object>(
+            capture, SuccessPreview(new object()),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(),
+            FallbackPicker());
+
+        await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(1, capture.CallCount);
+        // The fallback must not capture a window by handle.
+        Assert.Equal(0, capture.WindowCallCount);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnEmptyDesktopFallback_ReportsSelectedWindowMode()
+    {
+        var session = new CaptureWorkflowSession<object>(
+            SuccessCapture(), SuccessPreview(new object()),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(),
+            FallbackPicker());
+
+        var result = await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal("Selected Window", result.Mode);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnEmptyDesktopFallback_FrameIsTheCapturedFrame()
+    {
+        var frame = TestFrame();
+        var capture = new FakeCaptureAdapter
+        {
+            NextResult = CaptureFrameResult.Ok(frame, "1920×1080", 1.0),
+        };
+        var session = new CaptureWorkflowSession<object>(
+            capture, SuccessPreview(new object()),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(),
+            FallbackPicker());
+
+        var result = await session.CaptureSelectedWindowAsync();
+
+        Assert.Same(frame, result.Frame);
+    }
+
+    // ── Cancellation path ──────────────────────────────────────────────
+    //
+    // Escape or overlay dismissal must end the operation without a Frame or
+    // delivery side effects. Capture is never invoked.
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnCancel_ReturnsCancelledStatus()
+    {
+        var cancellingPicker = new FakeWindowPickerOverlayAdapter(); // NextResult defaults to null
+        var session = new CaptureWorkflowSession<object>(
+            SuccessCapture(), SuccessPreview(new object()),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), cancellingPicker);
+
+        var result = await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(WorkflowStatus.Cancelled, result.Status);
+        Assert.False(result.IsSuccess);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnCancel_DoesNotInvokeCaptureAdapter()
+    {
+        var cancellingPicker = new FakeWindowPickerOverlayAdapter();
+        var capture = SuccessCapture();
+        var session = new CaptureWorkflowSession<object>(
+            capture, SuccessPreview(new object()),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), cancellingPicker);
+
+        await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(0, capture.WindowCallCount);
+        Assert.Equal(0, capture.CallCount);
+        Assert.Equal(0, capture.ActiveWindowCallCount);
+        Assert.Equal(0, capture.SelectionCallCount);
+        Assert.Equal(0, capture.MonitorCallCount);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnCancel_DoesNotInvokePreviewAdapter()
+    {
+        var cancellingPicker = new FakeWindowPickerOverlayAdapter();
+        var preview = SuccessPreview(new object());
+        var session = new CaptureWorkflowSession<object>(
+            SuccessCapture(), preview,
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), cancellingPicker);
+
+        await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(0, preview.CallCount);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnCancel_HasNoFrame()
+    {
+        var cancellingPicker = new FakeWindowPickerOverlayAdapter();
+        var session = new CaptureWorkflowSession<object>(
+            SuccessCapture(), SuccessPreview(new object()),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), cancellingPicker);
+
+        var result = await session.CaptureSelectedWindowAsync();
+
+        Assert.Null(result.Frame);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnCancel_ReportsSelectedWindowMode()
+    {
+        var cancellingPicker = new FakeWindowPickerOverlayAdapter();
+        var session = new CaptureWorkflowSession<object>(
+            SuccessCapture(), SuccessPreview(new object()),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), cancellingPicker);
+
+        var result = await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal("Selected Window", result.Mode);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnCancel_SessionIsRetryableOnNextTrigger()
+    {
+        var cancellingPicker = new FakeWindowPickerOverlayAdapter();
+        var session = new CaptureWorkflowSession<object>(
+            SuccessCapture(), SuccessPreview(new object()),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(), cancellingPicker);
+
+        var first = await session.CaptureSelectedWindowAsync();
+        Assert.Equal(WorkflowStatus.Cancelled, first.Status);
+
+        // A subsequent confirming Trigger must succeed normally.
+        cancellingPicker.NextResult = new WindowPickerResult
+        {
+            Outcome = WindowPickerOutcome.WindowConfirmed,
+            Target = Window(0x1, 0, 0, 10, 10),
+        };
+        var second = await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, second.Status);
+    }
+
+    // ── Capture failure ────────────────────────────────────────────────
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnCaptureFailure_ReturnsCaptureFailedStatus()
+    {
+        var capture = new FakeCaptureAdapter
+        {
+            NextWindowResult = CaptureFrameResult.Fail("Native window capture unavailable."),
+        };
+        var session = new CaptureWorkflowSession<object>(
+            capture, new FakePreviewAdapter(),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(),
+            ConfirmingPicker(Window(0x101, 0, 0, 10, 10)));
+
+        var result = await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(WorkflowStatus.CaptureFailed, result.Status);
+        Assert.Null(result.Frame);
+        Assert.Contains("Native window capture unavailable.", result.Error);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnCaptureFailure_DoesNotInvokePreview()
+    {
+        var capture = new FakeCaptureAdapter
+        {
+            NextWindowResult = CaptureFrameResult.Fail("failed."),
+        };
+        var preview = new FakePreviewAdapter();
+        var session = new CaptureWorkflowSession<object>(
+            capture, preview,
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(),
+            ConfirmingPicker(Window(0x101, 0, 0, 10, 10)));
+
+        await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(0, preview.CallCount);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnCaptureFailure_IsRetryableOnNextTrigger()
+    {
+        var failingCapture = new FakeCaptureAdapter
+        {
+            NextWindowResult = CaptureFrameResult.Fail("transient."),
+        };
+        var session = new CaptureWorkflowSession<object>(
+            failingCapture, new FakePreviewAdapter(),
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(),
+            ConfirmingPicker(Window(0x101, 0, 0, 10, 10)));
+
+        var first = await session.CaptureSelectedWindowAsync();
+        Assert.Equal(WorkflowStatus.CaptureFailed, first.Status);
+
+        var recoveryFrame = TestFrame();
+        failingCapture.NextWindowResult = CaptureFrameResult.Ok(recoveryFrame, "16×9", 1.0);
+        var second = await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, second.Status);
+        Assert.Same(recoveryFrame, second.Frame);
+    }
+
+    // ── Preview failure ────────────────────────────────────────────────
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnPreviewFailure_PreservesFrameForRetry()
+    {
+        var frame = TestFrame();
+        var capture = new FakeCaptureAdapter
+        {
+            NextWindowResult = CaptureFrameResult.Ok(frame, "16×9", 1.0),
+        };
+        var failingPreview = new FakePreviewAdapter
+        {
+            NextResult = PreviewPresentResult<object>.Fail("Display conversion failed."),
+        };
+        var session = new CaptureWorkflowSession<object>(
+            capture, failingPreview,
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(),
+            ConfirmingPicker(Window(0x101, 0, 0, 10, 10)));
+
+        var result = await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(WorkflowStatus.PreviewFailed, result.Status);
+        Assert.Same(frame, result.Frame);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnPreviewFailure_ReportsSelectedWindowMode()
+    {
+        var capture = new FakeCaptureAdapter
+        {
+            NextWindowResult = CaptureFrameResult.Ok(TestFrame(), "16×9", 1.0),
+        };
+        var failingPreview = new FakePreviewAdapter
+        {
+            NextResult = PreviewPresentResult<object>.Fail("Display conversion failed."),
+        };
+        var session = new CaptureWorkflowSession<object>(
+            capture, failingPreview,
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(),
+            ConfirmingPicker(Window(0x101, 0, 0, 10, 10)));
+
+        var result = await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal("Selected Window", result.Mode);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_OnPreviewFailure_IsRetryableOnNextTrigger()
+    {
+        var frame = TestFrame();
+        var capture = new FakeCaptureAdapter
+        {
+            NextWindowResult = CaptureFrameResult.Ok(frame, "16×9", 1.0),
+        };
+        var failingPreview = new FakePreviewAdapter
+        {
+            NextResult = PreviewPresentResult<object>.Fail("Display conversion failed."),
+        };
+        var session = new CaptureWorkflowSession<object>(
+            capture, failingPreview,
+            new FakeSelectionOverlayAdapter(), new FakeMonitorPickerOverlayAdapter(),
+            ConfirmingPicker(Window(0x101, 0, 0, 10, 10)));
+
+        var first = await session.CaptureSelectedWindowAsync();
+        Assert.Equal(WorkflowStatus.PreviewFailed, first.Status);
+
+        failingPreview.NextResult = PreviewPresentResult<object>.Ok(new object(), 0);
+        var second = await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, second.Status);
+    }
+}
+
+// ── Selected Window cross-route operation guarding tests ────────────────
+//
+// Extends the cross-route guard coverage to Selected Window: a Selected Window
+// Trigger must be rejected while Full Desktop, Active Window, Selection, or
+// Selected Monitor is in flight (and vice versa), and the in-flight route's
+// adapter must be the only one invoked.
+
+public class CaptureWorkflowSessionSelectedWindowCrossRouteGuardTests
+{
+    private static FakeCaptureAdapter ImmediateCapture() => new()
+    {
+        NextResult = CaptureFrameResult.Ok(ExportTestHelpers.CreateTestBitmap(2, 2), "2×2", 0),
+        NextActiveWindowResult = CaptureFrameResult.Ok(ExportTestHelpers.CreateTestBitmap(3, 3), "3×3", 0),
+        NextSelectionResult = CaptureFrameResult.Ok(ExportTestHelpers.CreateTestBitmap(4, 4), "4×4", 0),
+        NextMonitorResult = CaptureFrameResult.Ok(ExportTestHelpers.CreateTestBitmap(5, 5), "5×5", 0),
+        NextWindowResult = CaptureFrameResult.Ok(ExportTestHelpers.CreateTestBitmap(6, 6), "6×6", 0),
+    };
+
+    private static FakePreviewAdapter ImmediatePreview() => new()
+    {
+        NextResult = PreviewPresentResult<object>.Ok(new object(), 0),
+    };
+
+    private static FakeWindowPickerOverlayAdapter ImmediateWindowPicker() => new()
+    {
+        NextResult = new WindowPickerResult
+        {
+            Outcome = WindowPickerOutcome.WindowConfirmed,
+            Target = new WindowTarget { Handle = new IntPtr(0x10), X = 0, Y = 0, Width = 10, Height = 10 },
+        },
+    };
+
+    [Fact]
+    public async Task SelectedWindowTrigger_WhileFullDesktopInFlight_IsRejected()
+    {
+        var started = new TaskCompletionSource<bool>();
+        var release = new TaskCompletionSource<bool>();
+        var innerCapture = ImmediateCapture();
+        var slowCapture = new SlowGateCaptureAdapter(started, release, innerCapture);
+        var session = new CaptureWorkflowSession<object>(
+            slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(),
+            new FakeMonitorPickerOverlayAdapter(), ImmediateWindowPicker());
+
+        var first = session.CaptureFullDesktopAsync();
+        await started.Task;
+
+        var secondResult = await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(WorkflowStatus.OperationInProgress, secondResult.Status);
+        Assert.Equal("Selected Window", secondResult.Mode);
+
+        release.SetResult(true);
+        await first;
+
+        Assert.Equal(1, innerCapture.CallCount);
+        Assert.Equal(0, innerCapture.WindowCallCount);
+    }
+
+    [Fact]
+    public async Task FullDesktopTrigger_WhileSelectedWindowCaptureInFlight_IsRejected()
+    {
+        // The window picker overlay is shown on the test thread and returns
+        // immediately (the fake does not block), so to test "Full Desktop
+        // arriving while Selected Window is in flight" we make the window
+        // Capture hang via SlowGateCaptureAdapter. The picker has already
+        // returned a target; the in-flight work is the window Capture.
+        var started = new TaskCompletionSource<bool>();
+        var release = new TaskCompletionSource<bool>();
+        var innerCapture = ImmediateCapture();
+        var slowCapture = new SlowGateCaptureAdapter(started, release, innerCapture);
+        var session = new CaptureWorkflowSession<object>(
+            slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(),
+            new FakeMonitorPickerOverlayAdapter(), ImmediateWindowPicker());
+
+        var first = session.CaptureSelectedWindowAsync();
+        await started.Task;
+
+        var secondResult = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.OperationInProgress, secondResult.Status);
+        Assert.Equal("Full Desktop", secondResult.Mode);
+
+        release.SetResult(true);
+        await first;
+
+        Assert.Equal(1, innerCapture.WindowCallCount);
+        Assert.Equal(0, innerCapture.CallCount);
+    }
+
+    [Fact]
+    public async Task SelectedWindowTrigger_WhileSelectionInFlight_IsRejected()
+    {
+        var started = new TaskCompletionSource<bool>();
+        var release = new TaskCompletionSource<bool>();
+        var innerCapture = ImmediateCapture();
+        var slowCapture = new SlowGateCaptureAdapter(started, release, innerCapture);
+        var selectingOverlay = new FakeSelectionOverlayAdapter
+        {
+            NextGeometry = new SelectionGeometry { X = 0, Y = 0, Width = 10, Height = 10 },
+        };
+        var session = new CaptureWorkflowSession<object>(
+            slowCapture, ImmediatePreview(), selectingOverlay,
+            new FakeMonitorPickerOverlayAdapter(), ImmediateWindowPicker());
+
+        var first = session.CaptureSelectionAsync();
+        await started.Task;
+
+        var secondResult = await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(WorkflowStatus.OperationInProgress, secondResult.Status);
+        Assert.Equal("Selected Window", secondResult.Mode);
+
+        release.SetResult(true);
+        await first;
+
+        Assert.Equal(1, innerCapture.SelectionCallCount);
+        Assert.Equal(0, innerCapture.WindowCallCount);
+    }
+
+    [Fact]
+    public async Task SelectedWindowTrigger_WhileSelectedMonitorInFlight_IsRejected()
+    {
+        var started = new TaskCompletionSource<bool>();
+        var release = new TaskCompletionSource<bool>();
+        var innerCapture = ImmediateCapture();
+        var slowCapture = new SlowGateCaptureAdapter(started, release, innerCapture);
+        var monitorPicker = new FakeMonitorPickerOverlayAdapter
+        {
+            NextTarget = new MonitorTarget { X = 0, Y = 0, Width = 10, Height = 10 },
+        };
+        var session = new CaptureWorkflowSession<object>(
+            slowCapture, ImmediatePreview(), new FakeSelectionOverlayAdapter(),
+            monitorPicker, ImmediateWindowPicker());
+
+        var first = session.CaptureSelectedMonitorAsync();
+        await started.Task;
+
+        var secondResult = await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(WorkflowStatus.OperationInProgress, secondResult.Status);
+        Assert.Equal("Selected Window", secondResult.Mode);
+
+        release.SetResult(true);
+        await first;
+
+        Assert.Equal(1, innerCapture.MonitorCallCount);
+        Assert.Equal(0, innerCapture.WindowCallCount);
+    }
+
+    [Fact]
+    public async Task AfterSelectedWindowCompletes_FullDesktopTriggerIsAccepted()
+    {
+        var capture = ImmediateCapture();
+        var session = new CaptureWorkflowSession<object>(
+            capture, ImmediatePreview(), new FakeSelectionOverlayAdapter(),
+            new FakeMonitorPickerOverlayAdapter(), ImmediateWindowPicker());
+
+        var first = await session.CaptureSelectedWindowAsync();
+        var second = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, first.Status);
+        Assert.Equal(WorkflowStatus.Succeeded, second.Status);
+        Assert.Equal(1, capture.WindowCallCount);
         Assert.Equal(1, capture.CallCount);
     }
 }

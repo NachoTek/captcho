@@ -59,8 +59,8 @@ public sealed class WindowsCaptureAdapter : IWorkflowCaptureAdapter
 
     /// <summary>
     /// Captures a single Selected Monitor and returns a CaptureFrameResult
-    /// carrying the Frame and dimensions on success or a user-visible error on
-    /// failure. A monitor's Virtual Desktop bounds uniquely identify its pixel
+    /// carrying the Frame and dimensions on success or a user-visible error
+    /// on failure. A monitor's Virtual Desktop bounds uniquely identify its pixel
     /// region, so capture is performed over those bounds via the region path —
     /// this keeps negative-coordinate and mixed-DPI layouts aligned without
     /// depending on monitor-index alignment between the picker and the native
@@ -71,6 +71,22 @@ public sealed class WindowsCaptureAdapter : IWorkflowCaptureAdapter
         ArgumentNullException.ThrowIfNull(target);
         return Capture("Selected Monitor",
             () => SafeCaptureResult.CaptureRegion(target.X, target.Y, target.Width, target.Height));
+    }
+
+    /// <summary>
+    /// Captures a single Selected Window and returns a CaptureFrameResult
+    /// carrying the Frame and dimensions on success or a user-visible error
+    /// on failure — including the "window vanished before capture" case, which
+    /// the native engine surfaces as a failed status. Capture is performed by
+    /// handle via the native window-by-handle export, so the frozen Frame
+    /// matches the window the user clicked even if later movement would have
+    /// shifted its bounds. Never throws for expected failures.
+    /// </summary>
+    public CaptureFrameResult CaptureWindow(WindowTarget target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        return Capture("Selected Window",
+            () => SafeCaptureResult.CaptureWindowByHandle(target.Handle));
     }
 
     /// <summary>
@@ -235,6 +251,45 @@ public sealed class MonitorPickerOverlayAdapter : IMonitorPickerOverlayAdapter
         {
             // Surface unexpected overlay failures as cancellation so the
             // workflow reports a user-visible "Selected Monitor cancelled."
+            // outcome instead of crashing the application.
+            return null;
+        }
+    }
+}
+
+/// <summary>
+/// Production <see cref="IWindowPickerOverlayAdapter"/>. Wraps the Win32 layered
+/// <see cref="WindowPickerOverlayWindow"/>: shows the scrimmed picker over the
+/// live desktop, highlights the hovered window's full bounds and title, and
+/// returns a confirming outcome — <see cref="WindowPickerOutcome.WindowConfirmed"/>
+/// for a click on an eligible window or
+/// <see cref="WindowPickerOutcome.EmptyDesktopFallback"/> for a click on empty
+/// desktop — or null for cancellation (Escape). Per spec #29, the adapter never
+/// performs Capture and never owns post-capture state — the runtime
+/// CaptureWorkflowSession owns Capture (by handle for a window, Full Desktop for
+/// the fallback), the resulting Frame, and the preview transition. Translates
+/// overlay exceptions into a null result so the workflow reports cancellation
+/// rather than crashing.
+/// </summary>
+public sealed class WindowPickerOverlayAdapter : IWindowPickerOverlayAdapter
+{
+    /// <summary>
+    /// Shows the Selected Window picker on the caller's thread (the UI thread
+    /// in production, where the modal Win32 message loop must live) and returns
+    /// the confirming outcome. Returns null if the user cancelled or if the
+    /// overlay could not be shown.
+    /// </summary>
+    public async Task<WindowPickerResult?> ShowAsync()
+    {
+        try
+        {
+            using var overlay = new WindowPickerOverlayWindow();
+            return await overlay.ShowAndWaitAsync();
+        }
+        catch
+        {
+            // Surface unexpected overlay failures as cancellation so the
+            // workflow reports a user-visible "Selected Window cancelled."
             // outcome instead of crashing the application.
             return null;
         }
