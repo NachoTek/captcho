@@ -44,6 +44,20 @@ public sealed class WindowsCaptureAdapter : IWorkflowCaptureAdapter
         Capture("Active Window", SafeCaptureResult.CaptureActiveWindow);
 
     /// <summary>
+    /// Captures a rectangular Selection of the Virtual Desktop and returns a
+    /// CaptureFrameResult carrying the Frame and dimensions on success or a
+    /// user-visible error on failure. The geometry's signed X/Y preserves
+    /// negative Virtual Desktop origins, so cross-monitor and mixed-coordinate
+    /// layouts stay aligned. Never throws for expected failures.
+    /// </summary>
+    public CaptureFrameResult CaptureSelection(SelectionGeometry geometry)
+    {
+        ArgumentNullException.ThrowIfNull(geometry);
+        return Capture("Selection",
+            () => SafeCaptureResult.CaptureRegion(geometry.X, geometry.Y, geometry.Width, geometry.Height));
+    }
+
+    /// <summary>
     /// Shared native-capture-to-Frame conversion for both immediate-capture
     /// routes. Runs the supplied SafeCaptureResult factory, strips stride
     /// padding, and translates expected failures into CaptureFrameResult.Fail.
@@ -135,6 +149,42 @@ public sealed class WriteableBitmapPreviewAdapter : IPreviewAdapter<WriteableBit
         catch (Exception ex)
         {
             return PreviewPresentResult<WriteableBitmap>.Fail($"Unexpected display error: {ex.Message}");
+        }
+    }
+}
+
+/// <summary>
+/// Production <see cref="ISelectionOverlayAdapter"/>. Wraps the Win32 layered
+/// <see cref="RegionOverlayWindow"/>: shows the transparent overlay over the
+/// live desktop, waits for the user to confirm a Selection or cancel, and
+/// returns the confirmed geometry (or null for cancellation). Per spec #27,
+/// the adapter never performs Capture and never owns post-capture state —
+/// the runtime CaptureWorkflowSession owns Capture of the returned geometry,
+/// the resulting Frame, and the preview transition. Translates overlay
+/// exceptions into a null result so the workflow reports cancellation
+/// rather than crashing.
+/// </summary>
+public sealed class RegionSelectionOverlayAdapter : ISelectionOverlayAdapter
+{
+    /// <summary>
+    /// Shows the Selection overlay on the caller's thread (the UI thread in
+    /// production, where the modal Win32 message loop must live) and returns
+    /// the confirmed geometry. Returns null if the user cancelled or if the
+    /// overlay could not be shown.
+    /// </summary>
+    public async Task<SelectionGeometry?> ShowAsync()
+    {
+        try
+        {
+            using var overlay = new RegionOverlayWindow();
+            return await overlay.ShowAndWaitAsync();
+        }
+        catch
+        {
+            // Surface unexpected overlay failures as cancellation so the
+            // workflow reports a user-visible "Selection cancelled." outcome
+            // instead of crashing the application.
+            return null;
         }
     }
 }

@@ -11,7 +11,11 @@
 //   2. Draw selection rectangle (dim scrim everywhere, clear inside selection)
 //   3. User draws/adjusts/moves selection, presses Enter to confirm
 //   4. Destroy the overlay window
-//   5. Call native capture_region to capture the live desktop at those coordinates
+//   5. Return the confirmed geometry (or null for cancellation) to the caller
+//
+// Per spec #27, the overlay does NOT perform Capture and does NOT own any
+// post-capture state. The runtime CaptureWorkflowSession owns Capture of the
+// returned geometry, the resulting Frame, and the preview transition.
 //
 // Supports: drag to draw, arrow keys to nudge (10px coarse, 1px fine with Shift),
 // Alt+Arrow to resize from top-left anchor, Enter/double-click confirm, Escape cancel.
@@ -22,19 +26,8 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
-using Windows.Foundation;
-using captcho.Capture;
 
 namespace captcho.UI;
-
-/// <summary>
-/// Result of a region selection: the captured bitmap and its virtual-desktop coordinates.
-/// </summary>
-public sealed class RegionSelectionResult
-{
-    public ContiguousBitmap Bitmap { get; init; } = null!;
-    public Rect Region { get; init; }
-}
 
 /// <summary>
 /// Transparent overlay for rectangular region selection using a raw Win32 layered window.
@@ -150,7 +143,7 @@ public sealed partial class RegionOverlayWindow : IDisposable
 
     #endregion
 
-    private readonly TaskCompletionSource<RegionSelectionResult?> _tcs = new();
+    private readonly TaskCompletionSource<SelectionGeometry?> _tcs = new();
     private IntPtr _hwnd;
     private WndProc? _wndProc; // prevent GC
     private static readonly string _className = "captchoRegion_" + Guid.NewGuid().ToString("N");
@@ -170,7 +163,7 @@ public sealed partial class RegionOverlayWindow : IDisposable
 
     public RegionOverlayWindow() { InitializeComponent(); }
 
-    public Task<RegionSelectionResult?> ShowAndWaitAsync()
+    public Task<SelectionGeometry?> ShowAndWaitAsync()
     {
         _vdx = GetSystemMetrics(SM_XVIRTUALSCREEN);
         _vdy = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -328,22 +321,16 @@ public sealed partial class RegionOverlayWindow : IDisposable
         var sel = _currentSelection;
         DestroyWindow(_hwnd);
 
-        try
+        // Per spec #27, the overlay returns confirmed geometry and does NOT
+        // perform Capture. The runtime CaptureWorkflowSession owns Capture of
+        // this geometry, the resulting Frame, and the preview transition.
+        _tcs.TrySetResult(new SelectionGeometry
         {
-            using var r = SafeCaptureResult.CaptureRegion(sel.X, sel.Y, (uint)sel.Width, (uint)sel.Height);
-            if (r.IsSuccess)
-            {
-                var bmp = BitmapBufferConverter.StripPadding(r.Pixels!, (int)r.Width, (int)r.Height, (int)r.Stride);
-                _tcs.TrySetResult(new RegionSelectionResult
-                {
-                    Bitmap = bmp,
-                    Region = new Rect(sel.X, sel.Y, sel.Width, sel.Height),
-                });
-                return;
-            }
-        }
-        catch { /* fall through to null */ }
-        _tcs.TrySetResult(null);
+            X = sel.X,
+            Y = sel.Y,
+            Width = (uint)sel.Width,
+            Height = (uint)sel.Height,
+        });
     }
 
     private void Cancel()

@@ -1,11 +1,15 @@
 // CaptureWorkflowSession.cs — WinUI-free runtime workflow session.
 //
 // The agreed high-level behavioral seam for capture and post-capture behavior.
-// Owns Capture Mode routing for the immediate-capture Triggers (Full Desktop
-// and Active Window today), operation state (concurrency guard), the captured
-// Frame, and the preview transition. Exposes operation-in-progress and failure
-// outcomes consistently so the WinUI layer can present a retryable,
-// user-visible state. Platform-specific work — native pixel acquisition and
+// Owns Capture Mode routing for the Full Desktop, Active Window, and Selection
+// Triggers; operation state (concurrency guard); the captured Frame; and the
+// preview transition. For Selection, the interactive overlay is supplied as a
+// narrow adapter that returns confirmed geometry or cancellation, after which
+// the workflow owns Capture, the Frame, and the preview transition — the
+// overlay itself never performs Capture or owns post-capture state. Exposes
+// operation-in-progress, cancellation, and failure outcomes consistently so
+// the WinUI layer can present a retryable, user-visible state. Platform-
+// specific work — native pixel acquisition, the Selection overlay, and
 // presenting the Frame to a XAML Image — is supplied through narrow adapters,
 // mirroring the CliCaptureService shape at the GUI's higher
 // Capture-through-completion boundary.
@@ -58,6 +62,40 @@ public enum WorkflowStatus
     /// arrived. No work was performed.
     /// </summary>
     OperationInProgress,
+
+    /// <summary>
+    /// The user cancelled an interactive Target Selection overlay (e.g.,
+    /// pressed Escape in the Selection overlay). No Frame was produced and no
+    /// delivery side effects occurred. Distinct from failure: cancellation is
+    /// a user-initiated end to the operation, not a retryable error.
+    /// </summary>
+    Cancelled,
+}
+
+/// <summary>
+/// Immutable Selection Target Selection geometry in Virtual Desktop
+/// coordinates. The X/Y origin is signed so multi-monitor layouts with
+/// negative Virtual Desktop origins (e.g., a monitor to the left of and
+/// above the primary) survive intact; Width/Height are unsigned because
+/// the Capture engine requires positive dimensions. This is the contract
+/// type that crosses the WinUI-free workflow seam — it deliberately
+/// mirrors the native parameter shape of
+/// <c>SafeCaptureResult.CaptureRegion</c> without dragging in
+/// <c>Windows.Foundation.Rect</c> or any UI type.
+/// </summary>
+public sealed record SelectionGeometry
+{
+    /// <summary>Left edge of the Selection in Virtual Desktop pixels.</summary>
+    public int X { get; init; }
+
+    /// <summary>Top edge of the Selection in Virtual Desktop pixels.</summary>
+    public int Y { get; init; }
+
+    /// <summary>Selection width in pixels. Always positive.</summary>
+    public uint Width { get; init; }
+
+    /// <summary>Selection height in pixels. Always positive.</summary>
+    public uint Height { get; init; }
 }
 
 /// <summary>
@@ -214,6 +252,38 @@ public interface IWorkflowCaptureAdapter
     /// without retaining stale Frame or operation state).
     /// </summary>
     CaptureFrameResult CaptureActiveWindow();
+
+    /// <summary>
+    /// Captures a rectangular Selection of the Virtual Desktop into a Frame.
+    /// The geometry is the confirmed output of Selection Target Selection;
+    /// its signed X/Y preserves negative Virtual Desktop origins so
+    /// cross-monitor and mixed-coordinate layouts stay aligned. Width/Height
+    /// are always positive. Implementations must not throw for expected
+    /// failures — surface them through CaptureFrameResult.Fail instead.
+    /// </summary>
+    CaptureFrameResult CaptureSelection(SelectionGeometry geometry);
+}
+
+/// <summary>
+/// Narrow adapter over the interactive Selection overlay. Production shows a
+/// transparent Win32 layered window over the live desktop; tests supply fakes
+/// that return canned geometry or cancellation. The overlay adapter's only
+/// job is to return confirmed geometry (or cancellation) — it must NOT
+/// perform Capture or own any post-capture state, because the runtime
+/// workflow owns Capture, the Frame, and the preview transition. Invoked on
+/// the workflow caller's thread (the UI thread in production), since the
+/// overlay runs a modal Win32 message loop.
+/// </summary>
+public interface ISelectionOverlayAdapter
+{
+    /// <summary>
+    /// Shows the Selection overlay and returns the confirmed geometry, or
+    /// null if the user cancelled (Escape or overlay dismissal). Returning
+    /// null must not produce a Frame or any delivery side effect.
+    /// Implementations must not throw — surface unexpected failures as a
+    /// null result so the workflow reports cancellation rather than crashing.
+    /// </summary>
+    Task<SelectionGeometry?> ShowAsync();
 }
 
 /// <summary>
@@ -254,8 +324,12 @@ public sealed class CaptureWorkflowSession<TImage>
     /// <summary>Domain Capture Mode label for the Active Window route.</summary>
     public const string ActiveWindowMode = "Active Window";
 
+    /// <summary>Domain Capture Mode label for the Selection route.</summary>
+    public const string SelectionMode = "Selection";
+
     private readonly IWorkflowCaptureAdapter _capture;
     private readonly IPreviewAdapter<TImage> _preview;
+    private readonly ISelectionOverlayAdapter _selectionOverlay;
 
     // Operation-state guard. 0 = idle, non-zero = an operation is in flight.
     // Manipulated only through Interlocked so concurrent Triggers are rejected
@@ -280,11 +354,19 @@ public sealed class CaptureWorkflowSession<TImage>
 
     /// <summary>
     /// Creates a workflow session bound to the supplied platform adapters.
+    /// The Selection overlay adapter is required even for routes that do
+    /// not use it (Full Desktop, Active Window), so production wires every
+    /// platform adapter exactly once at construction and tests inject fakes
+    /// uniformly.
     /// </summary>
-    public CaptureWorkflowSession(IWorkflowCaptureAdapter capture, IPreviewAdapter<TImage> preview)
+    public CaptureWorkflowSession(
+        IWorkflowCaptureAdapter capture,
+        IPreviewAdapter<TImage> preview,
+        ISelectionOverlayAdapter selectionOverlay)
     {
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
         _preview = preview ?? throw new ArgumentNullException(nameof(preview));
+        _selectionOverlay = selectionOverlay ?? throw new ArgumentNullException(nameof(selectionOverlay));
     }
 
     /// <summary>
@@ -307,6 +389,81 @@ public sealed class CaptureWorkflowSession<TImage>
     /// </summary>
     public Task<WorkflowResult<TImage>> CaptureActiveWindowAsync() =>
         RouteCaptureAsync(ActiveWindowMode, _capture.CaptureActiveWindow);
+
+    /// <summary>
+    /// Routes a Selection Trigger through the production workflow. The
+    /// interactive Selection overlay is shown first; on confirmation the
+    /// workflow owns Capture of the returned geometry, the resulting Frame,
+    /// and the preview transition. On cancellation (Escape or overlay
+    /// dismissal) the workflow ends with <see cref="WorkflowStatus.Cancelled"/>
+    /// — no Capture is performed, no Frame is produced, and no delivery side
+    /// effects occur. Cross-monitor and negative-coordinate selections are
+    /// preserved: the geometry's signed X/Y is forwarded to the capture
+    /// adapter untouched. Never throws for expected failures.
+    /// </summary>
+    public async Task<WorkflowResult<TImage>> CaptureSelectionAsync()
+    {
+        if (!TryBeginOperation())
+        {
+            return WorkflowResultFor(SelectionMode, WorkflowStatus.OperationInProgress,
+                error: "A capture is already in progress.");
+        }
+
+        var totalSw = Stopwatch.StartNew();
+        try
+        {
+            // The overlay runs on the caller's thread (the UI thread in
+            // production), where the modal Win32 message loop must live. The
+            // adapter returns confirmed geometry or null for cancellation.
+            var geometry = await _selectionOverlay.ShowAsync();
+
+            if (geometry is null)
+            {
+                return WorkflowResultFor(SelectionMode, WorkflowStatus.Cancelled,
+                    error: "Selection cancelled.",
+                    totalMs: totalSw.Elapsed.TotalMilliseconds);
+            }
+
+            // With confirmed geometry in hand, Capture runs off-thread just
+            // like the immediate-capture routes — the adapter may block on
+            // native pixel acquisition.
+            var captureResult = await RunOffThread(() => _capture.CaptureSelection(geometry));
+            if (!captureResult.Success)
+            {
+                return WorkflowResultFor(SelectionMode, WorkflowStatus.CaptureFailed,
+                    error: captureResult.Error,
+                    captureMs: captureResult.ElapsedMs,
+                    totalMs: totalSw.Elapsed.TotalMilliseconds);
+            }
+
+            var frame = captureResult.Frame!;
+            _lastFrame = frame;
+
+            var previewResult = _preview.Present(frame);
+            if (!previewResult.Success)
+            {
+                return WorkflowResultFor(SelectionMode, WorkflowStatus.PreviewFailed,
+                    frame: frame,
+                    dimensions: captureResult.Dimensions,
+                    error: previewResult.Error,
+                    captureMs: captureResult.ElapsedMs,
+                    displayMs: previewResult.ElapsedMs,
+                    totalMs: totalSw.Elapsed.TotalMilliseconds);
+            }
+
+            return WorkflowResultFor(SelectionMode, WorkflowStatus.Succeeded,
+                frame: frame,
+                dimensions: captureResult.Dimensions,
+                previewImage: previewResult.Image,
+                captureMs: captureResult.ElapsedMs,
+                displayMs: previewResult.ElapsedMs,
+                totalMs: totalSw.Elapsed.TotalMilliseconds);
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
 
     /// <summary>
     /// Shared Capture Mode routing for an immediate-capture Trigger (no Target

@@ -55,13 +55,12 @@ public sealed partial class MainWindow : Window
 
     /// <summary>
     /// Production runtime workflow session. Owns Capture Mode routing (Full
-    /// Desktop and Active Window today), operation state, the captured Frame,
-    /// and the preview transition. WinUI keeps an event/rendering role only —
-    /// workflow rules live in the session so they can be covered by headless
-    /// tests.
+    /// Desktop, Active Window, and Selection today), operation state, the
+    /// captured Frame, and the preview transition. WinUI keeps an
+    /// event/rendering role only — workflow rules live in the session so they
+    /// can be covered by headless tests.
     /// </summary>
-    private readonly CaptureWorkflowSession<WriteableBitmap> _workflowSession =
-        new CaptureWorkflowSession<WriteableBitmap>(new WindowsCaptureAdapter(), new WriteableBitmapPreviewAdapter());
+    private readonly CaptureWorkflowSession<WriteableBitmap> _workflowSession;
 
     /// <summary>
     /// Coordinates singleton settings window lifecycle.
@@ -172,6 +171,14 @@ public sealed partial class MainWindow : Window
         // Set a reasonable default window size
         var appWindow = this.AppWindow;
         appWindow.Resize(new Windows.Graphics.SizeInt32(1100, 700));
+
+        // Construct the runtime workflow session with all three production
+        // adapters: native pixel acquisition, the Selection overlay, and the
+        // preview transition. The session owns Capture Mode routing from here.
+        _workflowSession = new CaptureWorkflowSession<WriteableBitmap>(
+            new WindowsCaptureAdapter(),
+            new WriteableBitmapPreviewAdapter(),
+            new RegionSelectionOverlayAdapter());
 
         // Initialize Global Hotkeys after the window has an HWND.
         // In WinUI 3, the HWND is available immediately after construction.
@@ -311,7 +318,7 @@ public sealed partial class MainWindow : Window
                 _ = RunFullDesktopWorkflowAsync();
                 break;
             case GlobalHotkeyRoute.RectangularRegion:
-                _ = RunDelayedRegionCaptureAsync();
+                _ = RunSelectionWorkflowAsync();
                 break;
         }
     }
@@ -396,10 +403,10 @@ public sealed partial class MainWindow : Window
         await RunDelayedCaptureAsync(_captureService.CaptureWindowUnderCursorAsync);
     }
 
-    /// <summary>Handles "Rectangular Region" click.</summary>
+    /// <summary>Handles "Rectangular Region" click — routes through the production workflow session.</summary>
     private async void RegionCapture_Click(object sender, RoutedEventArgs e)
     {
-        await RunDelayedRegionCaptureAsync();
+        await RunSelectionWorkflowAsync();
     }
 
     /// <summary>Handles "Cancel" button click during countdown.</summary>
@@ -718,6 +725,13 @@ public sealed partial class MainWindow : Window
                 StatusText.Text = result.Error ?? "A capture is already in progress.";
                 break;
 
+            case WorkflowStatus.Cancelled:
+                // User dismissed the interactive Selection overlay. No Frame
+                // was produced and no delivery side effects occurred; surface
+                // the cancellation as user-visible status text only.
+                StatusText.Text = result.Error ?? "Selection cancelled.";
+                break;
+
             case WorkflowStatus.CaptureFailed:
                 // Failed capture does NOT overwrite the last successful cache,
                 // so _hasCapture retains its prior value and the user can retry.
@@ -743,58 +757,18 @@ public sealed partial class MainWindow : Window
         FormatTimings(result.CaptureMs, result.DisplayMs, result.TotalMs);
 
     /// <summary>
-    /// Runs the region capture flow with optional delay countdown.
-    /// The overlay is a transparent Win32 window over the live desktop —
-    /// no pre-capture needed. After the user confirms, the overlay is removed
-    /// and the region is captured from the live desktop.
+    /// Routes a Selection Trigger through the production workflow session.
+    /// The session owns the entire route: it shows the Selection overlay,
+    /// captures the confirmed geometry, owns the resulting Frame, and drives
+    /// the preview transition. This WinUI method keeps a thin event/rendering
+    /// role — it drives the optional delay countdown and binds the returned
+    /// WorkflowResult to the preview image, status, and timing text. On
+    /// cancellation the session returns <see cref="WorkflowStatus.Cancelled"/>,
+    /// which is surfaced as user-visible status text with no Frame or delivery
+    /// side effects.
     /// </summary>
-    private async Task RunDelayedRegionCaptureAsync()
-    {
-        int delaySeconds = GetNormalizedDelaySeconds();
-
-        EnterCaptureState();
-        _activeCts = new CancellationTokenSource();
-
-        try
-        {
-            // Countdown phase (same as standard captures)
-            if (delaySeconds > 0)
-            {
-                await RunCountdownPhaseAsync(delaySeconds, _activeCts.Token);
-            }
-
-            // Show transparent overlay — user selects region on live desktop
-            StatusText.Text = "Select a region on screen…";
-            CaptureProgress.Visibility = Visibility.Visible;
-
-            using var overlay = new RegionOverlayWindow();
-            var selection = await overlay.ShowAndWaitAsync();
-
-            if (selection != null)
-            {
-                // Overlay is already destroyed — build display result from the captured bitmap
-                var captureResult = await _captureService.BuildResultFromCroppedBitmapAsync(
-                    selection.Bitmap, selection.Region);
-                ApplyCaptureResult(captureResult);
-            }
-            else
-            {
-                StatusText.Text = RegionSelectionStatusFormatter.FormatCancelled();
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            StatusText.Text = "Countdown cancelled.";
-        }
-        catch (Exception ex)
-        {
-            StatusText.Text = RegionSelectionStatusFormatter.FormatError(ex);
-        }
-        finally
-        {
-            ExitCaptureState();
-        }
-    }
+    private Task RunSelectionWorkflowAsync() =>
+        RunWorkflowWithCountdownAsync(_workflowSession.CaptureSelectionAsync, ApplyWorkflowResult);
 
     // ── Countdown phase ──────────────────────────────────────────────
 
