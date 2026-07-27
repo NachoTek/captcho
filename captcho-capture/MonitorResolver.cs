@@ -172,20 +172,13 @@ public static class MonitorResolver
             return MonitorResolveResult.Fallback("No monitors enumerated");
         }
 
-        // Sort monitors left-to-right, then top-to-bottom for stable ordering
-        var sorted = new List<MonitorRect>(monitors);
-        sorted.Sort((a, b) =>
-        {
-            int cmp = a.Left.CompareTo(b.Left);
-            return cmp != 0 ? cmp : a.Top.CompareTo(b.Top);
-        });
+        // Sort monitors left-to-right, then top-to-bottom for stable ordering.
+        var sorted = MonitorLayout.SortByPosition(monitors);
 
         for (int i = 0; i < sorted.Count; i++)
         {
             var r = sorted[i];
-            // Inclusive left/top, exclusive right/bottom (matches Win32 convention)
-            if (cursorX >= r.Left && cursorX < r.Right &&
-                cursorY >= r.Top && cursorY < r.Bottom)
+            if (MonitorLayout.Contains(r, cursorX, cursorY))
             {
                 return MonitorResolveResult.Success((uint)i);
             }

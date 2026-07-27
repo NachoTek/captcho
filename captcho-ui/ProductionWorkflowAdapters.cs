@@ -58,6 +58,22 @@ public sealed class WindowsCaptureAdapter : IWorkflowCaptureAdapter
     }
 
     /// <summary>
+    /// Captures a single Selected Monitor and returns a CaptureFrameResult
+    /// carrying the Frame and dimensions on success or a user-visible error on
+    /// failure. A monitor's Virtual Desktop bounds uniquely identify its pixel
+    /// region, so capture is performed over those bounds via the region path —
+    /// this keeps negative-coordinate and mixed-DPI layouts aligned without
+    /// depending on monitor-index alignment between the picker and the native
+    /// engine. Never throws for expected failures.
+    /// </summary>
+    public CaptureFrameResult CaptureMonitor(MonitorTarget target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        return Capture("Selected Monitor",
+            () => SafeCaptureResult.CaptureRegion(target.X, target.Y, target.Width, target.Height));
+    }
+
+    /// <summary>
     /// Shared native-capture-to-Frame conversion for both immediate-capture
     /// routes. Runs the supplied SafeCaptureResult factory, strips stride
     /// padding, and translates expected failures into CaptureFrameResult.Fail.
@@ -184,6 +200,42 @@ public sealed class RegionSelectionOverlayAdapter : ISelectionOverlayAdapter
             // Surface unexpected overlay failures as cancellation so the
             // workflow reports a user-visible "Selection cancelled." outcome
             // instead of crashing the application.
+            return null;
+        }
+    }
+}
+
+/// <summary>
+/// Production <see cref="IMonitorPickerOverlayAdapter"/>. Wraps the Win32
+/// layered <see cref="MonitorPickerOverlayWindow"/>: shows the scrimmed picker
+/// over the live desktop, highlights the hovered monitor and its label, and
+/// returns the confirmed monitor target (or null for cancellation). Per spec
+/// #28, the adapter never performs Capture and never owns post-capture state —
+/// the runtime CaptureWorkflowSession owns Capture of the returned bounds, the
+/// resulting Frame, and the preview transition. Translates overlay exceptions
+/// into a null result so the workflow reports cancellation rather than
+/// crashing.
+/// </summary>
+public sealed class MonitorPickerOverlayAdapter : IMonitorPickerOverlayAdapter
+{
+    /// <summary>
+    /// Shows the Selected Monitor picker on the caller's thread (the UI thread
+    /// in production, where the modal Win32 message loop must live) and returns
+    /// the confirmed monitor target. Returns null if the user cancelled or if
+    /// the overlay could not be shown.
+    /// </summary>
+    public async Task<MonitorTarget?> ShowAsync()
+    {
+        try
+        {
+            using var overlay = new MonitorPickerOverlayWindow();
+            return await overlay.ShowAndWaitAsync();
+        }
+        catch
+        {
+            // Surface unexpected overlay failures as cancellation so the
+            // workflow reports a user-visible "Selected Monitor cancelled."
+            // outcome instead of crashing the application.
             return null;
         }
     }

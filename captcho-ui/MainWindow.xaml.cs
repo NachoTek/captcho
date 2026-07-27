@@ -172,13 +172,15 @@ public sealed partial class MainWindow : Window
         var appWindow = this.AppWindow;
         appWindow.Resize(new Windows.Graphics.SizeInt32(1100, 700));
 
-        // Construct the runtime workflow session with all three production
-        // adapters: native pixel acquisition, the Selection overlay, and the
-        // preview transition. The session owns Capture Mode routing from here.
+        // Construct the runtime workflow session with all production
+        // adapters: native pixel acquisition, the Selection overlay, the
+        // Selected Monitor picker overlay, and the preview transition. The
+        // session owns Capture Mode routing from here.
         _workflowSession = new CaptureWorkflowSession<WriteableBitmap>(
             new WindowsCaptureAdapter(),
             new WriteableBitmapPreviewAdapter(),
-            new RegionSelectionOverlayAdapter());
+            new RegionSelectionOverlayAdapter(),
+            new MonitorPickerOverlayAdapter());
 
         // Initialize Global Hotkeys after the window has an HWND.
         // In WinUI 3, the HWND is available immediately after construction.
@@ -407,6 +409,12 @@ public sealed partial class MainWindow : Window
     private async void RegionCapture_Click(object sender, RoutedEventArgs e)
     {
         await RunSelectionWorkflowAsync();
+    }
+
+    /// <summary>Handles "Selected Monitor" click — routes through the production workflow session.</summary>
+    private async void SelectedMonitor_Click(object sender, RoutedEventArgs e)
+    {
+        await RunSelectedMonitorWorkflowAsync();
     }
 
     /// <summary>Handles "Cancel" button click during countdown.</summary>
@@ -726,10 +734,11 @@ public sealed partial class MainWindow : Window
                 break;
 
             case WorkflowStatus.Cancelled:
-                // User dismissed the interactive Selection overlay. No Frame
-                // was produced and no delivery side effects occurred; surface
-                // the cancellation as user-visible status text only.
-                StatusText.Text = result.Error ?? "Selection cancelled.";
+                // User dismissed the interactive Target Selection overlay
+                // (Selection or Selected Monitor). No Frame was produced and
+                // no delivery side effects occurred; surface the cancellation
+                // as user-visible status text only.
+                StatusText.Text = result.Error ?? "Capture cancelled.";
                 break;
 
             case WorkflowStatus.CaptureFailed:
@@ -769,6 +778,20 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private Task RunSelectionWorkflowAsync() =>
         RunWorkflowWithCountdownAsync(_workflowSession.CaptureSelectionAsync, ApplyWorkflowResult);
+
+    /// <summary>
+    /// Routes a Selected Monitor Trigger through the production workflow
+    /// session. The session owns the entire route: it shows the monitor
+    /// picker overlay, captures the confirmed monitor's bounds, owns the
+    /// resulting Frame, and drives the preview transition. This WinUI method
+    /// keeps the same thin event/rendering role as the other routes — it
+    /// drives the optional delay countdown and binds the returned
+    /// WorkflowResult. On cancellation (Escape or a gap-only session) the
+    /// session returns <see cref="WorkflowStatus.Cancelled"/>, surfaced as
+    /// user-visible status text with no Frame or delivery side effects.
+    /// </summary>
+    private Task RunSelectedMonitorWorkflowAsync() =>
+        RunWorkflowWithCountdownAsync(_workflowSession.CaptureSelectedMonitorAsync, ApplyWorkflowResult);
 
     // ── Countdown phase ──────────────────────────────────────────────
 
@@ -876,6 +899,7 @@ public sealed partial class MainWindow : Window
         ActiveWindowButton.IsEnabled = enabled;
         WindowUnderCursorButton.IsEnabled = enabled;
         RegionCaptureButton.IsEnabled = enabled;
+        SelectedMonitorButton.IsEnabled = enabled;
     }
 
     /// <summary>

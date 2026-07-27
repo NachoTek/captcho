@@ -262,6 +262,16 @@ public interface IWorkflowCaptureAdapter
     /// failures — surface them through CaptureFrameResult.Fail instead.
     /// </summary>
     CaptureFrameResult CaptureSelection(SelectionGeometry geometry);
+
+    /// <summary>
+    /// Captures a single Selected Monitor into a Frame. The target carries the
+    /// monitor's Virtual Desktop bounds (signed X/Y so negative-coordinate and
+    /// mixed-DPI layouts stay aligned) and a display label; capture is performed
+    /// over those bounds, which uniquely identify one monitor's pixel region.
+    /// Implementations must not throw for expected failures — surface them
+    /// through CaptureFrameResult.Fail instead.
+    /// </summary>
+    CaptureFrameResult CaptureMonitor(MonitorTarget target);
 }
 
 /// <summary>
@@ -284,6 +294,65 @@ public interface ISelectionOverlayAdapter
     /// null result so the workflow reports cancellation rather than crashing.
     /// </summary>
     Task<SelectionGeometry?> ShowAsync();
+}
+
+/// <summary>
+/// Immutable Selected Monitor target in Virtual Desktop coordinates — the
+/// contract type that crosses the WinUI-free workflow seam from the monitor
+/// picker overlay. The signed X/Y origin preserves negative Virtual Desktop
+/// origins (e.g., a secondary monitor to the left of and/or above the
+/// primary); Width/Height are unsigned exact pixel dimensions (including the
+/// non-round dimensions that arise from mixed-DPI scaling) because the Capture
+/// engine requires positive dimensions. The label is the pointer-adjacent text
+/// the picker showed for the hovered monitor, surfaced for diagnostics and
+/// tests.
+/// </summary>
+public sealed record MonitorTarget
+{
+    /// <summary>
+    /// Pointer-adjacent label the picker displayed for this monitor (e.g.,
+    /// "Monitor 1 (1920×1080)"). Carried for diagnostics and contract tests;
+    /// the workflow does not interpret it.
+    /// </summary>
+    public string Label { get; init; } = "";
+
+    /// <summary>Left edge of the monitor in Virtual Desktop pixels.</summary>
+    public int X { get; init; }
+
+    /// <summary>Top edge of the monitor in Virtual Desktop pixels.</summary>
+    public int Y { get; init; }
+
+    /// <summary>Monitor width in pixels. Always positive.</summary>
+    public uint Width { get; init; }
+
+    /// <summary>Monitor height in pixels. Always positive.</summary>
+    public uint Height { get; init; }
+}
+
+/// <summary>
+/// Narrow adapter over the interactive Selected Monitor picker overlay.
+/// Production shows a scrimmed Win32 layered window that highlights the
+/// hovered monitor and its label; tests supply fakes that return a canned
+/// monitor target or cancellation. The overlay adapter's only job is to
+/// return the confirmed monitor target (or cancellation) — it must NOT
+/// perform Capture or own any post-capture state, because the runtime
+/// workflow owns Capture, the Frame, and the preview transition. Clicks in
+/// monitor-layout gaps must keep the overlay open (the adapter handles gap
+/// rejection internally); Escape dismisses it with a null result. Invoked on
+/// the workflow caller's thread (the UI thread in production), since the
+/// overlay runs a modal Win32 message loop.
+/// </summary>
+public interface IMonitorPickerOverlayAdapter
+{
+    /// <summary>
+    /// Shows the Selected Monitor picker overlay and returns the confirmed
+    /// monitor target, or null if the user cancelled (Escape or overlay
+    /// dismissal). Returning null must not produce a Frame or any delivery
+    /// side effect. Implementations must not throw — surface unexpected
+    /// failures as a null result so the workflow reports cancellation
+    /// rather than crashing.
+    /// </summary>
+    Task<MonitorTarget?> ShowAsync();
 }
 
 /// <summary>
@@ -327,9 +396,13 @@ public sealed class CaptureWorkflowSession<TImage>
     /// <summary>Domain Capture Mode label for the Selection route.</summary>
     public const string SelectionMode = "Selection";
 
+    /// <summary>Domain Capture Mode label for the Selected Monitor route.</summary>
+    public const string SelectedMonitorMode = "Selected Monitor";
+
     private readonly IWorkflowCaptureAdapter _capture;
     private readonly IPreviewAdapter<TImage> _preview;
     private readonly ISelectionOverlayAdapter _selectionOverlay;
+    private readonly IMonitorPickerOverlayAdapter _monitorPickerOverlay;
 
     // Operation-state guard. 0 = idle, non-zero = an operation is in flight.
     // Manipulated only through Interlocked so concurrent Triggers are rejected
@@ -354,19 +427,21 @@ public sealed class CaptureWorkflowSession<TImage>
 
     /// <summary>
     /// Creates a workflow session bound to the supplied platform adapters.
-    /// The Selection overlay adapter is required even for routes that do
-    /// not use it (Full Desktop, Active Window), so production wires every
-    /// platform adapter exactly once at construction and tests inject fakes
-    /// uniformly.
+    /// The Selection and Selected Monitor overlay adapters are required even
+    /// for routes that do not use them (Full Desktop, Active Window), so
+    /// production wires every platform adapter exactly once at construction
+    /// and tests inject fakes uniformly.
     /// </summary>
     public CaptureWorkflowSession(
         IWorkflowCaptureAdapter capture,
         IPreviewAdapter<TImage> preview,
-        ISelectionOverlayAdapter selectionOverlay)
+        ISelectionOverlayAdapter selectionOverlay,
+        IMonitorPickerOverlayAdapter monitorPickerOverlay)
     {
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
         _preview = preview ?? throw new ArgumentNullException(nameof(preview));
         _selectionOverlay = selectionOverlay ?? throw new ArgumentNullException(nameof(selectionOverlay));
+        _monitorPickerOverlay = monitorPickerOverlay ?? throw new ArgumentNullException(nameof(monitorPickerOverlay));
     }
 
     /// <summary>
@@ -452,6 +527,82 @@ public sealed class CaptureWorkflowSession<TImage>
             }
 
             return WorkflowResultFor(SelectionMode, WorkflowStatus.Succeeded,
+                frame: frame,
+                dimensions: captureResult.Dimensions,
+                previewImage: previewResult.Image,
+                captureMs: captureResult.ElapsedMs,
+                displayMs: previewResult.ElapsedMs,
+                totalMs: totalSw.Elapsed.TotalMilliseconds);
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    /// <summary>
+    /// Routes a Selected Monitor Trigger through the production workflow. The
+    /// interactive monitor picker overlay is shown first; on confirmation the
+    /// workflow owns Capture of the returned monitor bounds, the resulting
+    /// Frame, and the preview transition. On cancellation (Escape or overlay
+    /// dismissal) the workflow ends with <see cref="WorkflowStatus.Cancelled"/>
+    /// — no Capture is performed, no Frame is produced, and no delivery side
+    /// effects occur. Mixed-DPI and negative-coordinate monitor layouts are
+    /// preserved: the target's signed X/Y is forwarded to the capture adapter
+    /// untouched. Never throws for expected failures.
+    /// </summary>
+    public async Task<WorkflowResult<TImage>> CaptureSelectedMonitorAsync()
+    {
+        if (!TryBeginOperation())
+        {
+            return WorkflowResultFor(SelectedMonitorMode, WorkflowStatus.OperationInProgress,
+                error: "A capture is already in progress.");
+        }
+
+        var totalSw = Stopwatch.StartNew();
+        try
+        {
+            // The picker runs on the caller's thread (the UI thread in
+            // production), where the modal Win32 message loop must live. The
+            // adapter returns the confirmed monitor target or null for
+            // cancellation (gap clicks keep the overlay open inside the adapter).
+            var target = await _monitorPickerOverlay.ShowAsync();
+
+            if (target is null)
+            {
+                return WorkflowResultFor(SelectedMonitorMode, WorkflowStatus.Cancelled,
+                    error: "Selected Monitor cancelled.",
+                    totalMs: totalSw.Elapsed.TotalMilliseconds);
+            }
+
+            // With a confirmed monitor target in hand, Capture runs off-thread
+            // just like the other routes — the adapter may block on native
+            // pixel acquisition.
+            var captureResult = await RunOffThread(() => _capture.CaptureMonitor(target));
+            if (!captureResult.Success)
+            {
+                return WorkflowResultFor(SelectedMonitorMode, WorkflowStatus.CaptureFailed,
+                    error: captureResult.Error,
+                    captureMs: captureResult.ElapsedMs,
+                    totalMs: totalSw.Elapsed.TotalMilliseconds);
+            }
+
+            var frame = captureResult.Frame!;
+            _lastFrame = frame;
+
+            var previewResult = _preview.Present(frame);
+            if (!previewResult.Success)
+            {
+                return WorkflowResultFor(SelectedMonitorMode, WorkflowStatus.PreviewFailed,
+                    frame: frame,
+                    dimensions: captureResult.Dimensions,
+                    error: previewResult.Error,
+                    captureMs: captureResult.ElapsedMs,
+                    displayMs: previewResult.ElapsedMs,
+                    totalMs: totalSw.Elapsed.TotalMilliseconds);
+            }
+
+            return WorkflowResultFor(SelectedMonitorMode, WorkflowStatus.Succeeded,
                 frame: frame,
                 dimensions: captureResult.Dimensions,
                 previewImage: previewResult.Image,
