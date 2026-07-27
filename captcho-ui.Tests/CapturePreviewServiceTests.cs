@@ -1,8 +1,11 @@
-// CapturePreviewServiceTests.cs — Tests for the capture preview service orchestration layer.
+// CapturePreviewServiceTests.cs — Tests for the legacy capture preview service.
 //
-// Tests verify the result record structure, that the service handles
-// DLL-not-found gracefully (no native DLL available in test environment),
-// last-capture caching, and export save methods.
+// Full Desktop capture is now routed through CaptureWorkflowSession and is
+// covered by CaptureWorkflowSessionTests; the tests below cover the
+// remaining legacy routes (Current Monitor / Active Window / Window Under
+// Cursor / Region) and the shared export cache that the workflow session
+// still writes into through SetLastCapture. Tests verify graceful
+// DLL-not-found handling, last-capture caching, and export save methods.
 
 using System;
 using System.IO;
@@ -21,16 +24,6 @@ public class CapturePreviewServiceTests
     // ── Capture fails gracefully when native DLL is not on path ──────
 
     [Fact]
-    public async Task CaptureFullDesktopAsync_NativeDllMissing_ReturnsError()
-    {
-        var result = await _service.CaptureFullDesktopAsync();
-        Assert.NotNull(result);
-        // In test environment, the native DLL is typically not on PATH
-        // so we expect an error — but the service must not throw
-        Assert.False(string.IsNullOrEmpty(result.Mode));
-    }
-
-    [Fact]
     public async Task CaptureCurrentMonitorAsync_NativeDllMissing_ReturnsError()
     {
         var result = await _service.CaptureCurrentMonitorAsync();
@@ -41,40 +34,10 @@ public class CapturePreviewServiceTests
     // ── Result structure ─────────────────────────────────────────────
 
     [Fact]
-    public async Task CaptureFullDesktopAsync_ResultHasModeLabel()
-    {
-        var result = await _service.CaptureFullDesktopAsync();
-        Assert.Equal("Full Desktop", result.Mode);
-    }
-
-    [Fact]
     public async Task CaptureCurrentMonitorAsync_ResultHasMonitorLabel()
     {
         var result = await _service.CaptureCurrentMonitorAsync();
         Assert.Contains("Current Monitor", result.Mode);
-    }
-
-    [Fact]
-    public async Task CaptureFullDesktopAsync_ResultHasTimings()
-    {
-        var result = await _service.CaptureFullDesktopAsync();
-        // TotalMs should always be set, even on error
-        Assert.True(result.TotalMs >= 0);
-    }
-
-    // ── Error result contract ─────────────────────────────────────────
-
-    [Fact]
-    public async Task CaptureFullDesktopAsync_OnError_IsSuccessIsFalse()
-    {
-        var result = await _service.CaptureFullDesktopAsync();
-        // If native DLL is missing, IsSuccess should be false
-        // If it's present (unlikely in test env), this test just verifies the contract
-        if (!string.IsNullOrEmpty(result.Error))
-        {
-            Assert.False(result.IsSuccess);
-            Assert.Null(result.ImageSource);
-        }
     }
 
     // ── Last capture cache ────────────────────────────────────────────
@@ -86,17 +49,41 @@ public class CapturePreviewServiceTests
         Assert.Null(service.LastCapturedBitmap);
     }
 
+    // ── Workflow session frame bridge ──────────────────────────────────
+
     [Fact]
-    public async Task CaptureFullDesktopAsync_OnFailure_DoesNotSetCache()
+    public void SetLastCapture_FromWorkflowSession_MakesFrameAvailableToExport()
+    {
+        // The runtime workflow session owns the Full Desktop Frame; until
+        // Export also migrates behind the session, it shares the Frame with
+        // the legacy export path through SetLastCapture. This contract test
+        // pins the bridge so it is not removed before the export migration.
+        var service = new CapturePreviewService();
+        var frame = ExportTestHelpers.CreateTestBitmap(4, 4);
+
+        service.SetLastCapture(frame);
+
+        Assert.Same(frame, service.LastCapturedBitmap);
+    }
+
+    [Fact]
+    public void SetLastCapture_OverwritesPreviousFrame()
     {
         var service = new CapturePreviewService();
-        var result = await service.CaptureFullDesktopAsync();
+        var first = ExportTestHelpers.CreateTestBitmap(2, 2);
+        var second = ExportTestHelpers.CreateTestBitmap(8, 8);
+        service.SetLastCapture(first);
 
-        // In test env, native DLL is usually missing → failure should not set cache
-        if (!result.IsSuccess)
-        {
-            Assert.Null(service.LastCapturedBitmap);
-        }
+        service.SetLastCapture(second);
+
+        Assert.Same(second, service.LastCapturedBitmap);
+    }
+
+    [Fact]
+    public void SetLastCapture_NullFrame_Throws()
+    {
+        var service = new CapturePreviewService();
+        Assert.Throws<ArgumentNullException>(() => service.SetLastCapture(null!));
     }
 
     [Fact]

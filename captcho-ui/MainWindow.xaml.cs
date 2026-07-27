@@ -54,6 +54,15 @@ public sealed partial class MainWindow : Window
     private readonly CapturePreviewService _captureService = new();
 
     /// <summary>
+    /// Production runtime workflow session. Owns Full Desktop Capture Mode
+    /// routing, operation state, the captured Frame, and the preview
+    /// transition. WinUI keeps an event/rendering role only — workflow rules
+    /// live in the session so they can be covered by headless tests.
+    /// </summary>
+    private readonly CaptureWorkflowSession<WriteableBitmap> _workflowSession =
+        new CaptureWorkflowSession<WriteableBitmap>(new WindowsCaptureAdapter(), new WriteableBitmapPreviewAdapter());
+
+    /// <summary>
     /// Coordinates singleton settings window lifecycle.
     /// Ensures only one settings dialog is open at a time.
     /// </summary>
@@ -298,7 +307,7 @@ public sealed partial class MainWindow : Window
                 _ = RunDelayedCaptureAsync(_captureService.CaptureActiveWindowAsync);
                 break;
             case GlobalHotkeyRoute.FullDesktop:
-                _ = RunDelayedCaptureAsync(_captureService.CaptureFullDesktopAsync);
+                _ = RunFullDesktopWorkflowAsync();
                 break;
             case GlobalHotkeyRoute.RectangularRegion:
                 _ = RunDelayedRegionCaptureAsync();
@@ -362,10 +371,10 @@ public sealed partial class MainWindow : Window
 
     // ── Capture button click handlers ────────────────────────────────
 
-    /// <summary>Handles "Full Desktop" click.</summary>
+    /// <summary>Handles "Full Desktop" click — routes through the production workflow session.</summary>
     private async void FullDesktop_Click(object sender, RoutedEventArgs e)
     {
-        await RunDelayedCaptureAsync(_captureService.CaptureFullDesktopAsync);
+        await RunFullDesktopWorkflowAsync();
     }
 
     /// <summary>Handles "Current Monitor" click.</summary>
@@ -617,6 +626,114 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Routes a Full Desktop Trigger through the production workflow session.
+    /// The session owns Capture, the resulting Frame, and the preview
+    /// transition; this method keeps the WinUI layer as a thin event/rendering
+    /// adapter that disables controls during the operation, drives the optional
+    /// delay countdown, and binds the returned WorkflowResult to the preview
+    /// image, status, and timing text. Operation-in-progress and failure
+    /// outcomes surface as user-visible, retryable status text.
+    /// </summary>
+    private Task RunFullDesktopWorkflowAsync() =>
+        RunWorkflowWithCountdownAsync(_workflowSession.CaptureFullDesktopAsync, ApplyWorkflowResult);
+
+    /// <summary>
+    /// Shared orchestration scaffold for any production workflow route: drives
+    /// the optional delay countdown, runs the supplied workflow, and applies
+    /// the returned WorkflowResult through the supplied binder. All paths
+    /// restore controls in finally. Extracted so the WinUI code-behind does
+    /// not duplicate the countdown/state scaffold per route.
+    /// </summary>
+    private async Task RunWorkflowWithCountdownAsync(
+        Func<Task<WorkflowResult<WriteableBitmap>>> workflowFunc,
+        Action<WorkflowResult<WriteableBitmap>> applyResult)
+    {
+        int delaySeconds = GetNormalizedDelaySeconds();
+
+        EnterCaptureState();
+        _activeCts = new CancellationTokenSource();
+
+        try
+        {
+            if (delaySeconds > 0)
+            {
+                await RunCountdownPhaseAsync(delaySeconds, _activeCts.Token);
+            }
+
+            StatusText.Text = "Capturing…";
+            CaptureProgress.Visibility = Visibility.Visible;
+
+            var result = await workflowFunc();
+            applyResult(result);
+        }
+        catch (OperationCanceledException)
+        {
+            StatusText.Text = "Countdown cancelled.";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Error: {SanitizeException(ex)}";
+            TimingText.Text = "";
+        }
+        finally
+        {
+            ExitCaptureState();
+        }
+    }
+
+    /// <summary>
+    /// Applies a WorkflowResult from the runtime session to the WinUI preview
+    /// image, status, and timing text. On success, syncs the session-owned
+    /// Frame into the export cache so the existing Save/Copy path continues
+    /// to work until Export also migrates behind the session.
+    /// </summary>
+    private void ApplyWorkflowResult(WorkflowResult<WriteableBitmap> result)
+    {
+        switch (result.Status)
+        {
+            case WorkflowStatus.Succeeded:
+                if (result.PreviewImage is not null)
+                {
+                    PreviewImage.Source = null;
+                    PreviewImage.Source = result.PreviewImage;
+                }
+                if (result.Frame is not null)
+                {
+                    _captureService.SetLastCapture(result.Frame);
+                }
+                StatusText.Text = $"{result.Mode} — {result.Dimensions}";
+                _hasCapture = true;
+                break;
+
+            case WorkflowStatus.OperationInProgress:
+                StatusText.Text = result.Error ?? "A capture is already in progress.";
+                break;
+
+            case WorkflowStatus.CaptureFailed:
+                // Failed capture does NOT overwrite the last successful cache,
+                // so _hasCapture retains its prior value and the user can retry.
+                StatusText.Text = result.Error ?? $"{result.Mode} — capture failed.";
+                break;
+
+            case WorkflowStatus.PreviewFailed:
+                // The session preserves the Frame on the result; the user can
+                // retry the Trigger to re-attempt the preview transition.
+                StatusText.Text = result.Error ?? $"{result.Mode} — preview failed.";
+                break;
+        }
+
+        TimingText.Text = FormatWorkflowTiming(result);
+    }
+
+    /// <summary>
+    /// Formats timing from a WorkflowResult into a compact, tabular string.
+    /// Shares the layout with <see cref="FormatTiming"/> so timing text stays
+    /// consistent across the legacy and session routes.
+    /// </summary>
+    private static string FormatWorkflowTiming(WorkflowResult<WriteableBitmap> result) =>
+        FormatTimings(result.CaptureMs, result.DisplayMs, result.TotalMs);
+
+    /// <summary>
     /// Runs the region capture flow with optional delay countdown.
     /// The overlay is a transparent Win32 window over the live desktop —
     /// no pre-capture needed. After the user confirms, the overlay is removed
@@ -814,18 +931,26 @@ public sealed partial class MainWindow : Window
     /// <summary>
     /// Formats timing information into a compact, tabular-friendly string.
     /// </summary>
-    private static string FormatTiming(CapturePreviewResult result)
+    private static string FormatTiming(CapturePreviewResult result) =>
+        FormatTimings(result.CaptureMs, result.DisplayMs, result.TotalMs);
+
+    /// <summary>
+    /// Shared timing formatter for the legacy <see cref="CapturePreviewResult"/>
+    /// route and the <see cref="WorkflowResult{TImage}"/> route. Returns empty
+    /// when no phase recorded any duration.
+    /// </summary>
+    private static string FormatTimings(double captureMs, double displayMs, double totalMs)
     {
-        if (result.CaptureMs == 0 && result.DisplayMs == 0)
+        if (captureMs == 0 && displayMs == 0 && totalMs == 0)
             return "";
 
         var parts = new List<string>();
-        if (result.CaptureMs > 0)
-            parts.Add($"capture {result.CaptureMs:F1}ms");
-        if (result.DisplayMs > 0)
-            parts.Add($"display {result.DisplayMs:F1}ms");
-        if (result.TotalMs > 0)
-            parts.Add($"total {result.TotalMs:F1}ms");
+        if (captureMs > 0)
+            parts.Add($"capture {captureMs:F1}ms");
+        if (displayMs > 0)
+            parts.Add($"display {displayMs:F1}ms");
+        if (totalMs > 0)
+            parts.Add($"total {totalMs:F1}ms");
 
         return string.Join(" │ ", parts);
     }

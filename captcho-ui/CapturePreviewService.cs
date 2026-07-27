@@ -48,7 +48,11 @@ public sealed class CapturePreviewService
 
     /// <summary>
     /// The most recent successfully captured bitmap, or null if no capture has succeeded.
-    /// Thread-safe read via volatile; written only under lock in CaptureCoreAsync.
+    /// Thread-safe read via volatile. Written from two paths today: by the legacy
+    /// capture routes (under CaptureRaw/BuildDisplayResultAsync on this class) and by
+    /// <see cref="SetLastCapture"/>, which the runtime Workflow Session uses to share
+    /// its owned Frame with the legacy export path until Export migrates behind the
+    /// session. The export migration will remove the second writer.
     /// </summary>
     public ContiguousBitmap? LastCapturedBitmap => _lastCapturedBitmap;
 
@@ -136,13 +140,13 @@ public sealed class CapturePreviewService
     }
 
     /// <summary>
-    /// Captures the full virtual desktop (all monitors stitched) and converts to displayable form.
-    /// Native capture runs on a background thread; WriteableBitmap is created on the calling (UI) thread.
+    /// Sets the cached last capture to a Frame owned by another component.
+    /// Used by the runtime workflow session to share its owned Frame with the
+    /// existing export path until Export also migrates behind the session.
     /// </summary>
-    public async Task<CapturePreviewResult> CaptureFullDesktopAsync()
+    public void SetLastCapture(ContiguousBitmap frame)
     {
-        var raw = await Task.Run(() => CaptureRaw("Full Desktop", SafeCaptureResult.CaptureAllMonitors));
-        return await BuildDisplayResultAsync(raw);
+        _lastCapturedBitmap = frame ?? throw new ArgumentNullException(nameof(frame));
     }
 
     /// <summary>
