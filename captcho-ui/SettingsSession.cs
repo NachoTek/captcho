@@ -39,6 +39,7 @@ public sealed class SettingsSession
 
     private readonly GeneralTabSettings _general;
     private readonly GlobalHotkeyTabSettings _globalHotkeyTab;
+    private readonly CaptureTabSettings _capture;
     private readonly ExportTabSettings _export;
     private readonly InterfaceTabSettings _interface;
 
@@ -71,10 +72,11 @@ public sealed class SettingsSession
 
         _general = new GeneralTabSettings(runtime);
         _globalHotkeyTab = new GlobalHotkeyTabSettings(runtime, globalHotkeys);
+        _capture = new CaptureTabSettings(runtime);
         _export = new ExportTabSettings();
         _interface = new InterfaceTabSettings();
 
-        _editableTabs = new EditableTabSession[] { _general, _globalHotkeyTab };
+        _editableTabs = new EditableTabSession[] { _general, _globalHotkeyTab, _capture };
     }
 
     // ── View ────────────────────────────────────────────────────────────
@@ -120,6 +122,39 @@ public sealed class SettingsSession
     public SettingsView EditGlobalHotkeyEnabled(int globalHotkeyId, bool enabled)
     {
         _globalHotkeyTab.EditEnabled(globalHotkeyId, enabled);
+        return ClearTransientStatus();
+    }
+
+    // ── Editable Capture-tab edits ──────────────────────────────────────
+
+    /// <summary>
+    /// Sets the working mouse-pointer Capture default and returns the refreshed view.
+    /// </summary>
+    public SettingsView EditCaptureIncludePointer(bool value)
+    {
+        _capture.EditIncludePointer(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>
+    /// Sets the working window-decorations Capture default and returns the refreshed
+    /// view. The decoration/shadow dependency is reconciled immediately: turning
+    /// decorations off forces shadow off in the returned view.
+    /// </summary>
+    public SettingsView EditCaptureIncludeDecorations(bool value)
+    {
+        _capture.EditIncludeDecorations(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>
+    /// Sets the working window-shadow Capture default and returns the refreshed view.
+    /// Silently refused when decorations are off — shadow is only meaningful when
+    /// decorations are also included (spec #30).
+    /// </summary>
+    public SettingsView EditCaptureIncludeShadow(bool value)
+    {
+        _capture.EditIncludeShadow(value);
         return ClearTransientStatus();
     }
 
@@ -264,6 +299,11 @@ public sealed class SettingsSession
             FilenameTemplateError: _general.FilenameTemplateError,
 
             GlobalHotkeyRows: _globalHotkeyTab.GetRows(),
+
+            Capture: new CaptureTabContent(
+                IncludePointer: _capture.IncludePointer,
+                IncludeDecorations: _capture.IncludeDecorations,
+                IncludeShadow: _capture.IncludeShadow),
 
             Export: new ExportTabContent(
                 Heading: _export.Heading,

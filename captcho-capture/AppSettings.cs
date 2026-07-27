@@ -22,6 +22,8 @@ public enum SettingsField
     FilenameTemplate,
     /// <summary>The <see cref="AppSettings.GlobalHotkeyEnabledStates"/> field.</summary>
     GlobalHotkeyEnabledStates,
+    /// <summary>The <see cref="AppSettings.CaptureOptions"/> field.</summary>
+    CaptureOptions,
 }
 
 /// <summary>
@@ -73,6 +75,29 @@ public sealed class AppSettings
     [JsonConverter(typeof(GlobalHotkeyEnabledStatesConverter))]
     public Dictionary<GlobalHotkeyRoute, bool>? GlobalHotkeyEnabledStates { get; set; }
 
+    /// <summary>
+    /// Persistent Capture-option defaults (mouse pointer, window decorations, window
+    /// shadow) carried through the workflow into the managed/native Capture contract
+    /// (spec user stories 27–30). The decoration/shadow dependency is enforced on
+    /// read via <see cref="EffectiveCaptureOptions"/>, so a persisted inconsistent
+    /// combination is silently reconciled rather than blocking Apply/OK.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Defaults to <see cref="CaptureOptions.WithDefaults"/> and is never null on a
+    /// fresh instance. The JSON property name is pinned to <c>captureOptions</c>;
+    /// older settings files written before this field shipped load with defaults
+    /// (the JSON deserializer leaves the property at its initialized value).
+    /// </para>
+    /// <para>
+    /// A nested object is used (rather than three flat boolean properties) so the
+    /// three flags travel together as one unit and the dependency rule has a single
+    /// owner (<see cref="CaptureOptions.Normalized"/>).
+    /// </para>
+    /// </remarks>
+    [JsonPropertyName("captureOptions")]
+    public CaptureOptions CaptureOptions { get; set; } = CaptureOptions.WithDefaults();
+
     // Future properties can be added here. System.Text.Json will ignore
     // unknown properties on read and only serialize declared ones.
 
@@ -84,6 +109,7 @@ public sealed class AppSettings
     {
         SaveLocation = ExportDefaults.DefaultSaveDirectory,
         FilenameTemplate = ExportDefaults.DefaultFilenameTemplate,
+        CaptureOptions = CaptureOptions.WithDefaults(),
     };
 
     /// <summary>
@@ -103,6 +129,19 @@ public sealed class AppSettings
         string.IsNullOrWhiteSpace(FilenameTemplate)
             ? ExportDefaults.DefaultFilenameTemplate
             : FilenameTemplate;
+
+    /// <summary>
+    /// Resolves the effective Capture options, falling back to <see cref="CaptureOptions.WithDefaults"/>
+    /// when the backing field is null (defensive — it is initialized non-null, but a
+    /// future JSON shape or hand-edited settings file could leave it null on read)
+    /// and reconciling the decoration/shadow dependency through
+    /// <see cref="CaptureOptions.Normalized"/>. This is the value the workflow reads
+    /// when composing Capture flags — there is no path where it observes an
+    /// impossible combination (shadow on while decorations are off).
+    /// </summary>
+    [JsonIgnore]
+    public CaptureOptions EffectiveCaptureOptions =>
+        (CaptureOptions ?? CaptureOptions.WithDefaults()).Normalized();
 
     /// <summary>
     /// Resolves whether the Global Hotkey for the given capture route is enabled.
@@ -174,8 +213,10 @@ public sealed class AppSettings
 
     /// <summary>
     /// Returns a sanitized copy with null/empty/whitespace fields replaced by defaults.
-    /// The Global Hotkey enabled-states dictionary is deep-copied (or kept null) so the
-    /// returned copy is fully independent of this instance.
+    /// The Global Hotkey enabled-states dictionary is deep-copied (or kept null) and
+    /// CaptureOptions is reconciled through its own Normalized (so the decoration/shadow
+    /// dependency is enforced at this boundary), so the returned copy is fully
+    /// independent of this instance.
     /// </summary>
     public AppSettings Normalized() => new()
     {
@@ -184,5 +225,6 @@ public sealed class AppSettings
         GlobalHotkeyEnabledStates = GlobalHotkeyEnabledStates is null
             ? null
             : new Dictionary<GlobalHotkeyRoute, bool>(GlobalHotkeyEnabledStates),
+        CaptureOptions = EffectiveCaptureOptions,
     };
 }

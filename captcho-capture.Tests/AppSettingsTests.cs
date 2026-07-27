@@ -421,4 +421,192 @@ public class AppSettingsTests : IDisposable
         Assert.Equal(SettingsField.GlobalHotkeyEnabledStates, issue.Field);
         Assert.Contains("unknown route", issue.Message);
     }
+
+    // ── CaptureOptions persistent defaults (issue #34, surfaced for #35) ──────────
+    //
+    // The committed-defaults side of Capture options lives on AppSettings as a single
+    // nested CaptureOptions. Issue #35 requires Settings tests to be able to
+    // distinguish committed defaults from session overrides, so the persistent side
+    // must round-trip through JSON, default safely on a fresh install, and migrate a
+    // settings file from before the field existed.
+
+    [Fact]
+    public void WithDefaults_CaptureOptions_MatchesCaptureOptionsDefaults()
+    {
+        // Single source of truth: AppSettings.WithDefaults seeds CaptureOptions from
+        // CaptureOptions.WithDefaults(), so the two defaults can never drift.
+        var settings = AppSettings.WithDefaults();
+
+        Assert.Equal(CaptureOptions.WithDefaults(), settings.CaptureOptions);
+    }
+
+    [Fact]
+    public void Constructor_NewSettings_CaptureOptionsIsNotNull()
+    {
+        // Even an empty AppSettings must expose a non-null CaptureOptions so any caller
+        // (workflow, Settings tab, override holder) can read committed defaults without
+        // null-guarding every access. WithDefaults() values populate the field.
+        var settings = new AppSettings();
+
+        Assert.NotNull(settings.CaptureOptions);
+        Assert.Equal(CaptureOptions.WithDefaults(), settings.CaptureOptions);
+    }
+
+    [Fact]
+    public void EffectiveCaptureOptions_NullBackingField_FallsBackToDefaults()
+    {
+        // Defensive: if anything has set the backing field to null (e.g. an old JSON
+        // shape round-trip), EffectiveCaptureOptions resolves to defaults rather than
+        // returning null.
+        var settings = new AppSettings { CaptureOptions = null! };
+
+        Assert.Equal(CaptureOptions.WithDefaults(), settings.EffectiveCaptureOptions);
+    }
+
+    [Fact]
+    public void EffectiveCaptureOptions_IsNormalizedToEnforceDependency()
+    {
+        // The decoration/shadow dependency (spec #30) applies to committed defaults
+        // too: an inconsistent combination (shadow without decorations) is reconciled
+        // when the value is read, so the workflow never sees an impossible combination.
+        var settings = new AppSettings
+        {
+            CaptureOptions = new CaptureOptions(
+                IncludePointer: false,
+                IncludeDecorations: false,
+                IncludeShadow: true),
+        };
+
+        var effective = settings.EffectiveCaptureOptions;
+
+        Assert.False(effective.IncludeDecorations);
+        Assert.False(effective.IncludeShadow);
+    }
+
+    [Fact]
+    public void Normalized_DeepCopiesCaptureOptions()
+    {
+        // Normalized() yields an independent copy so the active and persisted settings
+        // cannot share state. Mutating the source after Normalized must not affect the copy.
+        var source = new AppSettings
+        {
+            CaptureOptions = new CaptureOptions(true, true, true),
+        };
+
+        var normalized = source.Normalized();
+
+        source.CaptureOptions = source.CaptureOptions with { IncludePointer = false };
+        Assert.True(normalized.CaptureOptions.IncludePointer);
+    }
+
+    [Fact]
+    public void Normalized_CaptureOptionsIsReconciledToEnforceDependency()
+    {
+        // Normalized() is the boundary where committed defaults are reconciled: shadow
+        // is forced off when decorations are off, so the persisted file can carry an
+        // inconsistent combination (or a future rule violation) without it ever
+        // reaching the workflow.
+        var source = new AppSettings
+        {
+            CaptureOptions = new CaptureOptions(
+                IncludePointer: false,
+                IncludeDecorations: false,
+                IncludeShadow: true),
+        };
+
+        var normalized = source.Normalized();
+
+        Assert.False(normalized.CaptureOptions.IncludeShadow);
+    }
+
+    [Fact]
+    public void SaveThenLoad_PreservesCaptureOptions()
+    {
+        var svc = new ConfigurationService(_tempDir);
+        var original = new AppSettings
+        {
+            SaveLocation = Path.Combine(_tempDir, "Captures"),
+            CaptureOptions = new CaptureOptions(
+                IncludePointer: true,
+                IncludeDecorations: false,
+                IncludeShadow: false),
+        };
+
+        var saveResult = svc.Save(original);
+        Assert.True(saveResult.Success);
+
+        var loaded = svc.Load();
+        Assert.True(loaded.Success);
+
+        Assert.Equal(original.CaptureOptions, loaded.Settings.CaptureOptions);
+    }
+
+    [Fact]
+    public void SaveThenLoad_AlwaysNormalizesShadowOnRoundTrip()
+    {
+        // If a future writer (or hand-edited settings.json) carries an inconsistent
+        // shadow/decoration combination, reading it back reconciles to the dependency
+        // rule through EffectiveCaptureOptions — there is no path where the workflow
+        // observes shadow on while decorations are off.
+        var inconsistentJson = """
+        {
+          "captureOptions": {
+            "includePointer": false,
+            "includeDecorations": false,
+            "includeShadow": true
+          }
+        }
+        """;
+        File.WriteAllText(Path.Combine(_tempDir, "settings.json"), inconsistentJson);
+
+        var svc = new ConfigurationService(_tempDir);
+        var loaded = svc.Load();
+
+        Assert.True(loaded.Success);
+        var effective = loaded.Settings.EffectiveCaptureOptions;
+        Assert.False(effective.IncludeDecorations);
+        Assert.False(effective.IncludeShadow);
+    }
+
+    [Fact]
+    public void Load_OldSettingsFileWithoutCaptureOptions_LoadsWithDefaults()
+    {
+        // Upgrade path: a settings file written before this slice shipped (only
+        // saveLocation and filenameTemplate) loads with the default CaptureOptions —
+        // no crash, no data loss.
+        var oldJson = """
+        {
+          "saveLocation": "C:\\Captures",
+          "filenameTemplate": "legacy_<yyyy>"
+        }
+        """;
+        File.WriteAllText(Path.Combine(_tempDir, "settings.json"), oldJson);
+
+        var svc = new ConfigurationService(_tempDir);
+        var loaded = svc.Load();
+
+        Assert.True(loaded.Success);
+        Assert.Equal(CaptureOptions.WithDefaults(), loaded.Settings.EffectiveCaptureOptions);
+    }
+
+    [Fact]
+    public void Validate_CaptureOptionsIsNeverInvalid_BecauseRulesAreEnforcedOnRead()
+    {
+        // CaptureOptions has no validation rule on the persisted side: the dependency
+        // rule is enforced by Normalized()/EffectiveCaptureOptions on read, so a
+        // persisted inconsistent combination is silently reconciled rather than
+        // blocking Apply/OK. This matches the GlobalHotkeyRoute defensive rule: only
+        // structurally impossible states are flagged, not preference-level values.
+        var settings = new AppSettings
+        {
+            CaptureOptions = new CaptureOptions(
+                IncludePointer: false,
+                IncludeDecorations: false,
+                IncludeShadow: true),
+        };
+
+        var issues = settings.Validate().Where(i => i.Field == SettingsField.CaptureOptions).ToList();
+
+        Assert.Empty(issues);
+    }
 }

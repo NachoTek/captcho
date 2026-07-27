@@ -2,11 +2,12 @@
 //
 // Every SettingsSession action (open, edit, Apply/OK/Cancel/Reset) returns a fresh
 // SettingsView carrying everything the code-behind needs to rebind: the editable
-// General-tab fields (flat, per the #8 design), the Global Hotkeys rows, nested read-only tab
-// content, composed button gating, and an inline status message. The view is a record so
-// value-equality behaves predictably for callers that want to diff. Read-only tab content
-// is nested so it stays self-contained as it grows; the small, fixed General field set
-// stays flat to keep binding sites simple.
+// General-tab fields (flat, per the #8 design), the Global Hotkeys rows, the
+// editable Capture-tab content (Capture-options defaults), nested read-only tab
+// content, composed button gating, and an inline status message. The view is a
+// record so value-equality behaves predictably for callers that want to diff.
+// Read-only tab content is nested so it stays self-contained as it grows; the
+// small, fixed General field set stays flat to keep binding sites simple.
 
 using System.Collections.Generic;
 
@@ -32,6 +33,19 @@ public sealed record InterfaceTabContent(
     string PlannedSettingsNote);
 
 /// <summary>
+/// Editable content for the Capture tab, sourced from <see cref="CaptureTabSettings"/>.
+/// Carries the three Capture-option flags plus the effective shadow value after the
+/// decoration/shadow dependency has been reconciled at edit time. The code-behind
+/// binds these to checkbox controls; the decoration/shadow dependency is enforced
+/// by the underlying <see cref="CaptureTabSettings"/> so the bound view never shows
+/// an impossible combination.
+/// </summary>
+public sealed record CaptureTabContent(
+    bool IncludePointer,
+    bool IncludeDecorations,
+    bool IncludeShadow);
+
+/// <summary>
 /// Immutable snapshot of everything the Settings window code-behind binds. Produced
 /// by <see cref="SettingsSession"/> on open and after every edit or session verb.
 /// Failures surface as <see cref="StatusMessage"/> + <see cref="StatusIsError"/>
@@ -47,6 +61,9 @@ public sealed record SettingsView(
 
     // ── Global Hotkeys tab (editable) ──
     IReadOnlyList<GlobalHotkeyRow> GlobalHotkeyRows,
+
+    // ── Capture tab (editable) ──
+    CaptureTabContent Capture,
 
     // ── Read-only tabs ──
     ExportTabContent Export,
