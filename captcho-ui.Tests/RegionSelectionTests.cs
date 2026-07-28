@@ -253,6 +253,208 @@ public class RegionSelectionTests
         Assert.True(resized!.Right <= 1000);
     }
 
+    // ── Handle-driven resizing (ResizeHandle) ───────────────────────────
+    //
+    // Pointer-driven resize moves the edge(s) belonging to a handle to the
+    // cursor position while the opposite edge(s) stay fixed, then enforces the
+    // minimum size and keeps the rectangle inside the Virtual Desktop bounds.
+    // Used by the visible resize handles (issue #30). The delta-based Resize
+    // above remains for keyboard nudging.
+
+    private static RegionSelection SampleSelection() => RegionSelection.FromDragPoints(100, 100, 300, 300);
+
+    [Fact]
+    public void ResizeHandle_TopLeft_MovesLeftAndTopEdges()
+    {
+        // Drag the top-left corner up-and-left to (50,50); right/bottom fixed.
+        var resized = SampleSelection().ResizeHandle(SelectionHandleKind.TopLeft, 50, 50, 0, 0, 1000, 1000);
+
+        Assert.NotNull(resized);
+        Assert.Equal(50, resized!.X);
+        Assert.Equal(50, resized.Y);
+        Assert.Equal(250, resized.Width);
+        Assert.Equal(250, resized.Height);
+    }
+
+    [Fact]
+    public void ResizeHandle_TopRight_MovesRightAndTopEdges()
+    {
+        var resized = SampleSelection().ResizeHandle(SelectionHandleKind.TopRight, 400, 50, 0, 0, 1000, 1000);
+
+        Assert.NotNull(resized);
+        Assert.Equal(100, resized!.X);     // left fixed
+        Assert.Equal(50, resized.Y);       // top moved up
+        Assert.Equal(300, resized.Width);  // 400-100
+        Assert.Equal(250, resized.Height); // 300-50
+    }
+
+    [Fact]
+    public void ResizeHandle_BottomLeft_MovesLeftAndBottomEdges()
+    {
+        var resized = SampleSelection().ResizeHandle(SelectionHandleKind.BottomLeft, 50, 400, 0, 0, 1000, 1000);
+
+        Assert.NotNull(resized);
+        Assert.Equal(50, resized!.X);       // left moved
+        Assert.Equal(100, resized.Y);       // top fixed
+        Assert.Equal(250, resized.Width);   // 300-50
+        Assert.Equal(300, resized.Height);  // 400-100
+    }
+
+    [Fact]
+    public void ResizeHandle_BottomRight_MovesRightAndBottomEdges()
+    {
+        var resized = SampleSelection().ResizeHandle(SelectionHandleKind.BottomRight, 400, 400, 0, 0, 1000, 1000);
+
+        Assert.NotNull(resized);
+        Assert.Equal(100, resized!.X);
+        Assert.Equal(100, resized.Y);
+        Assert.Equal(300, resized.Width);
+        Assert.Equal(300, resized.Height);
+    }
+
+    [Fact]
+    public void ResizeHandle_Top_MovesOnlyTopEdge()
+    {
+        var resized = SampleSelection().ResizeHandle(SelectionHandleKind.Top, 200, 50, 0, 0, 1000, 1000);
+
+        Assert.NotNull(resized);
+        Assert.Equal(100, resized!.X);
+        Assert.Equal(50, resized.Y);
+        Assert.Equal(200, resized.Width);  // width unchanged
+        Assert.Equal(250, resized.Height); // 300-50
+    }
+
+    [Fact]
+    public void ResizeHandle_Bottom_MovesOnlyBottomEdge()
+    {
+        var resized = SampleSelection().ResizeHandle(SelectionHandleKind.Bottom, 200, 400, 0, 0, 1000, 1000);
+
+        Assert.NotNull(resized);
+        Assert.Equal(100, resized!.X);
+        Assert.Equal(100, resized!.Y);
+        Assert.Equal(200, resized.Width);
+        Assert.Equal(300, resized.Height);
+    }
+
+    [Fact]
+    public void ResizeHandle_Left_MovesOnlyLeftEdge()
+    {
+        var resized = SampleSelection().ResizeHandle(SelectionHandleKind.Left, 50, 200, 0, 0, 1000, 1000);
+
+        Assert.NotNull(resized);
+        Assert.Equal(50, resized!.X);
+        Assert.Equal(100, resized.Y);
+        Assert.Equal(250, resized.Width);  // 300-50
+        Assert.Equal(200, resized.Height); // unchanged
+    }
+
+    [Fact]
+    public void ResizeHandle_Right_MovesOnlyRightEdge()
+    {
+        var resized = SampleSelection().ResizeHandle(SelectionHandleKind.Right, 400, 200, 0, 0, 1000, 1000);
+
+        Assert.NotNull(resized);
+        Assert.Equal(100, resized!.X);
+        Assert.Equal(100, resized.Y);
+        Assert.Equal(300, resized.Width);  // 400-100
+        Assert.Equal(200, resized.Height); // unchanged
+    }
+
+    [Fact]
+    public void ResizeHandle_ShrinkPastOppositeEdge_ClampsToMinimumSize()
+    {
+        // Drag top-left corner past the bottom-right corner: width/height must
+        // clamp to MinimumSize, never invert or collapse to zero.
+        var resized = SampleSelection().ResizeHandle(SelectionHandleKind.TopLeft, 350, 350, 0, 0, 1000, 1000);
+
+        Assert.NotNull(resized);
+        Assert.True(resized!.Width >= RegionSelection.MinimumSize);
+        Assert.True(resized.Height >= RegionSelection.MinimumSize);
+        Assert.True(resized.Right <= 300); // right edge never exceeded
+    }
+
+    [Fact]
+    public void ResizeHandle_DragOutsideBoundsLeft_ClampsToBoundsEdge()
+    {
+        // Drag top-left corner off the left/top of the virtual desktop: the
+        // rectangle must not escape the Virtual Desktop.
+        var resized = SampleSelection().ResizeHandle(SelectionHandleKind.TopLeft, -50, -50, 0, 0, 1000, 1000);
+
+        Assert.NotNull(resized);
+        Assert.Equal(0, resized!.X); // clamped to left bound
+        Assert.Equal(0, resized.Y);  // clamped to top bound
+    }
+
+    [Fact]
+    public void ResizeHandle_DragOutsideBoundsRight_ClampsToBoundsEdge()
+    {
+        var resized = SampleSelection().ResizeHandle(SelectionHandleKind.BottomRight, 1200, 1200, 0, 0, 1000, 1000);
+
+        Assert.NotNull(resized);
+        Assert.Equal(1000, resized!.Right);  // clamped to right bound
+        Assert.Equal(1000, resized.Bottom);  // clamped to bottom bound
+    }
+
+    [Fact]
+    public void ResizeHandle_SelectionFillsEntireBounds_CannotEscape()
+    {
+        // Maximum-bounds case: the selection already fills the whole Virtual
+        // Desktop. Dragging a handle outward must keep it clamped to the bounds
+        // (no escape, no invalid geometry).
+        var full = RegionSelection.FromDragPoints(0, 0, 1000, 1000);
+        var resized = full.ResizeHandle(SelectionHandleKind.BottomRight, 5000, 5000, 0, 0, 1000, 1000);
+
+        Assert.NotNull(resized);
+        Assert.Equal(0, resized!.X);
+        Assert.Equal(0, resized.Y);
+        Assert.Equal(1000, resized.Right);   // clamped to bounds
+        Assert.Equal(1000, resized.Bottom);
+    }
+
+    [Fact]
+    public void ResizeHandle_None_ReturnsNull()
+    {
+        // None is not a resize handle — the overlay starts a new drag instead.
+        Assert.Null(SampleSelection().ResizeHandle(SelectionHandleKind.None, 50, 50, 0, 0, 1000, 1000));
+    }
+
+    [Fact]
+    public void ResizeHandle_Body_ReturnsNull()
+    {
+        // Body is a move, not a resize — the overlay moves the rectangle instead.
+        Assert.Null(SampleSelection().ResizeHandle(SelectionHandleKind.Body, 200, 200, 0, 0, 1000, 1000));
+    }
+
+    [Fact]
+    public void ResizeHandle_NegativeOriginSelection_ExpandsWithoutEscaping()
+    {
+        // Selection entirely on a left monitor: (-300,-200) to (-100,0); bounds
+        // start at (-1000,-500). Dragging the top-left corner further out keeps
+        // it inside the Virtual Desktop.
+        var sel = RegionSelection.FromDragPoints(-300, -200, -100, 0);
+        var resized = sel.ResizeHandle(SelectionHandleKind.TopLeft, -500, -400, -1000, -500, 2000, 1500);
+
+        Assert.NotNull(resized);
+        Assert.Equal(-500, resized!.X);
+        Assert.Equal(-400, resized.Y);
+        Assert.Equal(400, resized.Width);  // -100 - (-500)
+        Assert.Equal(400, resized.Height); // 0 - (-400)
+    }
+
+    [Fact]
+    public void ResizeHandle_SelectionSpanningOrigin_WorksAcrossBoundary()
+    {
+        // Selection crossing x=0 between a left monitor and the primary.
+        var sel = RegionSelection.FromDragPoints(-100, 100, 200, 300);
+        var resized = sel.ResizeHandle(SelectionHandleKind.BottomRight, 400, 500, -1000, -500, 2000, 1500);
+
+        Assert.NotNull(resized);
+        Assert.Equal(-100, resized!.X);
+        Assert.Equal(100, resized.Y);
+        Assert.Equal(500, resized.Width);  // 400 - (-100)
+        Assert.Equal(400, resized.Height); // 500 - 100
+    }
+
     // ── Bounds clamping ─────────────────────────────────────────────────
 
     [Fact]

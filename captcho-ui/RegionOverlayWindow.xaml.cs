@@ -52,6 +52,9 @@ public sealed partial class RegionOverlayWindow : IDisposable
     private const int WM_LBUTTONUP    = 0x0202;
     private const int WM_MOUSEMOVE    = 0x0200;
     private const int WM_LBUTTONDBLCLK = 0x0203;
+    private const int WM_SETCURSOR    = 0x0020;
+
+    private const int HTCLIENT        = 1;
 
     private const int VK_ESCAPE = 0x1B;
     private const int VK_RETURN = 0x0D;
@@ -73,6 +76,11 @@ public sealed partial class RegionOverlayWindow : IDisposable
     private const int SW_SHOW       = 5;
 
     private const int IDC_CROSS     = 32515;
+    private const int IDC_SIZEALL   = 32646;
+    private const int IDC_SIZENWSE  = 32642;
+    private const int IDC_SIZENESW  = 32643;
+    private const int IDC_SIZENS    = 32645;
+    private const int IDC_SIZEWE    = 32644;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int X, Y; }
@@ -127,6 +135,14 @@ public sealed partial class RegionOverlayWindow : IDisposable
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern IntPtr LoadCursor(IntPtr hInstance, int lpCursorName);
+    [DllImport("user32.dll")] private static extern IntPtr SetCursor(IntPtr hCursor);
+    [DllImport("user32.dll")] private static extern bool GetCursorPos(out POINT lpPoint);
+    [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+    [DllImport("shcore.dll")] private static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
+
+    private const uint MONITOR_DEFAULTTONEAREST = 0x00000002;
+    private const int MDT_EFFECTIVE_DPI = 0;
     [DllImport("user32.dll")] private static extern bool UpdateLayeredWindow(IntPtr hWnd, IntPtr hdcDst, ref POINT pptDst, ref SIZE psize, IntPtr hdcSrc, ref POINT pptSrc, int crKey, ref BLENDFUNCTION pblend, int dwFlags);
     [DllImport("user32.dll")] private static extern bool GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
     [DllImport("user32.dll")] private static extern bool TranslateMessage(ref MSG lpMsg);
@@ -154,9 +170,21 @@ public sealed partial class RegionOverlayWindow : IDisposable
     private IntPtr _bits; // pointer to DIB pixel memory
 
     private RegionSelection? _currentSelection;
-    private bool _isDragging;
     private int _dragStartX, _dragStartY;
     private int _vdx, _vdy, _vdw, _vdh;
+
+    // Pointer interaction state. A click resolves (via SelectionHandleResolver)
+    // to one of: start a brand-new drag, grab a resize handle, or grab the body
+    // to move. Keyboard nudging (Alt+Arrows) keeps using the delta-based Resize.
+    private DragMode _dragMode = DragMode.None;
+    private SelectionHandleKind _activeHandle = SelectionHandleKind.None;
+    private int _moveStartCursorX, _moveStartCursorY;
+    private RegionSelection? _moveStartSelection;
+    // Window-wide DPI fallback; per-cursor-position DPI is resolved on demand so
+    // forgiving hit zones track the monitor the pointer is actually on.
+    private double _dpiFactor = 1.0;
+
+    private enum DragMode { None, NewSelection, MoveBody, ResizeHandle }
 
     private const int CoarseNudge = 10;
     private const int FineNudge = 1;
@@ -196,6 +224,10 @@ public sealed partial class RegionOverlayWindow : IDisposable
                 _tcs.TrySetResult(null);
                 return;
             }
+
+            // Per-monitor DPI scales the forgiving handle hit zones so the
+            // always-visible 8px handles stay practical on high-DPI monitors.
+            _dpiFactor = Math.Max(1.0, GetDpiForWindow(_hwnd) / 96.0);
 
             ShowWindow(_hwnd, SW_SHOW);
             SetForegroundWindow(_hwnd);
@@ -255,34 +287,89 @@ public sealed partial class RegionOverlayWindow : IDisposable
             case WM_LBUTTONUP:    OnMouseUp();         return IntPtr.Zero;
             case WM_LBUTTONDBLCLK: Confirm();          return IntPtr.Zero;
             case WM_KEYDOWN:      OnKey(wParam);       return IntPtr.Zero;
+            case WM_SETCURSOR:    return OnSetCursor(lParam);
         }
         return DefWindowProcW(hWnd, msg, wParam, lParam);
     }
 
     // ── Input ────────────────────────────────────────────────────────
+    //
+    // A left-button down event is resolved against the existing selection
+    // (if any) via the pure SelectionHandleResolver: grabbing a corner/edge
+    // handle starts a pointer-driven resize, grabbing the body starts a move,
+    // and anything else starts a brand-new drag-to-draw selection. While a
+    // drag is in progress WM_MOUSEMOVE routes to the matching geometry update.
 
     private void OnMouseDown(IntPtr lParam)
     {
-        _dragStartX = LoWord(lParam) + _vdx;
-        _dragStartY = HiWord(lParam) + _vdy;
-        _isDragging = true;
+        int vx = LoWord(lParam) + _vdx;
+        int vy = HiWord(lParam) + _vdy;
+
+        if (_currentSelection != null && _currentSelection.MeetsMinimumSize)
+        {
+            var handle = SelectionHandleResolver.Resolve(_currentSelection, vx, vy, DpiFactorForPoint(vx, vy));
+            if (handle == SelectionHandleKind.Body)
+            {
+                _dragMode = DragMode.MoveBody;
+                _moveStartCursorX = vx;
+                _moveStartCursorY = vy;
+                _moveStartSelection = _currentSelection;
+                return;
+            }
+            if (handle != SelectionHandleKind.None)
+            {
+                _dragMode = DragMode.ResizeHandle;
+                _activeHandle = handle;
+                return;
+            }
+        }
+
+        // No existing selection, or the click missed every forgiving handle —
+        // discard the current selection and start a brand-new drag.
+        _dragMode = DragMode.NewSelection;
+        _dragStartX = vx;
+        _dragStartY = vy;
         _currentSelection = null;
         Render();
     }
 
     private void OnMouseMove(IntPtr lParam)
     {
-        if (!_isDragging) return;
         int vx = LoWord(lParam) + _vdx;
         int vy = HiWord(lParam) + _vdy;
 
-        var raw = RegionSelection.FromDragPoints(_dragStartX, _dragStartY, vx, vy);
-        var clamped = raw.ClampToBounds(_vdx, _vdy, _vdw, _vdh);
-        _currentSelection = (clamped != null && clamped.MeetsMinimumSize) ? clamped : null;
-        Render();
+        switch (_dragMode)
+        {
+            case DragMode.NewSelection:
+            {
+                var raw = RegionSelection.FromDragPoints(_dragStartX, _dragStartY, vx, vy);
+                var clamped = raw.ClampToBounds(_vdx, _vdy, _vdw, _vdh);
+                _currentSelection = (clamped != null && clamped.MeetsMinimumSize) ? clamped : null;
+                Render();
+                break;
+            }
+            case DragMode.MoveBody:
+            {
+                if (_moveStartSelection == null) break;
+                // Delta from the press position against the snapshot so the
+                // rectangle follows the pointer without accumulating drift.
+                int dx = vx - _moveStartCursorX;
+                int dy = vy - _moveStartCursorY;
+                var moved = _moveStartSelection.Move(dx, dy, _vdx, _vdy, _vdw, _vdh);
+                if (moved != null) { _currentSelection = moved; Render(); }
+                break;
+            }
+            case DragMode.ResizeHandle:
+            {
+                var resized = _currentSelection?.ResizeHandle(
+                    _activeHandle, vx, vy, _vdx, _vdy, _vdw, _vdh);
+                if (resized != null) { _currentSelection = resized; Render(); }
+                break;
+            }
+        }
     }
 
-    private void OnMouseUp() => _isDragging = false;
+    private void OnMouseUp() => _dragMode = DragMode.None;
 
     private void OnKey(IntPtr wParam)
     {
@@ -312,6 +399,79 @@ public sealed partial class RegionOverlayWindow : IDisposable
     private static bool KeyDown(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
     private static int LoWord(IntPtr p) => (short)(p.ToInt32() & 0xFFFF);
     private static int HiWord(IntPtr p) => (short)((p.ToInt32() >> 16) & 0xFFFF);
+
+    // ── Cursor ───────────────────────────────────────────────────────
+    //
+    // Directional resize cursors follow the hovered handle. The overlay covers
+    // the entire Virtual Desktop, so screen coordinates returned by GetCursorPos
+    // are already Virtual Desktop coordinates and need no translation.
+
+    private IntPtr OnSetCursor(IntPtr lParam)
+    {
+        // Low word of lParam is the hit-test code; only set the cursor inside
+        // the client area, otherwise defer to DefWindowProc.
+        if ((lParam.ToInt32() & 0xFFFF) != HTCLIENT)
+            return DefWindowProcW(_hwnd, WM_SETCURSOR, IntPtr.Zero, lParam);
+
+        var kind = ResolveCursorKind();
+        SetCursor(LoadCursor(IntPtr.Zero, Win32CursorId(kind)));
+        return (IntPtr)1;
+    }
+
+    private SelectionCursorKind ResolveCursorKind()
+    {
+        if (_currentSelection == null || !_currentSelection.MeetsMinimumSize)
+            return SelectionCursorKind.Cross;
+
+        // Lock the cursor to the grabbed handle/body while a drag is in progress
+        // so it does not flicker as the pointer crosses other handles' hit zones.
+        SelectionHandleKind handle;
+        if (_dragMode == DragMode.ResizeHandle)
+            handle = _activeHandle;
+        else if (_dragMode == DragMode.MoveBody)
+            handle = SelectionHandleKind.Body;
+        else
+        {
+            GetCursorPos(out POINT p);
+            handle = SelectionHandleResolver.Resolve(_currentSelection, p.X, p.Y, DpiFactorForPoint(p.X, p.Y));
+        }
+        return SelectionHandleResolver.GetCursor(handle);
+    }
+
+    private static int Win32CursorId(SelectionCursorKind kind) => kind switch
+    {
+        SelectionCursorKind.SizeAll  => IDC_SIZEALL,
+        SelectionCursorKind.SizeNwse => IDC_SIZENWSE,
+        SelectionCursorKind.SizeNesw => IDC_SIZENESW,
+        SelectionCursorKind.SizeNs   => IDC_SIZENS,
+        SelectionCursorKind.SizeWe   => IDC_SIZEWE,
+        _ => IDC_CROSS,
+    };
+
+    /// <summary>
+    /// Resolves the DPI factor for the monitor containing the given Virtual
+    /// Desktop point, so forgiving hit zones scale with the monitor the pointer
+    /// is actually on in mixed-DPI multi-monitor layouts. Falls back to the
+    /// cached window-wide DPI if the per-monitor query is unavailable.
+    /// </summary>
+    private double DpiFactorForPoint(int x, int y)
+    {
+        try
+        {
+            IntPtr hmon = MonitorFromPoint(new POINT { X = x, Y = y }, MONITOR_DEFAULTTONEAREST);
+            if (hmon != IntPtr.Zero
+                && GetDpiForMonitor(hmon, MDT_EFFECTIVE_DPI, out uint dpiX, out _) == 0
+                && dpiX > 0)
+            {
+                return Math.Max(1.0, dpiX / 96.0);
+            }
+        }
+        catch
+        {
+            // shcore.dll / GetDpiForMonitor unavailable — fall back below.
+        }
+        return _dpiFactor;
+    }
 
     // ── Confirm / Cancel ─────────────────────────────────────────────
 
@@ -407,8 +567,13 @@ public sealed partial class RegionOverlayWindow : IDisposable
             g.FillRectangle(new SolidBrush(Color.FromArgb(180, 0, 0, 0)),
                 lx - 6, ly - 2, sz.Width + 12, sz.Height + 4);
             g.DrawString(label, font, brush, lx, ly);
+
+            // Always-visible 8×8 resize handles on every edge and corner so the
+            // user can see how to refine the selection. White fill with the
+            // selection's cyan outline stays legible on light and dark desktops.
+            DrawHandles(g, sx, sy, sw, sh);
         }
-        else if (!_isDragging)
+        else if (_dragMode != DragMode.NewSelection)
         {
             string hint = "Drag to select · Enter confirm · Esc cancel · Arrows adjust";
             using var font = new Font("Segoe UI", 13f);
@@ -438,6 +603,36 @@ public sealed partial class RegionOverlayWindow : IDisposable
             ref dstPt, ref dstSz,
             _bitmapDC, ref srcPt,
             0, ref blend, ULW_ALPHA);
+    }
+
+    /// <summary>
+    /// Draws the always-visible 8×8 resize handles at the four corners and four
+    /// edge midpoints of the selection (coordinates already in overlay space).
+    /// </summary>
+    private static void DrawHandles(System.Drawing.Graphics g, int sx, int sy, int sw, int sh)
+    {
+        int hs = SelectionHandleResolver.VisibleHandleSize;
+        using var fill = new SolidBrush(Color.FromArgb(255, 255, 255, 255));
+        using var edge = new Pen(Color.FromArgb(255, 79, 195, 247), 1f);
+
+        void Draw(float cx, float cy)
+        {
+            float hx = cx - hs / 2f;
+            float hy = cy - hs / 2f;
+            g.FillRectangle(fill, hx, hy, hs, hs);
+            g.DrawRectangle(edge, hx, hy, hs, hs);
+        }
+
+        // Corners
+        Draw(sx, sy);
+        Draw(sx + sw, sy);
+        Draw(sx, sy + sh);
+        Draw(sx + sw, sy + sh);
+        // Edge midpoints
+        Draw(sx + sw / 2f, sy);
+        Draw(sx + sw, sy + sh / 2f);
+        Draw(sx + sw / 2f, sy + sh);
+        Draw(sx, sy + sh / 2f);
     }
 
     // ── Cleanup ──────────────────────────────────────────────────────
