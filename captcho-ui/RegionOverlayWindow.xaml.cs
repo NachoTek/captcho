@@ -157,6 +157,15 @@ public sealed partial class RegionOverlayWindow : IDisposable
     [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(IntPtr lpModuleName);
     [DllImport("gdi32.dll")] private static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFOHEADER pbmi, uint iUsage, out IntPtr ppvBits, IntPtr hSection, uint dwOffset);
 
+    // ── Magnifier backdrop snapshot ────────────────────────────────────
+    // The magnifier samples a frozen snapshot of the desktop taken when the
+    // overlay opens, so the zoomed view shows clean desktop pixels instead of
+    // this overlay's own dim scrim. Snapshotted before the first render so the
+    // not-yet-composited layered window cannot appear in its own magnifier.
+    [DllImport("gdi32.dll")] private static extern bool BitBlt(IntPtr hdcDest, int nXDest, int nYDest, int nWidth, int nHeight, IntPtr hdcSrc, int nXSrc, int nYSrc, uint dwRop);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int nWidth, int nHeight);
+    private const uint SRCCOPY = 0x00CC0020;
+
     #endregion
 
     private readonly TaskCompletionSource<SelectionGeometry?> _tcs = new();
@@ -168,6 +177,11 @@ public sealed partial class RegionOverlayWindow : IDisposable
     private IntPtr _hBitmap;
     private IntPtr _bitmapDC;
     private IntPtr _bits; // pointer to DIB pixel memory
+
+    // Frozen desktop snapshot sampled by the adaptive magnifier. null when the
+    // snapshot failed or the Virtual Desktop was empty, in which case the
+    // magnifier is silently skipped and the rest of the overlay still works.
+    private System.Drawing.Bitmap? _backdrop;
 
     private RegionSelection? _currentSelection;
     private int _dragStartX, _dragStartY;
@@ -228,6 +242,12 @@ public sealed partial class RegionOverlayWindow : IDisposable
             // Per-monitor DPI scales the forgiving handle hit zones so the
             // always-visible 8px handles stay practical on high-DPI monitors.
             _dpiFactor = Math.Max(1.0, GetDpiForWindow(_hwnd) / 96.0);
+
+            // Snapshot the desktop before this layered window is composited so
+            // the adaptive magnifier can zoom clean desktop pixels instead of
+            // its own dim scrim. A failed snapshot leaves _backdrop null and the
+            // overlay simply skips the magnifier.
+            SnapshotBackdrop();
 
             ShowWindow(_hwnd, SW_SHOW);
             SetForegroundWindow(_hwnd);
@@ -585,6 +605,14 @@ public sealed partial class RegionOverlayWindow : IDisposable
             g.DrawString(hint, font, brush, cx, 24);
         }
 
+        // The adaptive magnifier serves precision boundary placement, so it is
+        // shown only while the user is drawing a new selection or dragging a
+        // resize handle — the two interactions that adjust a boundary. A body
+        // move is coarse (the cursor is in the interior, not on a boundary), so
+        // it needs no magnifier; an idle overlay is unobstructed.
+        if (_dragMode == DragMode.NewSelection || _dragMode == DragMode.ResizeHandle)
+            DrawMagnifier(g);
+
         // Do NOT dispose bmp — it wraps _bits, not an owned HBITMAP.
         // Disposing would try to free memory we don't own.
         // The using statement is harmless for Bitmap(IntPtr) wrapper though.
@@ -635,10 +663,108 @@ public sealed partial class RegionOverlayWindow : IDisposable
         Draw(sx, sy + sh / 2f);
     }
 
+    // ── Adaptive magnifier ───────────────────────────────────────────
+    //
+    // A 200×200 viewport at 4× zoom that follows the active boundary point
+    // (the cursor) while a drag is in progress. The pure
+    // SelectionMagnifierPlacement resolver decides what to sample and where to
+    // place the box; this method performs the backdrop read (DrawImage from the
+    // frozen snapshot) and draws the border and focus crosshair. Sampling the
+    // frozen backdrop — not the live, scrimmed overlay — keeps the zoomed pixels
+    // truthful, and works across mixed-DPI, cross-monitor, and negative-
+    // coordinate layouts because every coordinate stays in Virtual Desktop
+    // space (the screen DC BitBlt covers the whole virtual screen).
+
+    private void SnapshotBackdrop()
+    {
+        try
+        {
+            IntPtr screenDC = GetDC(IntPtr.Zero);
+            if (screenDC == IntPtr.Zero) return;
+            IntPtr compatDC = CreateCompatibleDC(screenDC);
+            IntPtr hbm = CreateCompatibleBitmap(screenDC, _vdw, _vdh);
+            if (hbm == IntPtr.Zero)
+            {
+                ReleaseDC(IntPtr.Zero, screenDC);
+                DeleteDC(compatDC);
+                return;
+            }
+            SelectObject(compatDC, hbm);
+            // Source origin is the signed Virtual Desktop origin so monitors at
+            // negative coordinates are captured too.
+            BitBlt(compatDC, 0, 0, _vdw, _vdh, screenDC, _vdx, _vdy, SRCCOPY);
+            ReleaseDC(IntPtr.Zero, screenDC);
+            _backdrop = (System.Drawing.Bitmap)Image.FromHbitmap(hbm);
+            DeleteObject(hbm);
+            DeleteDC(compatDC);
+        }
+        catch
+        {
+            // Backdrop unavailable — the overlay skips the magnifier and the
+            // rest of the selection interaction is unaffected.
+            _backdrop = null;
+        }
+    }
+
+    private void DrawMagnifier(System.Drawing.Graphics g)
+    {
+        if (_backdrop == null) return;
+        if (!GetCursorPos(out POINT p)) return;
+
+        var placement = SelectionMagnifierPlacement.Resolve(p.X, p.Y, _vdx, _vdy, _vdw, _vdh);
+        if (placement == null) return;
+
+        // Both the destination viewport and the source sample are stored in
+        // Virtual Desktop coordinates; the overlay DIB and the frozen backdrop
+        // share the VD origin, so subtracting (_vdx, _vdy) lands in both.
+        int dx = placement.DestinationX - _vdx;
+        int dy = placement.DestinationY - _vdy;
+        int sx = placement.SourceX - _vdx;
+        int sy = placement.SourceY - _vdy;
+        int size = SelectionMagnifierPlacement.Size;
+        int srcSize = SelectionMagnifierPlacement.SourceSize;
+        int zoom = SelectionMagnifierPlacement.Zoom;
+
+        // Nearest-neighbour scaling keeps individual desktop pixels crisp so the
+        // user can place a boundary on an exact pixel — bicubic would blur them.
+        var prevInterp = g.InterpolationMode;
+        var prevOffset = g.PixelOffsetMode;
+        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        g.PixelOffsetMode = PixelOffsetMode.Half;
+        g.DrawImage(_backdrop,
+            new Rectangle(dx, dy, size, size),
+            sx, sy, srcSize, srcSize,
+            GraphicsUnit.Pixel);
+        g.InterpolationMode = prevInterp;
+        g.PixelOffsetMode = prevOffset;
+
+        // Border in the selection's cyan so the magnifier reads as part of the
+        // overlay's affordance set.
+        using var border = new Pen(Color.FromArgb(255, 79, 195, 247), 2f);
+        g.DrawRectangle(border, dx + 1, dy + 1, size - 2, size - 2);
+
+        // Crosshair marking the active boundary point inside the magnified view.
+        // Mapping the focus through the source rectangle (rather than assuming
+        // centre) keeps the crosshair under the correct pixel when the source is
+        // clamped at a Virtual Desktop edge; the focus offset within the 50px
+        // source stays in [0,50], so the mapped position always lands inside the
+        // 200px viewport.
+        int fx = dx + (p.X - placement.SourceX) * zoom;
+        int fy = dy + (p.Y - placement.SourceY) * zoom;
+        using var shadow = new Pen(Color.FromArgb(200, 0, 0, 0), 3f);
+        using var core = new Pen(Color.FromArgb(255, 255, 255, 255), 1f);
+        g.DrawLine(shadow, fx, dy, fx, dy + size);
+        g.DrawLine(shadow, dx, fy, dx + size, fy);
+        g.DrawLine(core, fx, dy, fx, dy + size);
+        g.DrawLine(core, dx, fy, dx + size, fy);
+    }
+
     // ── Cleanup ──────────────────────────────────────────────────────
 
     private void Cleanup()
     {
+        _backdrop?.Dispose();
+        _backdrop = null;
         if (_hBitmap != IntPtr.Zero) { DeleteObject(_hBitmap); _hBitmap = IntPtr.Zero; }
         if (_bitmapDC != IntPtr.Zero) { DeleteDC(_bitmapDC); _bitmapDC = IntPtr.Zero; }
         _bits = IntPtr.Zero;
