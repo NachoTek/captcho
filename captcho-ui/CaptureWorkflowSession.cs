@@ -239,20 +239,27 @@ public sealed class PreviewPresentResult<TImage>
 public interface IWorkflowCaptureAdapter
 {
     /// <summary>
-    /// Captures the complete Virtual Desktop into a Frame.
-    /// Implementations must not throw for expected failures — surface them
-    /// through CaptureFrameResult.Fail instead.
+    /// Captures the complete Virtual Desktop into a Frame. The effective
+    /// CaptureOptions for the Full Desktop mode are composed by the workflow
+    /// session from committed defaults and session overrides, then forwarded;
+    /// only the mouse-pointer flag is applicable to a Full Desktop Frame (spec
+    /// #34). Implementations must not throw for expected failures — surface
+    /// them through CaptureFrameResult.Fail instead.
     /// </summary>
-    CaptureFrameResult CaptureFullDesktop();
+    CaptureFrameResult CaptureFullDesktop(CaptureOptions options);
 
     /// <summary>
     /// Captures the current eligible active (foreground) window into a Frame.
-    /// Implementations must not throw for expected failures — surface them
-    /// through CaptureFrameResult.Fail instead (including the "no eligible
-    /// active window" case, so the workflow can report it as CaptureFailed
-    /// without retaining stale Frame or operation state).
+    /// The effective CaptureOptions for the Active Window mode are composed by
+    /// the workflow session from committed defaults and session overrides, then
+    /// forwarded; pointer, decorations, and shadow are each applicable to a
+    /// window Capture (spec #34). Implementations must not throw for expected
+    /// failures — surface them through CaptureFrameResult.Fail instead
+    /// (including the "no eligible active window" case, so the workflow can
+    /// report it as CaptureFailed without retaining stale Frame or operation
+    /// state).
     /// </summary>
-    CaptureFrameResult CaptureActiveWindow();
+    CaptureFrameResult CaptureActiveWindow(CaptureOptions options);
 
     /// <summary>
     /// Captures a rectangular Selection of the Virtual Desktop into a Frame.
@@ -535,6 +542,13 @@ public sealed class CaptureWorkflowSession<TImage>
     private readonly IMonitorPickerOverlayAdapter _monitorPickerOverlay;
     private readonly IWindowPickerOverlayAdapter _windowPickerOverlay;
 
+    // Workflow-side Capture-options override holder. Composed committed defaults
+    // with per-Capture-Mode session overrides to produce the effective options
+    // each route forwards to the capture adapter (spec #34/#35). Held as a
+    // shared instance so the interactive overlays can apply per-mode overrides
+    // through the same object the workflow reads.
+    private readonly SessionCaptureOptions _captureOptions;
+
     // Operation-state guard. 0 = idle, non-zero = an operation is in flight.
     // Manipulated only through Interlocked so concurrent Triggers are rejected
     // without locks. The WinUI layer maintains its own fast-path guard
@@ -557,11 +571,21 @@ public sealed class CaptureWorkflowSession<TImage>
     public ContiguousBitmap? LastFrame => _lastFrame;
 
     /// <summary>
-    /// Creates a workflow session bound to the supplied platform adapters.
-    /// The Selection, Selected Monitor, and Selected Window overlay adapters
-    /// are required even for routes that do not use them (Full Desktop, Active
-    /// Window), so production wires every platform adapter exactly once at
-    /// construction and tests inject fakes uniformly.
+    /// The workflow's Capture-options override holder. Committed defaults are
+    /// read from the AppSettings the holder was constructed from; per-Capture-Mode
+    /// overrides applied through this object take precedence for the session.
+    /// Exposed so the interactive overlays (Target Selection) can apply session
+    /// overrides through the same instance the workflow reads (spec #35).
+    /// </summary>
+    public SessionCaptureOptions SessionOptions => _captureOptions;
+
+    /// <summary>
+    /// Creates a workflow session bound to the supplied platform adapters and a
+    /// fresh Capture-options holder over <see cref="AppSettings.WithDefaults"/>.
+    /// Equivalent to the six-argument constructor with
+    /// <c>new SessionCaptureOptions(AppSettings.WithDefaults())</c> — kept for
+    /// callers and tests that do not supply a committed AppSettings. Production
+    /// wires the real committed AppSettings through the six-argument constructor.
     /// </summary>
     public CaptureWorkflowSession(
         IWorkflowCaptureAdapter capture,
@@ -569,34 +593,62 @@ public sealed class CaptureWorkflowSession<TImage>
         ISelectionOverlayAdapter selectionOverlay,
         IMonitorPickerOverlayAdapter monitorPickerOverlay,
         IWindowPickerOverlayAdapter windowPickerOverlay)
+        : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
+               new SessionCaptureOptions(AppSettings.WithDefaults()))
+    {
+    }
+
+    /// <summary>
+    /// Creates a workflow session bound to the supplied platform adapters and
+    /// Capture-options holder. The Selection, Selected Monitor, and Selected
+    /// Window overlay adapters are required even for routes that do not use
+    /// them (Full Desktop, Active Window), so production wires every platform
+    /// adapter exactly once at construction and tests inject fakes uniformly.
+    /// <paramref name="captureOptions"/> is retained as the shared override
+    /// holder so the interactive overlays can apply per-mode overrides through
+    /// the same instance.
+    /// </summary>
+    public CaptureWorkflowSession(
+        IWorkflowCaptureAdapter capture,
+        IPreviewAdapter<TImage> preview,
+        ISelectionOverlayAdapter selectionOverlay,
+        IMonitorPickerOverlayAdapter monitorPickerOverlay,
+        IWindowPickerOverlayAdapter windowPickerOverlay,
+        SessionCaptureOptions captureOptions)
     {
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
         _preview = preview ?? throw new ArgumentNullException(nameof(preview));
         _selectionOverlay = selectionOverlay ?? throw new ArgumentNullException(nameof(selectionOverlay));
         _monitorPickerOverlay = monitorPickerOverlay ?? throw new ArgumentNullException(nameof(monitorPickerOverlay));
         _windowPickerOverlay = windowPickerOverlay ?? throw new ArgumentNullException(nameof(windowPickerOverlay));
+        _captureOptions = captureOptions ?? throw new ArgumentNullException(nameof(captureOptions));
     }
 
     /// <summary>
-    /// Routes a Full Desktop Trigger through the production workflow: performs
-    /// the real Capture, owns the resulting Frame, drives the preview
-    /// transition, and exposes operation-in-progress and failure outcomes
-    /// consistently. Never throws for expected failures.
+    /// Routes a Full Desktop Trigger through the production workflow: composes
+    /// the effective CaptureOptions (committed defaults overlaid with any
+    /// session override for Full Desktop), performs the real Capture, owns the
+    /// resulting Frame, drives the preview transition, and exposes
+    /// operation-in-progress and failure outcomes consistently. Only the
+    /// mouse-pointer flag is applicable to a Full Desktop Frame (spec #34).
+    /// Never throws for expected failures.
     /// </summary>
     public Task<WorkflowResult<TImage>> CaptureFullDesktopAsync() =>
-        RouteCaptureAsync(FullDesktopMode, _capture.CaptureFullDesktop);
+        RouteCaptureAsync(FullDesktopMode, CaptureMode.FullDesktop, _capture.CaptureFullDesktop);
 
     /// <summary>
     /// Routes an Active Window Trigger through the same production workflow as
-    /// Full Desktop: captures the current eligible active window, owns the
-    /// resulting Frame, drives the preview transition, and exposes
-    /// operation-in-progress and failure outcomes consistently. An unavailable
-    /// target (no eligible active window) is surfaced by the capture adapter as
-    /// a CaptureFailed outcome, so no stale Frame or operation state is
-    /// retained. Never throws for expected failures.
+    /// Full Desktop: composes the effective CaptureOptions (committed defaults
+    /// overlaid with any session override for Active Window — pointer,
+    /// decorations, and shadow are each applicable), captures the current
+    /// eligible active window, owns the resulting Frame, drives the preview
+    /// transition, and exposes operation-in-progress and failure outcomes
+    /// consistently. An unavailable target (no eligible active window) is
+    /// surfaced by the capture adapter as a CaptureFailed outcome, so no stale
+    /// Frame or operation state is retained. Never throws for expected failures.
     /// </summary>
     public Task<WorkflowResult<TImage>> CaptureActiveWindowAsync() =>
-        RouteCaptureAsync(ActiveWindowMode, _capture.CaptureActiveWindow);
+        RouteCaptureAsync(ActiveWindowMode, CaptureMode.ActiveWindow, _capture.CaptureActiveWindow);
 
     /// <summary>
     /// Routes a Selection Trigger through the production workflow. The
@@ -788,9 +840,14 @@ public sealed class CaptureWorkflowSession<TImage>
             // A confirmed window is captured by handle; an empty-desktop click
             // routes to Full Desktop (including the taskbar). The route label
             // stays "Selected Window" in both cases — the user invoked this
-            // route, and the fallback is an internal capture-path detail.
+            // route, and the fallback is an internal capture-path detail. The
+            // fallback is a Full-Desktop-content capture, so it composes the
+            // Full Desktop effective options (only the pointer flag is
+            // applicable; spec #34 — Selected Window's own options threading is
+            // a separate slice).
+            var fullDesktopOptions = _captureOptions.EffectiveFor(CaptureMode.FullDesktop);
             var captureResult = result.Outcome == WindowPickerOutcome.EmptyDesktopFallback
-                ? await RunOffThread(() => _capture.CaptureFullDesktop())
+                ? await RunOffThread(() => _capture.CaptureFullDesktop(fullDesktopOptions))
                 : await RunOffThread(() => _capture.CaptureWindow(result.Target!));
 
             if (!captureResult.Success)
@@ -832,13 +889,13 @@ public sealed class CaptureWorkflowSession<TImage>
 
     /// <summary>
     /// Shared Capture Mode routing for an immediate-capture Trigger (no Target
-    /// Selection). Owns the operation guard, Capture, Frame ownership, and the
-    /// preview transition. Both Full Desktop and Active Window route through
-    /// this so their behavior — and their test coverage — stays symmetric at
-    /// the seam.
+    /// Selection). Owns the operation guard, effective-CaptureOptions
+    /// composition, Capture, Frame ownership, and the preview transition. Both
+    /// Full Desktop and Active Window route through this so their behavior —
+    /// and their test coverage — stays symmetric at the seam.
     /// </summary>
     private async Task<WorkflowResult<TImage>> RouteCaptureAsync(
-        string mode, Func<CaptureFrameResult> captureFunc)
+        string mode, CaptureMode captureMode, Func<CaptureOptions, CaptureFrameResult> captureFunc)
     {
         if (!TryBeginOperation())
         {
@@ -846,13 +903,21 @@ public sealed class CaptureWorkflowSession<TImage>
                 error: "A capture is already in progress.");
         }
 
+        // Compose the effective CaptureOptions for this mode once — committed
+        // defaults overlaid with any session override the user applied through
+        // the SessionCaptureOptions holder (spec #34/#35). The same resolved
+        // value reaches the capture adapter and, through it, the managed/native
+        // contract, so the workflow never offers one combination and captures
+        // another.
+        var options = _captureOptions.EffectiveFor(captureMode);
+
         var totalSw = Stopwatch.StartNew();
         try
         {
             // Capture runs on the thread pool — the adapter may block on native
             // pixel acquisition. The session's caller (the UI thread, in
             // production) is freed for the duration.
-            var captureResult = await RunOffThread(captureFunc);
+            var captureResult = await RunOffThread(() => captureFunc(options));
             if (!captureResult.Success)
             {
                 return WorkflowResultFor(mode, WorkflowStatus.CaptureFailed,

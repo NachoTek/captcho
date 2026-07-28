@@ -33,6 +33,14 @@ public sealed partial class SettingsWindow : Window
     /// </summary>
     private readonly Dictionary<int, TextBlock> _globalHotkeyStatusCells = new();
 
+    /// <summary>
+    /// Guards the Capture-tab toggle handlers while <see cref="ApplyView"/> is
+    /// programmatically setting toggle state, so reflecting a new view (Reset,
+    /// Cancel, or the decoration/shadow dependency reconciliation) does not
+    /// re-enter the session through the Toggled events.
+    /// </summary>
+    private bool _applyingView;
+
     private const string WindowPlacementKey = "SettingsWindowPlacement";
 
     /// <summary>
@@ -77,6 +85,10 @@ public sealed partial class SettingsWindow : Window
         // session (an idempotent re-set of the same working value) and rebinds.
         SaveLocationInput.Text = view.SaveLocation;
         FilenameTemplateInput.Text = view.FilenameTemplate;
+
+        // Capture-tab toggles are bound from the view inside ApplyView (the
+        // single source of truth for capture-toggle state, including the
+        // decoration/shadow dependency).
 
         RebuildGlobalHotkeyRows(view.GlobalHotkeyRows);
         ApplyView(view);
@@ -151,6 +163,47 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
+    // ── Capture tab event routing ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Routes a mouse-pointer toggle change into the session and rebinds. Suppressed
+    /// while <see cref="ApplyView"/> is programmatically setting toggle state so the
+    /// rebind does not re-enter the session.
+    /// </summary>
+    private void CapturePointerToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_applyingView)
+            return;
+        var view = _session.EditCaptureIncludePointer(CapturePointerToggle.IsOn);
+        ApplyView(view);
+    }
+
+    /// <summary>
+    /// Routes a window-decorations toggle change into the session and rebinds. The
+    /// session reconciles the decoration/shadow dependency immediately, so the
+    /// returned view carries shadow=off when decorations are turned off; ApplyView
+    /// reflects that by disabling and clearing the shadow toggle.
+    /// </summary>
+    private void CaptureDecorationsToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_applyingView)
+            return;
+        var view = _session.EditCaptureIncludeDecorations(CaptureDecorationsToggle.IsOn);
+        ApplyView(view);
+    }
+
+    /// <summary>
+    /// Routes a window-shadow toggle change into the session and rebinds. Suppressed
+    /// while <see cref="ApplyView"/> is programmatically setting toggle state.
+    /// </summary>
+    private void CaptureShadowToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_applyingView)
+            return;
+        var view = _session.EditCaptureIncludeShadow(CaptureShadowToggle.IsOn);
+        ApplyView(view);
+    }
+
     // ── Command buttons ─────────────────────────────────────────────────
 
     /// <summary>
@@ -197,6 +250,7 @@ public sealed partial class SettingsWindow : Window
         // folder-picker outcome.
         SaveLocationInput.Text = view.SaveLocation;
         FilenameTemplateInput.Text = view.FilenameTemplate;
+        // Capture toggles are reflected from the reset view inside ApplyView.
         RebuildGlobalHotkeyRows(view.GlobalHotkeyRows);
         ApplyView(view);
     }
@@ -216,12 +270,37 @@ public sealed partial class SettingsWindow : Window
     // ── Rebinding ───────────────────────────────────────────────────────
 
     /// <summary>
-    /// Reflects a view's preview, inline errors, button gating, and status into the
-    /// controls. Each inline error is shown only for its own field. Does not touch input
-    /// Text (owned by the user/program) or Global Hotkey rows (rebuilt explicitly).
+    /// Reflects a view's preview, inline errors, button gating, capture-tab toggle
+    /// state, and status into the controls. Each inline error is shown only for its
+    /// own field. Does not touch input Text (owned by the user/program) or Global
+    /// Hotkey rows (rebuilt explicitly). The Capture toggles are updated under the
+    /// <see cref="_applyingView"/> guard so the programmatic IsOn/IsEnabled changes
+    /// do not re-enter the session through the Toggled handlers.
     /// </summary>
     private void ApplyView(SettingsView view)
     {
+        _applyingView = true;
+        try
+        {
+            // Reflect the working Capture-options values. All three toggles are
+            // driven from the view so Reset/Cancel/decoration-dependency changes
+            // all rebnd through this single site. The decoration/shadow
+            // dependency (spec #30) is enforced by the session; the view already
+            // carries shadow=off when decorations are off, so IsOn follows it
+            // and IsEnabled explains why the control is unavailable.
+            CapturePointerToggle.IsOn = view.Capture.IncludePointer;
+            CaptureDecorationsToggle.IsOn = view.Capture.IncludeDecorations;
+            CaptureShadowToggle.IsOn = view.Capture.IncludeShadow;
+            CaptureShadowToggle.IsEnabled = view.Capture.IncludeDecorations;
+            CaptureShadowNoteText.Visibility = view.Capture.IncludeDecorations
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+        }
+        finally
+        {
+            _applyingView = false;
+        }
+
         FilenameTemplatePreviewText.Text = string.IsNullOrEmpty(view.FilenameTemplatePreview)
             ? "—"
             : view.FilenameTemplatePreview;

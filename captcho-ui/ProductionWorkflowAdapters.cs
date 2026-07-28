@@ -28,20 +28,31 @@ public sealed class WindowsCaptureAdapter : IWorkflowCaptureAdapter
     /// <summary>
     /// Captures the complete Virtual Desktop and returns a CaptureFrameResult
     /// carrying the Frame and dimensions on success or a user-visible error
-    /// on failure. Never throws for expected failures.
+    /// on failure. The effective CaptureOptions are composed by the workflow
+    /// session; only the mouse-pointer flag is applicable to a Full Desktop
+    /// Frame and is forwarded into the managed/native contract (spec #34).
+    /// Never throws for expected failures.
     /// </summary>
-    public CaptureFrameResult CaptureFullDesktop() =>
-        Capture("Full Desktop", SafeCaptureResult.CaptureAllMonitors);
+    public CaptureFrameResult CaptureFullDesktop(CaptureOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return Capture("Full Desktop", () => SafeCaptureResult.CaptureAllMonitors(options));
+    }
 
     /// <summary>
     /// Captures the current eligible active (foreground) window and returns a
     /// CaptureFrameResult carrying the Frame and dimensions on success or a
     /// user-visible error on failure — including the "no eligible active
-    /// window" case, which the native engine surfaces as a failed status.
-    /// Never throws for expected failures.
+    /// window" case, which the native engine surfaces as a failed status. The
+    /// effective CaptureOptions are composed by the workflow session; pointer,
+    /// decorations, and shadow are each applicable and forwarded into the
+    /// managed/native contract (spec #34). Never throws for expected failures.
     /// </summary>
-    public CaptureFrameResult CaptureActiveWindow() =>
-        Capture("Active Window", SafeCaptureResult.CaptureActiveWindow);
+    public CaptureFrameResult CaptureActiveWindow(CaptureOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return Capture("Active Window", () => SafeCaptureResult.CaptureActiveWindow(options));
+    }
 
     /// <summary>
     /// Captures a rectangular Selection of the Virtual Desktop and returns a

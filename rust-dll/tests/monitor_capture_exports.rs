@@ -26,7 +26,9 @@ fn captcho_capture_monitor_by_index_exists() {
 
 #[test]
 fn captcho_capture_all_monitors_exists() {
-    let _fn_ptr: extern "C" fn() -> CaptureResult =
+    // Full Desktop carries the mouse-pointer flag across the FFI contract
+    // (spec #34) — the only Capture option applicable to a Full Desktop Frame.
+    let _fn_ptr: extern "C" fn(i32) -> CaptureResult =
         captcho_capture_all_monitors;
 }
 
@@ -82,7 +84,8 @@ fn monitor_by_index_error_has_no_frame_data() {
 fn capture_all_monitors_error_has_sane_metadata() {
     // Even if WGC is unavailable, the function should return a proper CaptureResult
     // We can't guarantee success/failure in CI, but we can check structure.
-    let result = captcho_capture_all_monitors();
+    // Cursor excluded (0) preserves prior behavior; only the signature changed (spec #34).
+    let result = captcho_capture_all_monitors(0);
 
     if result.status != CaptureStatus::Ok {
         assert!(result.frame_data.is_null());

@@ -83,9 +83,13 @@ public static class NativeMethods
 
     /// <summary>
     /// Capture a single frame of the full virtual desktop (all monitors stitched).
+    /// The mouse-pointer flag is the only applicable Capture option for a Full
+    /// Desktop Frame (there is no single window to decorate or shadow), so it is
+    /// the sole Capture-option flag carried across this contract (spec #34).
     /// </summary>
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-    public static extern NativeCaptureResult captcho_capture_all_monitors();
+    public static extern NativeCaptureResult captcho_capture_all_monitors(
+        [MarshalAs(UnmanagedType.Bool)] bool includeCursor);
 
     /// <summary>
     /// Capture a single frame from the monitor at the given 0-based index.
@@ -98,9 +102,16 @@ public static class NativeMethods
 
     /// <summary>
     /// Capture a single frame from the currently active (foreground) window.
+    /// All three Capture-option flags are applicable to a window Capture, so
+    /// pointer, decorations, and shadow are each carried across this contract
+    /// (spec #34). Each flag marshals as a 4-byte BOOL matching the Rust i32
+    /// contract.
     /// </summary>
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-    public static extern NativeCaptureResult captcho_capture_active_window();
+    public static extern NativeCaptureResult captcho_capture_active_window(
+        [MarshalAs(UnmanagedType.Bool)] bool includeCursor,
+        [MarshalAs(UnmanagedType.Bool)] bool includeDecorations,
+        [MarshalAs(UnmanagedType.Bool)] bool includeShadow);
 
     /// <summary>
     /// Capture a single frame from the top-level window under the mouse cursor.
@@ -328,13 +339,27 @@ public sealed class SafeCaptureResult : IDisposable
 
     /// <summary>
     /// Captures a single frame of the full virtual desktop — all monitors stitched (S02).
+    /// Preserves today's defaults (mouse pointer excluded) for callers that do not
+    /// participate in the workflow's Capture-options composition (CLI, cs-tester).
     /// </summary>
     public static SafeCaptureResult CaptureAllMonitors()
+        => CaptureAllMonitors(CaptureOptions.WithDefaults());
+
+    /// <summary>
+    /// Captures a single frame of the full virtual desktop, composing the
+    /// applicable Capture-option flag (mouse pointer) into the managed/native
+    /// contract (spec #34). Decorations and shadow are not applicable to a Full
+    /// Desktop Frame and are not forwarded. This is the workflow-facing entry
+    /// point.
+    /// </summary>
+    public static SafeCaptureResult CaptureAllMonitors(CaptureOptions options)
     {
+        ArgumentNullException.ThrowIfNull(options);
+        var normalized = options.Normalized();
         NativeCaptureResult native;
         try
         {
-            native = NativeMethods.captcho_capture_all_monitors();
+            native = NativeMethods.captcho_capture_all_monitors(normalized.IncludePointer);
         }
         catch (DllNotFoundException ex)
         {
@@ -376,14 +401,32 @@ public sealed class SafeCaptureResult : IDisposable
 
     /// <summary>
     /// Captures a single frame from the currently active (foreground) window.
-    /// Handles DllNotFoundException and EntryPointNotFoundException gracefully.
+    /// Preserves today's defaults (pointer excluded, decorations and shadow
+    /// included) for callers that do not participate in the workflow's
+    /// Capture-options composition (CLI, cs-tester). Handles DllNotFoundException
+    /// and EntryPointNotFoundException gracefully.
     /// </summary>
     public static SafeCaptureResult CaptureActiveWindow()
+        => CaptureActiveWindow(CaptureOptions.WithDefaults());
+
+    /// <summary>
+    /// Captures a single frame from the currently active (foreground) window,
+    /// composing all three applicable Capture-option flags (pointer, decorations,
+    /// shadow) into the managed/native contract (spec #34). This is the
+    /// workflow-facing entry point. Handles DllNotFoundException and
+    /// EntryPointNotFoundException gracefully.
+    /// </summary>
+    public static SafeCaptureResult CaptureActiveWindow(CaptureOptions options)
     {
+        ArgumentNullException.ThrowIfNull(options);
+        var normalized = options.Normalized();
         NativeCaptureResult native;
         try
         {
-            native = NativeMethods.captcho_capture_active_window();
+            native = NativeMethods.captcho_capture_active_window(
+                normalized.IncludePointer,
+                normalized.IncludeDecorations,
+                normalized.IncludeShadow);
         }
         catch (DllNotFoundException ex)
         {

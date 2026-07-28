@@ -98,6 +98,43 @@ Layout:
                 </ScrollViewer>
             </TabViewItem>
 
+            <TabViewItem Header="Capture">
+                <ScrollViewer Padding="20" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="Capture Options"
+                                   FontSize="16" FontWeight="SemiBold"
+                                   AutomationProperties.HeadingLevel="Level1"/>
+                        <TextBlock TextWrapping="Wrap"
+                                   FontSize="13"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   Text="Persistent defaults for what each Capture includes. The mouse pointer applies to every mode; window decorations and shadow apply to window Captures only. Window shadow is available only when window decorations are included."/>
+                        <ToggleSwitch x:Name="CapturePointerToggle"
+                                      Header="Include mouse pointer"
+                                      OnContent="On"
+                                      OffContent="Off"
+                                      Toggled="CapturePointerToggle_Toggled"
+                                      MinWidth="200"/>
+                        <ToggleSwitch x:Name="CaptureDecorationsToggle"
+                                      Header="Include window decorations"
+                                      OnContent="On"
+                                      OffContent="Off"
+                                      Toggled="CaptureDecorationsToggle_Toggled"
+                                      MinWidth="200"/>
+                        <ToggleSwitch x:Name="CaptureShadowToggle"
+                                      Header="Include window shadow"
+                                      OnContent="On"
+                                      OffContent="Off"
+                                      Toggled="CaptureShadowToggle_Toggled"
+                                      MinWidth="200"/>
+                        <TextBlock x:Name="CaptureShadowNoteText"
+                                   FontSize="12"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   Text="Window shadow requires window decorations."/>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabViewItem>
+
             <TabViewItem Header="Export">
                 <ScrollViewer Padding="20" VerticalScrollBarVisibility="Auto">
                     <StackPanel Spacing="12">

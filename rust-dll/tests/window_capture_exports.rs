@@ -19,7 +19,10 @@ use captcho_capture::*;
 
 #[test]
 fn captcho_capture_active_window_exists_with_correct_signature() {
-    let _fn_ptr: extern "C" fn() -> CaptureResult = captcho_capture_active_window;
+    // Active Window carries the three Capture-option flags across the FFI
+    // contract (spec #34): pointer, decorations, and shadow are each applicable
+    // to a window Capture and each marshalled as a 4-byte i32 (C# bool).
+    let _fn_ptr: extern "C" fn(i32, i32, i32) -> CaptureResult = captcho_capture_active_window;
 }
 
 #[test]
@@ -111,7 +114,9 @@ fn capture_window_by_handle_max_u64_returns_error() {
 
 #[test]
 fn capture_active_window_returns_valid_structure() {
-    let result = captcho_capture_active_window();
+    // Defaults (cursor off, decorations/shadow on) preserve prior behavior;
+    // only the FFI signature changed (spec #34).
+    let result = captcho_capture_active_window(0, 1, 1);
     if result.status == CaptureStatus::Ok {
         // WGC available — validate frame invariants
         assert!(!result.frame_data.is_null());
@@ -220,7 +225,8 @@ fn double_free_error_from_window_capture_is_safe() {
 fn existing_monitor_exports_still_exist() {
     let _fn_ptr: extern "C" fn() -> CaptureResult = captcho_capture_frame;
     let _fn_ptr: extern "C" fn(u32) -> CaptureResult = captcho_capture_monitor_by_index;
-    let _fn_ptr: extern "C" fn() -> CaptureResult = captcho_capture_all_monitors;
+    // captcho_capture_all_monitors now carries the mouse-pointer flag (spec #34).
+    let _fn_ptr: extern "C" fn(i32) -> CaptureResult = captcho_capture_all_monitors;
 }
 
 #[test]

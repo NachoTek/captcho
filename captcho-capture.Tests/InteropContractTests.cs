@@ -115,11 +115,17 @@ public class InteropContractTests
     [Fact]
     public void NativeMethods_CaptureAllMonitors_ReturnsNativeCaptureResult()
     {
+        // Full Desktop carries only the mouse-pointer flag across the FFI contract
+        // (spec #34): a Full Desktop Frame has no single window to decorate or
+        // shadow, so decorations/shadow are not applicable and not carried here.
         var method = typeof(NativeMethods).GetMethod("captcho_capture_all_monitors",
             BindingFlags.Public | BindingFlags.Static);
         Assert.NotNull(method);
         Assert.Equal(typeof(NativeCaptureResult), method!.ReturnType);
-        Assert.Empty(method.GetParameters());
+
+        var parameters = method!.GetParameters();
+        Assert.Single(parameters);
+        Assert.Equal(typeof(bool), parameters[0].ParameterType);
     }
 
     [Fact]
@@ -133,6 +139,40 @@ public class InteropContractTests
         var parameters = method!.GetParameters();
         Assert.Single(parameters);
         Assert.Equal(typeof(uint), parameters[0].ParameterType);
+    }
+
+    [Fact]
+    public void NativeMethods_CaptureActiveWindow_TakesThreeBoolFlags_ReturnsNativeCaptureResult()
+    {
+        // Active Window carries all three Capture-option flags across the FFI
+        // contract (spec #34): pointer, decorations, and shadow are each
+        // applicable to a window Capture.
+        var method = typeof(NativeMethods).GetMethod("captcho_capture_active_window",
+            BindingFlags.Public | BindingFlags.Static);
+        Assert.NotNull(method);
+        Assert.Equal(typeof(NativeCaptureResult), method!.ReturnType);
+
+        var parameters = method!.GetParameters();
+        Assert.Equal(3, parameters.Length);
+        Assert.All(parameters, p => Assert.Equal(typeof(bool), p.ParameterType));
+    }
+
+    [Fact]
+    public void SafeCaptureResult_CaptureAllMonitors_WithOptionsOverload_Exists()
+    {
+        // The workflow-facing Full Desktop entry point (spec #34): composes the
+        // effective CaptureOptions and threads the applicable flag (pointer)
+        // through the managed/native contract into the Rust capture engine. The
+        // parameterless factory is retained alongside it for the CLI/cs-tester
+        // paths that do not participate in Capture-options composition.
+        var overloads = typeof(SafeCaptureResult)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Where(m => m.Name == nameof(SafeCaptureResult.CaptureAllMonitors))
+            .ToList();
+        Assert.Contains(overloads, m => m.GetParameters().Length == 0);
+        Assert.Contains(overloads, m =>
+            m.GetParameters().Length == 1
+            && m.GetParameters()[0].ParameterType == typeof(CaptureOptions));
     }
 
     // ── SafeCaptureResult Validation Tests (via synthetic constructor) ───

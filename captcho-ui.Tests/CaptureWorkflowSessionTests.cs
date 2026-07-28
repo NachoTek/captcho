@@ -32,9 +32,11 @@ internal sealed class FakeCaptureAdapter : IWorkflowCaptureAdapter
 {
     public int CallCount { get; private set; }
     public CaptureFrameResult? NextResult { get; set; }
+    public CaptureOptions? LastFullDesktopOptions { get; private set; }
 
     public int ActiveWindowCallCount { get; private set; }
     public CaptureFrameResult? NextActiveWindowResult { get; set; }
+    public CaptureOptions? LastActiveWindowOptions { get; private set; }
 
     public int SelectionCallCount { get; private set; }
     public CaptureFrameResult? NextSelectionResult { get; set; }
@@ -48,15 +50,17 @@ internal sealed class FakeCaptureAdapter : IWorkflowCaptureAdapter
     public CaptureFrameResult? NextWindowResult { get; set; }
     public WindowTarget? LastWindowTarget { get; private set; }
 
-    public CaptureFrameResult CaptureFullDesktop()
+    public CaptureFrameResult CaptureFullDesktop(CaptureOptions options)
     {
         CallCount++;
+        LastFullDesktopOptions = options;
         return NextResult ?? CaptureFrameResult.Fail("FakeCaptureAdapter: NextResult not configured.");
     }
 
-    public CaptureFrameResult CaptureActiveWindow()
+    public CaptureFrameResult CaptureActiveWindow(CaptureOptions options)
     {
         ActiveWindowCallCount++;
+        LastActiveWindowOptions = options;
         return NextActiveWindowResult ?? CaptureFrameResult.Fail("FakeCaptureAdapter: NextActiveWindowResult not configured.");
     }
 
@@ -158,18 +162,18 @@ internal sealed class SlowGateCaptureAdapter : IWorkflowCaptureAdapter
         _inner = inner;
     }
 
-    public CaptureFrameResult CaptureFullDesktop()
+    public CaptureFrameResult CaptureFullDesktop(CaptureOptions options)
     {
         _started.TrySetResult(true);
         _release.Task.Wait();
-        return _inner.CaptureFullDesktop();
+        return _inner.CaptureFullDesktop(options);
     }
 
-    public CaptureFrameResult CaptureActiveWindow()
+    public CaptureFrameResult CaptureActiveWindow(CaptureOptions options)
     {
         _started.TrySetResult(true);
         _release.Task.Wait();
-        return _inner.CaptureActiveWindow();
+        return _inner.CaptureActiveWindow(options);
     }
 
     public CaptureFrameResult CaptureSelection(SelectionGeometry geometry)
@@ -2665,5 +2669,204 @@ public class CaptureWorkflowSessionSelectedWindowCrossRouteGuardTests
         Assert.Equal(WorkflowStatus.Succeeded, second.Status);
         Assert.Equal(1, capture.WindowCallCount);
         Assert.Equal(1, capture.CallCount);
+    }
+}
+
+// ── Capture-options composition tests (spec #34) ──────────────────────────
+
+/// <summary>
+/// Tests that the workflow session composes effective CaptureOptions (committed
+/// defaults overlaid with session overrides) per Capture Mode and forwards them
+/// to the capture adapter on the two immediate routes. The fake adapter records
+/// the options it received so the tests assert externally observable behavior
+/// (the value that crossed the seam) rather than private session state.
+/// </summary>
+public class CaptureWorkflowSessionCaptureOptionsTests
+{
+    private static ContiguousBitmap TestFrame() =>
+        ExportTestHelpers.CreateTestBitmap(8, 4);
+
+    private static FakeCaptureAdapter SuccessCapture() => new()
+    {
+        NextResult = CaptureFrameResult.Ok(TestFrame(), "8×4", 1.0),
+        NextActiveWindowResult = CaptureFrameResult.Ok(TestFrame(), "8×4", 1.0),
+    };
+
+    private static FakePreviewAdapter SuccessPreview() => new()
+    {
+        NextResult = PreviewPresentResult<object>.Ok(new object(), 1.0),
+    };
+
+    private static (CaptureWorkflowSession<object> session, SessionCaptureOptions options, FakeCaptureAdapter capture)
+        NewSession(AppSettings committed, FakeWindowPickerOverlayAdapter? windowPicker = null)
+    {
+        var capture = SuccessCapture();
+        var options = new SessionCaptureOptions(committed);
+        var session = new CaptureWorkflowSession<object>(
+            capture, SuccessPreview(),
+            new FakeSelectionOverlayAdapter(),
+            new FakeMonitorPickerOverlayAdapter(),
+            windowPicker ?? new FakeWindowPickerOverlayAdapter(),
+            options);
+        return (session, options, capture);
+    }
+
+    [Fact]
+    public async Task CaptureFullDesktopAsync_ForwardsCommittedDefaultsToAdapter()
+    {
+        // The effective options for Full Desktop are the committed defaults
+        // (normalized). The workflow forwards the full resolved set; the native
+        // engine consumes only the pointer flag, which is the one applicable to
+        // a Full Desktop Frame (spec #34).
+        var committed = new AppSettings
+        {
+            CaptureOptions = new CaptureOptions(
+                IncludePointer: true, IncludeDecorations: false, IncludeShadow: false),
+        };
+        var (session, _, capture) = NewSession(committed);
+
+        await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(1, capture.CallCount);
+        Assert.NotNull(capture.LastFullDesktopOptions);
+        Assert.Equal(committed.CaptureOptions.Normalized(), capture.LastFullDesktopOptions);
+    }
+
+    [Fact]
+    public async Task CaptureActiveWindowAsync_ForwardsCommittedDefaultsToAdapter()
+    {
+        // Active Window's effective options are the committed defaults. All
+        // three flags are applicable to a window Capture and are forwarded
+        // (spec #34).
+        var committed = new AppSettings
+        {
+            CaptureOptions = new CaptureOptions(
+                IncludePointer: false, IncludeDecorations: false, IncludeShadow: false),
+        };
+        var (session, _, capture) = NewSession(committed);
+
+        await session.CaptureActiveWindowAsync();
+
+        Assert.Equal(1, capture.ActiveWindowCallCount);
+        Assert.NotNull(capture.LastActiveWindowOptions);
+        Assert.Equal(committed.CaptureOptions.Normalized(), capture.LastActiveWindowOptions);
+    }
+
+    [Fact]
+    public async Task CaptureFullDesktopAsync_SessionPointerOverride_TakesPrecedence()
+    {
+        // A session override for Full Desktop's pointer flag takes precedence
+        // over the committed default and is observable in the forwarded options.
+        var committed = AppSettings.WithDefaults(); // pointer off by default
+        var (session, options, capture) = NewSession(committed);
+        options.OverrideIncludePointer(CaptureMode.FullDesktop, true);
+
+        await session.CaptureFullDesktopAsync();
+
+        Assert.True(capture.LastFullDesktopOptions!.IncludePointer);
+    }
+
+    [Fact]
+    public async Task CaptureActiveWindowAsync_SessionPointerOverride_TakesPrecedence()
+    {
+        var committed = AppSettings.WithDefaults(); // pointer off by default
+        var (session, options, capture) = NewSession(committed);
+        options.OverrideIncludePointer(CaptureMode.ActiveWindow, true);
+
+        await session.CaptureActiveWindowAsync();
+
+        Assert.True(capture.LastActiveWindowOptions!.IncludePointer);
+    }
+
+    [Fact]
+    public async Task CaptureActiveWindowAsync_OverrideDecorationsOff_ReconcilesShadowInForwardedOptions()
+    {
+        // The decoration/shadow dependency (spec #30) holds for the forwarded
+        // options: overriding decorations off forces shadow off before the
+        // options reach the adapter.
+        var committed = AppSettings.WithDefaults(); // decorations on, shadow on
+        var (session, options, capture) = NewSession(committed);
+        options.OverrideIncludeDecorations(CaptureMode.ActiveWindow, false);
+
+        await session.CaptureActiveWindowAsync();
+
+        Assert.False(capture.LastActiveWindowOptions!.IncludeDecorations);
+        Assert.False(capture.LastActiveWindowOptions!.IncludeShadow);
+    }
+
+    [Fact]
+    public async Task CaptureActiveWindowAsync_FullDesktopPointerOverride_DoesNotLeak()
+    {
+        // A Full Desktop override must not leak into the Active Window route —
+        // overrides are scoped to the mode they were applied to (spec #35 AC #4).
+        var committed = AppSettings.WithDefaults(); // pointer off
+        var (session, options, capture) = NewSession(committed);
+        options.OverrideIncludePointer(CaptureMode.FullDesktop, true);
+
+        await session.CaptureActiveWindowAsync();
+
+        Assert.False(capture.LastActiveWindowOptions!.IncludePointer);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_EmptyDesktopFallback_ForwardsFullDesktopEffectiveOptions()
+    {
+        // The Selected Window empty-desktop fallback captures Full-Desktop
+        // content, so it composes the Full Desktop effective options (only the
+        // pointer flag is applicable). A Full Desktop pointer override is
+        // observable in the fallback's forwarded options (spec #34).
+        var committed = AppSettings.WithDefaults();
+        var picker = new FakeWindowPickerOverlayAdapter
+        {
+            NextResult = new WindowPickerResult
+            {
+                Outcome = WindowPickerOutcome.EmptyDesktopFallback,
+            },
+        };
+        var (session, options, capture) = NewSession(committed, picker);
+        options.OverrideIncludePointer(CaptureMode.FullDesktop, true);
+
+        await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(1, capture.CallCount);
+        Assert.Equal(0, capture.WindowCallCount);
+        Assert.True(capture.LastFullDesktopOptions!.IncludePointer);
+    }
+
+    [Fact]
+    public void ParameterlessConstructor_SessionOptionsUsesCaptureOptionsDefaults()
+    {
+        // The five-argument constructor (used when no committed AppSettings is
+        // supplied) wires a SessionCaptureOptions over CaptureOptions.WithDefaults,
+        // so a route with no overrides forwards those defaults.
+        var session = new CaptureWorkflowSession<object>(
+            SuccessCapture(), SuccessPreview(),
+            new FakeSelectionOverlayAdapter(),
+            new FakeMonitorPickerOverlayAdapter(),
+            new FakeWindowPickerOverlayAdapter());
+
+        Assert.Equal(
+            CaptureOptions.WithDefaults().Normalized(),
+            session.SessionOptions.EffectiveFor(CaptureMode.FullDesktop));
+    }
+
+    [Fact]
+    public async Task CaptureFullDesktopAsync_SessionOptionsInstance_IsSameReferenceExposed()
+    {
+        // The SessionCaptureOptions passed to the constructor is the same
+        // instance exposed via SessionOptions — so the interactive overlays can
+        // apply overrides through it and the workflow reads them on the next
+        // route (spec #35 forward path).
+        var committed = AppSettings.WithDefaults();
+        var options = new SessionCaptureOptions(committed);
+        var session = new CaptureWorkflowSession<object>(
+            SuccessCapture(), SuccessPreview(),
+            new FakeSelectionOverlayAdapter(),
+            new FakeMonitorPickerOverlayAdapter(),
+            new FakeWindowPickerOverlayAdapter(),
+            options);
+
+        Assert.Same(options, session.SessionOptions);
+        await session.CaptureFullDesktopAsync();
     }
 }

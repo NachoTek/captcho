@@ -296,13 +296,43 @@ fn validate_window_for_capture(hwnd: windows::Win32::Foundation::HWND, phase: &s
     Ok(())
 }
 
+/// Maps the mouse-pointer Capture option (spec #34) to windows-capture's
+/// `CursorCaptureSettings`. `include_cursor` is the FFI flag (nonzero = include,
+/// zero = exclude) marshalled from the C# `bool`. Shared by every monitor/window
+/// capture path so the mapping lives in one place.
+fn cursor_setting(include_cursor: i32) -> windows_capture::settings::CursorCaptureSettings {
+    use windows_capture::settings::CursorCaptureSettings;
+    if include_cursor != 0 {
+        CursorCaptureSettings::WithCursor
+    } else {
+        CursorCaptureSettings::WithoutCursor
+    }
+}
+
 /// Capture a single frame from a window using Windows Graphics Capture.
 ///
 /// `phase_label` is used in error messages to identify which phase failed.
-fn do_capture_window(window: windows_capture::window::Window, phase_label: &str) -> CaptureResult {
+///
+/// `include_cursor` realizes the mouse-pointer Capture option (spec #34):
+/// nonzero composites the cursor into the captured Frame, zero excludes it.
+///
+/// `_include_decorations` and `_include_shadow` carry the window-decoration and
+/// window-shadow Capture options across the FFI contract (spec #34) but are
+/// intentionally unused at the pixel layer in this slice: windows-capture's
+/// `Settings` expose no native window-chrome toggle, and WGC captures the window
+/// as-is (chrome included by default, matching `IncludeDecorations = true`).
+/// Client-area cropping and shadow compositing are focused follow-ups; until
+/// then the flags are accepted so the managed→native contract stays complete.
+fn do_capture_window(
+    window: windows_capture::window::Window,
+    phase_label: &str,
+    include_cursor: i32,
+    _include_decorations: i32,
+    _include_shadow: i32,
+) -> CaptureResult {
     use windows_capture::capture::GraphicsCaptureApiHandler;
     use windows_capture::settings::{
-        ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
+        ColorFormat, DirtyRegionSettings, DrawBorderSettings,
         MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
     };
 
@@ -310,10 +340,13 @@ fn do_capture_window(window: windows_capture::window::Window, phase_label: &str)
     let result_slot: Arc<Mutex<Option<Result<CapturedFrameData, String>>>> =
         Arc::new(Mutex::new(None));
 
+    // Realize the mouse-pointer option via the shared mapping (spec #34).
+    let cursor_capture = cursor_setting(include_cursor);
+
     // Build capture settings — window is converted via TryInto<GraphicsCaptureItemType>
     let settings = Settings::new(
         window,
-        CursorCaptureSettings::WithoutCursor,
+        cursor_capture,
         DrawBorderSettings::WithoutBorder,
         SecondaryWindowSettings::Default,
         MinimumUpdateIntervalSettings::Default,
@@ -404,16 +437,23 @@ fn do_capture_primary_monitor() -> CaptureResult {
         Err(e) => return CaptureResult::error(CaptureStatus::CaptureUnavailable, format!("No primary monitor found: {e}")),
     };
 
-    do_capture_monitor(primary, "primary_monitor")
+    do_capture_monitor(primary, "primary_monitor", 0)
 }
 
 /// Capture a single frame from the specified monitor using Windows Graphics Capture.
 ///
 /// `phase_label` is used in error messages to identify which phase failed.
-fn do_capture_monitor(monitor: windows_capture::monitor::Monitor, phase_label: &str) -> CaptureResult {
+///
+/// `include_cursor` realizes the mouse-pointer Capture option (spec #34):
+/// nonzero composites the cursor into the captured Frame, zero excludes it.
+fn do_capture_monitor(
+    monitor: windows_capture::monitor::Monitor,
+    phase_label: &str,
+    include_cursor: i32,
+) -> CaptureResult {
     use windows_capture::capture::GraphicsCaptureApiHandler;
     use windows_capture::settings::{
-        ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
+        ColorFormat, DirtyRegionSettings, DrawBorderSettings,
         MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
     };
 
@@ -421,10 +461,13 @@ fn do_capture_monitor(monitor: windows_capture::monitor::Monitor, phase_label: &
     let result_slot: Arc<Mutex<Option<Result<CapturedFrameData, String>>>> =
         Arc::new(Mutex::new(None));
 
+    // Realize the mouse-pointer option via the shared mapping (spec #34).
+    let cursor_capture = cursor_setting(include_cursor);
+
     // Build capture settings
     let settings = Settings::new(
         monitor,
-        CursorCaptureSettings::WithoutCursor,
+        cursor_capture,
         DrawBorderSettings::WithoutBorder,
         SecondaryWindowSettings::Default,
         MinimumUpdateIntervalSettings::Default,
@@ -713,7 +756,7 @@ fn do_capture_monitor_by_index(index: u32) -> CaptureResult {
         }
     };
 
-    do_capture_monitor(monitor, &format!("monitor[{}]", index))
+    do_capture_monitor(monitor, &format!("monitor[{}]", index), 0)
 }
 
 /// Capture a single frame of the full virtual desktop (all monitors stitched).
@@ -726,9 +769,9 @@ fn do_capture_monitor_by_index(index: u32) -> CaptureResult {
 /// This function is safe to call from C#. The returned struct contains
 /// pointers that must be freed using the matching free functions.
 #[no_mangle]
-pub extern "C" fn captcho_capture_all_monitors() -> CaptureResult {
+pub extern "C" fn captcho_capture_all_monitors(include_cursor: i32) -> CaptureResult {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        do_capture_all_monitors()
+        do_capture_all_monitors(include_cursor)
     })) {
         Ok(result) => result,
         Err(_) => CaptureResult::error(
@@ -739,7 +782,7 @@ pub extern "C" fn captcho_capture_all_monitors() -> CaptureResult {
 }
 
 /// Capture and stitch all monitors into a single virtual-desktop frame.
-fn do_capture_all_monitors() -> CaptureResult {
+fn do_capture_all_monitors(include_cursor: i32) -> CaptureResult {
     use windows_capture::monitor::Monitor;
 
     // 1. Enumerate monitors
@@ -785,7 +828,7 @@ fn do_capture_all_monitors() -> CaptureResult {
     // 4. Capture each monitor
     let mut frame_data_list: Vec<(monitor_utils::MonitorBounds, Vec<u8>, u32)> = Vec::with_capacity(monitors.len());
     for (i, monitor) in monitors.iter().enumerate() {
-        let result = do_capture_monitor(*monitor, &format!("all_monitors[{}]", i));
+        let result = do_capture_monitor(*monitor, &format!("all_monitors[{}]", i), include_cursor);
         if result.status != CaptureStatus::Ok {
             // Return the first capture failure; free any already-captured frames
             // (the result we're returning already owns nothing since it's an error)
@@ -1054,9 +1097,13 @@ fn do_capture_region(x: i32, y: i32, width: u32, height: u32) -> CaptureResult {
 /// This function is safe to call from C#. The returned struct contains
 /// pointers that must be freed using the matching free functions.
 #[no_mangle]
-pub extern "C" fn captcho_capture_active_window() -> CaptureResult {
+pub extern "C" fn captcho_capture_active_window(
+    include_cursor: i32,
+    include_decorations: i32,
+    include_shadow: i32,
+) -> CaptureResult {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        do_capture_active_window()
+        do_capture_active_window(include_cursor, include_decorations, include_shadow)
     })) {
         Ok(result) => result,
         Err(_) => CaptureResult::error(
@@ -1067,7 +1114,11 @@ pub extern "C" fn captcho_capture_active_window() -> CaptureResult {
 }
 
 /// Implementation for active window capture.
-fn do_capture_active_window() -> CaptureResult {
+fn do_capture_active_window(
+    include_cursor: i32,
+    include_decorations: i32,
+    include_shadow: i32,
+) -> CaptureResult {
     use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
     use windows_capture::window::Window;
 
@@ -1078,7 +1129,7 @@ fn do_capture_active_window() -> CaptureResult {
     }
 
     let window = Window::from_raw_hwnd(hwnd.0);
-    do_capture_window(window, "active_window")
+    do_capture_window(window, "active_window", include_cursor, include_decorations, include_shadow)
 }
 
 /// Capture a single frame of the window under the mouse cursor.
@@ -1140,7 +1191,7 @@ fn do_capture_window_under_cursor() -> CaptureResult {
     }
 
     let window = Window::from_raw_hwnd(top_hwnd.0);
-    do_capture_window(window, "window_under_cursor")
+    do_capture_window(window, "window_under_cursor", 0, 1, 1)
 }
 
 /// Capture a single frame from the window identified by the given native handle.
@@ -1185,7 +1236,7 @@ fn do_capture_window_by_handle(hwnd: u64) -> CaptureResult {
     }
 
     let window = Window::from_raw_hwnd(raw_hwnd.0);
-    do_capture_window(window, "window_by_handle")
+    do_capture_window(window, "window_by_handle", 0, 1, 1)
 }
 
 /// Free an error message string previously returned in a `CaptureResult`.

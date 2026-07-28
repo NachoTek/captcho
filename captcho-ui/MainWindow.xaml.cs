@@ -176,13 +176,17 @@ public sealed partial class MainWindow : Window
         // adapters: native pixel acquisition, the Selection overlay, the
         // Selected Monitor picker overlay, the Selected Window picker overlay,
         // and the preview transition. The session owns Capture Mode routing
-        // from here.
+        // from here. The SessionCaptureOptions is bound to the live runtime
+        // AppSettings so committed-default changes (applied through Settings)
+        // are observable, and so per-Capture-Mode session overrides flow into
+        // the effective options each route forwards (spec #34).
         _workflowSession = new CaptureWorkflowSession<WriteableBitmap>(
             new WindowsCaptureAdapter(),
             new WriteableBitmapPreviewAdapter(),
             new RegionSelectionOverlayAdapter(),
             new MonitorPickerOverlayAdapter(),
-            new WindowPickerOverlayAdapter());
+            new WindowPickerOverlayAdapter(),
+            new SessionCaptureOptions(_settings));
 
         // Initialize Global Hotkeys after the window has an HWND.
         // In WinUI 3, the HWND is available immediately after construction.
