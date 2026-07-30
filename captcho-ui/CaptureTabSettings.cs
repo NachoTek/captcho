@@ -62,6 +62,9 @@ internal sealed class CaptureTabSettings : EditableTabSession
     /// </summary>
     public bool IncludeShadow => Working.CaptureOptions.IncludeShadow;
 
+    /// <summary>How long confirmed Selection geometry is retained.</summary>
+    public RememberSelectionLifetime RememberSelection => Working.EffectiveRememberSelection;
+
     /// <summary>
     /// Sets the working mouse-pointer default from user input. Never persists or
     /// mutates the original persisted settings.
@@ -102,6 +105,14 @@ internal sealed class CaptureTabSettings : EditableTabSession
         Working.CaptureOptions = Working.CaptureOptions with { IncludeShadow = value };
     }
 
+    /// <summary>Sets the working remembered-Selection lifetime.</summary>
+    public void EditRememberSelection(RememberSelectionLifetime value)
+    {
+        Working.RememberSelection = Enum.IsDefined(value)
+            ? value
+            : RememberSelectionLifetime.Never;
+    }
+
     // ── Validation ──────────────────────────────────────────────────────
 
     /// <summary>
@@ -121,7 +132,8 @@ internal sealed class CaptureTabSettings : EditableTabSession
     /// True when any working Capture-options flag differs from its baseline.
     /// </summary>
     public override bool IsDirty =>
-        Working.CaptureOptions != Baseline.CaptureOptions;
+        Working.CaptureOptions != Baseline.CaptureOptions
+        || Working.EffectiveRememberSelection != Baseline.EffectiveRememberSelection;
 
     // ── Capture slice: merge, defaults ──────────────────────────────────
 
@@ -134,6 +146,9 @@ internal sealed class CaptureTabSettings : EditableTabSession
     {
         ArgumentNullException.ThrowIfNull(target);
         target.CaptureOptions = Working.CaptureOptions;
+        target.RememberSelection = Working.EffectiveRememberSelection;
+        if (Working.EffectiveRememberSelection != RememberSelectionLifetime.Always)
+            target.RememberedSelection = null;
     }
 
     /// <summary>
@@ -147,5 +162,7 @@ internal sealed class CaptureTabSettings : EditableTabSession
     protected override void ApplyDefaults(AppSettings working)
     {
         working.CaptureOptions = CaptureOptions.WithDefaults();
+        working.RememberSelection = RememberSelectionLifetime.Never;
+        working.RememberedSelection = null;
     }
 }

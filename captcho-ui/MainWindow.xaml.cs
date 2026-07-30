@@ -186,7 +186,15 @@ public sealed partial class MainWindow : Window
             new RegionSelectionOverlayAdapter(),
             new MonitorPickerOverlayAdapter(),
             new WindowPickerOverlayAdapter(),
-            new SessionCaptureOptions(_settings));
+            new SessionCaptureOptions(_settings),
+            new RememberedSelectionState(
+                _settings,
+                new NativeVirtualDesktopTopologyProvider(),
+                _configurationService is null
+                    ? null
+                    : new ConfigurationRememberedSelectionPersistence(
+                        _settings,
+                        _configurationService)));
 
         // Initialize Global Hotkeys after the window has an HWND.
         // In WinUI 3, the HWND is available immediately after construction.

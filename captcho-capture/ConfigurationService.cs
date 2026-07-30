@@ -224,7 +224,7 @@ public class ConfigurationService
         }
 
         // 2. Serialize to JSON
-        string json = JsonSerializer.Serialize(settings, JsonOptions);
+        string json = JsonSerializer.Serialize(settings.Normalized(), JsonOptions);
 
         // 3. Write to temp file first
         string tempPath = _configurationPath + ".tmp";

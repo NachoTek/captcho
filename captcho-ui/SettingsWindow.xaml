@@ -129,8 +129,24 @@ Layout:
                         <TextBlock x:Name="CaptureShadowNoteText"
                                    FontSize="12"
                                    TextWrapping="Wrap"
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    Text="Window shadow requires window decorations."/>
+                        <TextBlock Text="Remember Selection"
+                                   Margin="0,8,0,0"
+                                   FontSize="14"
+                                   FontWeight="SemiBold"/>
+                        <ComboBox x:Name="RememberSelectionCombo"
+                                  Header="Selection lifetime"
+                                  MinWidth="240"
+                                  SelectionChanged="RememberSelectionCombo_SelectionChanged">
+                            <ComboBoxItem Content="Never"/>
+                            <ComboBoxItem Content="Session"/>
+                            <ComboBoxItem Content="Always"/>
+                        </ComboBox>
+                        <TextBlock FontSize="12"
+                                   TextWrapping="Wrap"
                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                   Text="Window shadow requires window decorations."/>
+                                   Text="Never starts each Selection clean. Session reuses it until Captcho exits. Always reuses it across restarts while the monitor layout remains compatible."/>
                     </StackPanel>
                 </ScrollViewer>
             </TabViewItem>

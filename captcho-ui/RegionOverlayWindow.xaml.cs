@@ -184,6 +184,7 @@ public sealed partial class RegionOverlayWindow : IDisposable
     private System.Drawing.Bitmap? _backdrop;
 
     private RegionSelection? _currentSelection;
+    private readonly SelectionGeometry? _initialGeometry;
     private int _dragStartX, _dragStartY;
     private int _vdx, _vdy, _vdw, _vdh;
 
@@ -203,7 +204,11 @@ public sealed partial class RegionOverlayWindow : IDisposable
     private const int CoarseNudge = 10;
     private const int FineNudge = 1;
 
-    public RegionOverlayWindow() { InitializeComponent(); }
+    public RegionOverlayWindow(SelectionGeometry? initialGeometry = null)
+    {
+        _initialGeometry = initialGeometry;
+        InitializeComponent();
+    }
 
     public Task<SelectionGeometry?> ShowAndWaitAsync()
     {
@@ -216,6 +221,19 @@ public sealed partial class RegionOverlayWindow : IDisposable
         {
             _tcs.TrySetResult(null);
             return _tcs.Task;
+        }
+
+        if (_initialGeometry is not null
+            && _initialGeometry.Width <= int.MaxValue
+            && _initialGeometry.Height <= int.MaxValue)
+        {
+            _currentSelection = new RegionSelection
+            {
+                X = _initialGeometry.X,
+                Y = _initialGeometry.Y,
+                Width = (int)_initialGeometry.Width,
+                Height = (int)_initialGeometry.Height,
+            };
         }
 
         var thread = new System.Threading.Thread(RunMessageLoop);

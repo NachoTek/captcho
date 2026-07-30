@@ -204,6 +204,18 @@ public sealed partial class SettingsWindow : Window
         ApplyView(view);
     }
 
+    private void RememberSelectionCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_applyingView || RememberSelectionCombo.SelectedIndex < 0)
+            return;
+
+        var lifetime = (RememberSelectionLifetime)RememberSelectionCombo.SelectedIndex;
+        if (!Enum.IsDefined(lifetime))
+            return;
+
+        ApplyView(_session.EditRememberSelection(lifetime));
+    }
+
     // ── Command buttons ─────────────────────────────────────────────────
 
     /// <summary>
@@ -291,6 +303,7 @@ public sealed partial class SettingsWindow : Window
             CapturePointerToggle.IsOn = view.Capture.IncludePointer;
             CaptureDecorationsToggle.IsOn = view.Capture.IncludeDecorations;
             CaptureShadowToggle.IsOn = view.Capture.IncludeShadow;
+            RememberSelectionCombo.SelectedIndex = (int)view.Capture.RememberSelection;
             CaptureShadowToggle.IsEnabled = view.Capture.IncludeDecorations;
             CaptureShadowNoteText.Visibility = view.Capture.IncludeDecorations
                 ? Visibility.Collapsed

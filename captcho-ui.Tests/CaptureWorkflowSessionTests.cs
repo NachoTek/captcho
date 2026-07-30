@@ -114,10 +114,12 @@ internal sealed class FakeSelectionOverlayAdapter : ISelectionOverlayAdapter
 {
     public int CallCount { get; private set; }
     public SelectionGeometry? NextGeometry { get; set; }
+    public List<SelectionGeometry?> InitialGeometries { get; } = new();
 
-    public Task<SelectionGeometry?> ShowAsync()
+    public Task<SelectionGeometry?> ShowAsync(SelectionGeometry? initialGeometry)
     {
         CallCount++;
+        InitialGeometries.Add(initialGeometry);
         return Task.FromResult(NextGeometry);
     }
 }

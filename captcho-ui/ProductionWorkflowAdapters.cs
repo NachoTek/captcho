@@ -10,6 +10,7 @@
 // workflow session can surface them as retryable WorkflowResult outcomes.
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading.Tasks;
 using Microsoft.UI.Xaml.Media.Imaging;
@@ -215,11 +216,11 @@ public sealed class RegionSelectionOverlayAdapter : ISelectionOverlayAdapter
     /// the confirmed geometry. Returns null if the user cancelled or if the
     /// overlay could not be shown.
     /// </summary>
-    public async Task<SelectionGeometry?> ShowAsync()
+    public async Task<SelectionGeometry?> ShowAsync(SelectionGeometry? initialGeometry)
     {
         try
         {
-            using var overlay = new RegionOverlayWindow();
+            using var overlay = new RegionOverlayWindow(initialGeometry);
             return await overlay.ShowAndWaitAsync();
         }
         catch
@@ -229,6 +230,40 @@ public sealed class RegionSelectionOverlayAdapter : ISelectionOverlayAdapter
             // instead of crashing the application.
             return null;
         }
+    }
+}
+
+/// <summary>Reads the current Virtual Desktop topology from Win32 monitor enumeration.</summary>
+public sealed class NativeVirtualDesktopTopologyProvider : IVirtualDesktopTopologyProvider
+{
+    private readonly MonitorInterop _interop = MonitorInterop.CreateNative();
+
+    public IReadOnlyList<MonitorRect> GetCurrent() => _interop.EnumerateMonitors();
+}
+
+/// <summary>Atomically writes Always remembered Selection geometry to Configuration.</summary>
+public sealed class ConfigurationRememberedSelectionPersistence : IRememberedSelectionPersistence
+{
+    private readonly AppSettings _settings;
+    private readonly ConfigurationService _configuration;
+
+    public ConfigurationRememberedSelectionPersistence(
+        AppSettings settings,
+        ConfigurationService configuration)
+    {
+        _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+    }
+
+    public bool Save(RememberedSelectionGeometry? geometry)
+    {
+        var candidate = _settings.Normalized();
+        candidate.RememberedSelection = geometry?.Normalized();
+        if (!_configuration.Save(candidate).Success)
+            return false;
+
+        _settings.RememberedSelection = candidate.RememberedSelection?.Normalized();
+        return true;
     }
 }
 

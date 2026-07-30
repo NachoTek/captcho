@@ -158,6 +158,13 @@ public sealed class SettingsSession
         return ClearTransientStatus();
     }
 
+    /// <summary>Sets the working remembered-Selection lifetime.</summary>
+    public SettingsView EditRememberSelection(RememberSelectionLifetime value)
+    {
+        _capture.EditRememberSelection(value);
+        return ClearTransientStatus();
+    }
+
     // ── Session verbs ───────────────────────────────────────────────────
 
     /// <summary>
@@ -303,7 +310,8 @@ public sealed class SettingsSession
             Capture: new CaptureTabContent(
                 IncludePointer: _capture.IncludePointer,
                 IncludeDecorations: _capture.IncludeDecorations,
-                IncludeShadow: _capture.IncludeShadow),
+                IncludeShadow: _capture.IncludeShadow,
+                RememberSelection: _capture.RememberSelection),
 
             Export: new ExportTabContent(
                 Heading: _export.Heading,

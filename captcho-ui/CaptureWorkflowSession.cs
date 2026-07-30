@@ -314,7 +314,7 @@ public interface ISelectionOverlayAdapter
     /// Implementations must not throw — surface unexpected failures as a
     /// null result so the workflow reports cancellation rather than crashing.
     /// </summary>
-    Task<SelectionGeometry?> ShowAsync();
+    Task<SelectionGeometry?> ShowAsync(SelectionGeometry? initialGeometry);
 }
 
 /// <summary>
@@ -548,6 +548,7 @@ public sealed class CaptureWorkflowSession<TImage>
     // shared instance so the interactive overlays can apply per-mode overrides
     // through the same object the workflow reads.
     private readonly SessionCaptureOptions _captureOptions;
+    private readonly RememberedSelectionState _rememberedSelection;
 
     // Operation-state guard. 0 = idle, non-zero = an operation is in flight.
     // Manipulated only through Interlocked so concurrent Triggers are rejected
@@ -594,7 +595,8 @@ public sealed class CaptureWorkflowSession<TImage>
         IMonitorPickerOverlayAdapter monitorPickerOverlay,
         IWindowPickerOverlayAdapter windowPickerOverlay)
         : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
-               new SessionCaptureOptions(AppSettings.WithDefaults()))
+               new SessionCaptureOptions(AppSettings.WithDefaults()),
+               RememberedSelectionState.Disabled)
     {
     }
 
@@ -615,6 +617,20 @@ public sealed class CaptureWorkflowSession<TImage>
         IMonitorPickerOverlayAdapter monitorPickerOverlay,
         IWindowPickerOverlayAdapter windowPickerOverlay,
         SessionCaptureOptions captureOptions)
+        : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
+               captureOptions, RememberedSelectionState.Disabled)
+    {
+    }
+
+    /// <summary>Creates a workflow with configured remembered-Selection behavior.</summary>
+    public CaptureWorkflowSession(
+        IWorkflowCaptureAdapter capture,
+        IPreviewAdapter<TImage> preview,
+        ISelectionOverlayAdapter selectionOverlay,
+        IMonitorPickerOverlayAdapter monitorPickerOverlay,
+        IWindowPickerOverlayAdapter windowPickerOverlay,
+        SessionCaptureOptions captureOptions,
+        RememberedSelectionState rememberedSelection)
     {
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
         _preview = preview ?? throw new ArgumentNullException(nameof(preview));
@@ -622,6 +638,7 @@ public sealed class CaptureWorkflowSession<TImage>
         _monitorPickerOverlay = monitorPickerOverlay ?? throw new ArgumentNullException(nameof(monitorPickerOverlay));
         _windowPickerOverlay = windowPickerOverlay ?? throw new ArgumentNullException(nameof(windowPickerOverlay));
         _captureOptions = captureOptions ?? throw new ArgumentNullException(nameof(captureOptions));
+        _rememberedSelection = rememberedSelection ?? throw new ArgumentNullException(nameof(rememberedSelection));
     }
 
     /// <summary>
@@ -675,7 +692,7 @@ public sealed class CaptureWorkflowSession<TImage>
             // The overlay runs on the caller's thread (the UI thread in
             // production), where the modal Win32 message loop must live. The
             // adapter returns confirmed geometry or null for cancellation.
-            var geometry = await _selectionOverlay.ShowAsync();
+            var geometry = await _selectionOverlay.ShowAsync(_rememberedSelection.GetInitialGeometry());
 
             if (geometry is null)
             {
@@ -683,6 +700,8 @@ public sealed class CaptureWorkflowSession<TImage>
                     error: "Selection cancelled.",
                     totalMs: totalSw.Elapsed.TotalMilliseconds);
             }
+
+            _rememberedSelection.Remember(geometry);
 
             // With confirmed geometry in hand, Capture runs off-thread just
             // like the immediate-capture routes — the adapter may block on

@@ -98,6 +98,15 @@ public sealed class AppSettings
     [JsonPropertyName("captureOptions")]
     public CaptureOptions CaptureOptions { get; set; } = CaptureOptions.WithDefaults();
 
+    /// <summary>How long confirmed Selection geometry is retained.</summary>
+    public RememberSelectionLifetime RememberSelection { get; set; } = RememberSelectionLifetime.Never;
+
+    /// <summary>
+    /// Geometry retained for <see cref="RememberSelectionLifetime.Always"/>. Session
+    /// geometry is process state and is never written to Configuration.
+    /// </summary>
+    public RememberedSelectionGeometry? RememberedSelection { get; set; }
+
     // Future properties can be added here. System.Text.Json will ignore
     // unknown properties on read and only serialize declared ones.
 
@@ -110,6 +119,8 @@ public sealed class AppSettings
         SaveLocation = ExportDefaults.DefaultSaveDirectory,
         FilenameTemplate = ExportDefaults.DefaultFilenameTemplate,
         CaptureOptions = CaptureOptions.WithDefaults(),
+        RememberSelection = RememberSelectionLifetime.Never,
+        RememberedSelection = null,
     };
 
     /// <summary>
@@ -142,6 +153,13 @@ public sealed class AppSettings
     [JsonIgnore]
     public CaptureOptions EffectiveCaptureOptions =>
         (CaptureOptions ?? CaptureOptions.WithDefaults()).Normalized();
+
+    /// <summary>Returns a valid remembered-Selection lifetime for runtime use.</summary>
+    [JsonIgnore]
+    public RememberSelectionLifetime EffectiveRememberSelection =>
+        Enum.IsDefined(RememberSelection)
+            ? RememberSelection
+            : RememberSelectionLifetime.Never;
 
     /// <summary>
     /// Resolves whether the Global Hotkey for the given capture route is enabled.
@@ -226,5 +244,9 @@ public sealed class AppSettings
             ? null
             : new Dictionary<GlobalHotkeyRoute, bool>(GlobalHotkeyEnabledStates),
         CaptureOptions = EffectiveCaptureOptions,
+        RememberSelection = EffectiveRememberSelection,
+        RememberedSelection = EffectiveRememberSelection == RememberSelectionLifetime.Always
+            ? RememberedSelection?.Normalized()
+            : null,
     };
 }

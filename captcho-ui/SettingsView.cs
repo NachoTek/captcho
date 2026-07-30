@@ -10,6 +10,7 @@
 // small, fixed General field set stays flat to keep binding sites simple.
 
 using System.Collections.Generic;
+using captcho.Capture;
 
 namespace captcho.UI;
 
@@ -43,7 +44,8 @@ public sealed record InterfaceTabContent(
 public sealed record CaptureTabContent(
     bool IncludePointer,
     bool IncludeDecorations,
-    bool IncludeShadow);
+    bool IncludeShadow,
+    RememberSelectionLifetime RememberSelection);
 
 /// <summary>
 /// Immutable snapshot of everything the Settings window code-behind binds. Produced
