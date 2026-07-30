@@ -116,11 +116,13 @@ internal sealed class FakeSelectionOverlayAdapter : ISelectionOverlayAdapter
     public SelectionGeometry? NextGeometry { get; set; }
     public List<SelectionGeometry?> InitialGeometries { get; } = new();
 
-    public Task<SelectionGeometry?> ShowAsync(SelectionGeometry? initialGeometry)
+    public Task<TargetSelectionResult<SelectionGeometry>?> ShowAsync(SelectionGeometry? initialGeometry)
     {
         CallCount++;
         InitialGeometries.Add(initialGeometry);
-        return Task.FromResult(NextGeometry);
+        return Task.FromResult(NextGeometry is null
+            ? null
+            : TargetSelectionResult<SelectionGeometry>.Confirmed(NextGeometry));
     }
 }
 
@@ -135,10 +137,12 @@ internal sealed class FakeMonitorPickerOverlayAdapter : IMonitorPickerOverlayAda
     public int CallCount { get; private set; }
     public MonitorTarget? NextTarget { get; set; }
 
-    public Task<MonitorTarget?> ShowAsync()
+    public Task<TargetSelectionResult<MonitorTarget>?> ShowAsync()
     {
         CallCount++;
-        return Task.FromResult(NextTarget);
+        return Task.FromResult(NextTarget is null
+            ? null
+            : TargetSelectionResult<MonitorTarget>.Confirmed(NextTarget));
     }
 }
 
@@ -212,10 +216,12 @@ internal sealed class FakeWindowPickerOverlayAdapter : IWindowPickerOverlayAdapt
     public int CallCount { get; private set; }
     public WindowPickerResult? NextResult { get; set; }
 
-    public Task<WindowPickerResult?> ShowAsync()
+    public Task<TargetSelectionResult<WindowPickerResult>?> ShowAsync()
     {
         CallCount++;
-        return Task.FromResult(NextResult);
+        return Task.FromResult(NextResult is null
+            ? null
+            : TargetSelectionResult<WindowPickerResult>.Confirmed(NextResult));
     }
 }
 

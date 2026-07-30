@@ -216,7 +216,7 @@ public sealed class RegionSelectionOverlayAdapter : ISelectionOverlayAdapter
     /// the confirmed geometry. Returns null if the user cancelled or if the
     /// overlay could not be shown.
     /// </summary>
-    public async Task<SelectionGeometry?> ShowAsync(SelectionGeometry? initialGeometry)
+    public async Task<TargetSelectionResult<SelectionGeometry>?> ShowAsync(SelectionGeometry? initialGeometry)
     {
         try
         {
@@ -286,7 +286,7 @@ public sealed class MonitorPickerOverlayAdapter : IMonitorPickerOverlayAdapter
     /// the confirmed monitor target. Returns null if the user cancelled or if
     /// the overlay could not be shown.
     /// </summary>
-    public async Task<MonitorTarget?> ShowAsync()
+    public async Task<TargetSelectionResult<MonitorTarget>?> ShowAsync()
     {
         try
         {
@@ -325,7 +325,7 @@ public sealed class WindowPickerOverlayAdapter : IWindowPickerOverlayAdapter
     /// the confirming outcome. Returns null if the user cancelled or if the
     /// overlay could not be shown.
     /// </summary>
-    public async Task<WindowPickerResult?> ShowAsync()
+    public async Task<TargetSelectionResult<WindowPickerResult>?> ShowAsync()
     {
         try
         {

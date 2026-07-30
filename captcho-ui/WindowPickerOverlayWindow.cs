@@ -33,6 +33,7 @@ using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
+using captcho.Capture;
 
 namespace captcho.UI;
 
@@ -161,7 +162,7 @@ public sealed class WindowPickerOverlayWindow : IDisposable
 
     #endregion
 
-    private readonly TaskCompletionSource<WindowPickerResult?> _tcs = new();
+    private readonly TaskCompletionSource<TargetSelectionResult<WindowPickerResult>?> _tcs = new();
     private IntPtr _hwnd;
     private WndProc? _wndProc; // prevent GC
     private static readonly string _className = "captchoWindowPicker_" + Guid.NewGuid().ToString("N");
@@ -181,7 +182,7 @@ public sealed class WindowPickerOverlayWindow : IDisposable
     /// confirming outcome. Returns null if the user cancelled or if the overlay
     /// could not be shown.
     /// </summary>
-    public Task<WindowPickerResult?> ShowAndWaitAsync()
+    public Task<TargetSelectionResult<WindowPickerResult>?> ShowAndWaitAsync()
     {
         _vdx = GetSystemMetrics(SM_XVIRTUALSCREEN);
         _vdy = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -308,6 +309,18 @@ public sealed class WindowPickerOverlayWindow : IDisposable
         // stale target can never be confirmed).
         int clickVx = LoWord(lParam) + _vdx;
         int clickVy = HiWord(lParam) + _vdy;
+        var requestedMode = TargetSelectionModeControls.HitTest(
+            clickVx, clickVy, new Rectangle(_vdx, _vdy, _vdw, _vdh));
+        if (requestedMode is CaptureMode mode)
+        {
+            if (mode != CaptureMode.SelectedWindow)
+            {
+                DestroyWindow(_hwnd);
+                _tcs.TrySetResult(TargetSelectionResult<WindowPickerResult>.RouteTo(mode));
+            }
+            return;
+        }
+
         var resolved = WindowPickerTargetResolver.Resolve(EnumerateEligibleWindows(), clickVx, clickVy);
 
         DestroyWindow(_hwnd);
@@ -316,21 +329,23 @@ public sealed class WindowPickerOverlayWindow : IDisposable
         {
             // Empty desktop — no eligible window under the click. The workflow
             // routes this to a Full Desktop capture including the taskbar.
-            _tcs.TrySetResult(new WindowPickerResult
-            {
-                Outcome = WindowPickerOutcome.EmptyDesktopFallback,
-            });
+            _tcs.TrySetResult(TargetSelectionResult<WindowPickerResult>.Confirmed(
+                new WindowPickerResult
+                {
+                    Outcome = WindowPickerOutcome.EmptyDesktopFallback,
+                }));
             return;
         }
 
         // Per spec #29, the overlay returns the confirmed window target and
         // does NOT perform Capture. The runtime CaptureWorkflowSession owns
         // capture by handle, the resulting Frame, and the preview.
-        _tcs.TrySetResult(new WindowPickerResult
-        {
-            Outcome = WindowPickerOutcome.WindowConfirmed,
-            Target = resolved,
-        });
+        _tcs.TrySetResult(TargetSelectionResult<WindowPickerResult>.Confirmed(
+            new WindowPickerResult
+            {
+                Outcome = WindowPickerOutcome.WindowConfirmed,
+                Target = resolved,
+            }));
     }
 
     private void Cancel()
@@ -537,6 +552,9 @@ public sealed class WindowPickerOverlayWindow : IDisposable
             g.FillRectangle(hintBg, cx - 12, 18, sz.Width + 24, sz.Height + 12);
             g.DrawString(hint, font, brush, cx, 24);
         }
+
+        TargetSelectionModeControls.Draw(
+            g, CaptureMode.SelectedWindow, new Rectangle(_vdx, _vdy, _vdw, _vdh));
 
         var blend = new BLENDFUNCTION
         {

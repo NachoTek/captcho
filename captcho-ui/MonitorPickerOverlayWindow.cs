@@ -140,7 +140,7 @@ public sealed class MonitorPickerOverlayWindow : IDisposable
 
     #endregion
 
-    private readonly TaskCompletionSource<MonitorTarget?> _tcs = new();
+    private readonly TaskCompletionSource<TargetSelectionResult<MonitorTarget>?> _tcs = new();
     private IntPtr _hwnd;
     private WndProc? _wndProc; // prevent GC
     private static readonly string _className = "captchoMonitorPicker_" + Guid.NewGuid().ToString("N");
@@ -161,7 +161,7 @@ public sealed class MonitorPickerOverlayWindow : IDisposable
     /// the confirmed monitor target. Returns null if the user cancelled or if
     /// the overlay could not be shown.
     /// </summary>
-    public Task<MonitorTarget?> ShowAndWaitAsync()
+    public Task<TargetSelectionResult<MonitorTarget>?> ShowAndWaitAsync()
     {
         _vdx = GetSystemMetrics(SM_XVIRTUALSCREEN);
         _vdy = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -300,6 +300,18 @@ public sealed class MonitorPickerOverlayWindow : IDisposable
         // open. Only a confirmed monitor ends the interaction.
         int clickVx = LoWord(lParam) + _vdx;
         int clickVy = HiWord(lParam) + _vdy;
+        var requestedMode = TargetSelectionModeControls.HitTest(
+            clickVx, clickVy, new Rectangle(_vdx, _vdy, _vdw, _vdh));
+        if (requestedMode is CaptureMode mode)
+        {
+            if (mode != CaptureMode.SelectedMonitor)
+            {
+                DestroyWindow(_hwnd);
+                _tcs.TrySetResult(TargetSelectionResult<MonitorTarget>.RouteTo(mode));
+            }
+            return;
+        }
+
         var target = MonitorPickerTargetResolver.Resolve(_monitors, clickVx, clickVy);
         if (target is null)
         {
@@ -311,7 +323,7 @@ public sealed class MonitorPickerOverlayWindow : IDisposable
         // Per spec #28, the overlay returns the confirmed monitor bounds and
         // does NOT perform Capture. The runtime CaptureWorkflowSession owns
         // Capture of these bounds, the resulting Frame, and the preview.
-        _tcs.TrySetResult(target);
+        _tcs.TrySetResult(TargetSelectionResult<MonitorTarget>.Confirmed(target));
     }
 
     private void Cancel()
@@ -411,6 +423,9 @@ public sealed class MonitorPickerOverlayWindow : IDisposable
             g.FillRectangle(hintBg, cx - 12, 18, sz.Width + 24, sz.Height + 12);
             g.DrawString(hint, font, brush, cx, 24);
         }
+
+        TargetSelectionModeControls.Draw(
+            g, CaptureMode.SelectedMonitor, new Rectangle(_vdx, _vdy, _vdw, _vdh));
 
         var blend = new BLENDFUNCTION
         {

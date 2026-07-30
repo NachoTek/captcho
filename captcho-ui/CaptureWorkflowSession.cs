@@ -296,6 +296,29 @@ public interface IWorkflowCaptureAdapter
 }
 
 /// <summary>
+/// Result returned by an interactive Target Selection overlay. A result either
+/// confirms a target or requests another Capture Mode; null still represents
+/// cancellation so Escape remains uniform across all overlays.
+/// </summary>
+public sealed class TargetSelectionResult<TTarget>
+{
+    private TargetSelectionResult(TTarget? target, CaptureMode? requestedMode)
+    {
+        Target = target;
+        RequestedMode = requestedMode;
+    }
+
+    public TTarget? Target { get; }
+    public CaptureMode? RequestedMode { get; }
+
+    public static TargetSelectionResult<TTarget> Confirmed(TTarget target) =>
+        new(target ?? throw new ArgumentNullException(nameof(target)), null);
+
+    public static TargetSelectionResult<TTarget> RouteTo(CaptureMode mode) =>
+        new(default, mode);
+}
+
+/// <summary>
 /// Narrow adapter over the interactive Selection overlay. Production shows a
 /// transparent Win32 layered window over the live desktop; tests supply fakes
 /// that return canned geometry or cancellation. The overlay adapter's only
@@ -314,7 +337,7 @@ public interface ISelectionOverlayAdapter
     /// Implementations must not throw — surface unexpected failures as a
     /// null result so the workflow reports cancellation rather than crashing.
     /// </summary>
-    Task<SelectionGeometry?> ShowAsync(SelectionGeometry? initialGeometry);
+    Task<TargetSelectionResult<SelectionGeometry>?> ShowAsync(SelectionGeometry? initialGeometry);
 }
 
 /// <summary>
@@ -373,7 +396,7 @@ public interface IMonitorPickerOverlayAdapter
     /// failures as a null result so the workflow reports cancellation
     /// rather than crashing.
     /// </summary>
-    Task<MonitorTarget?> ShowAsync();
+    Task<TargetSelectionResult<MonitorTarget>?> ShowAsync();
 }
 
 /// <summary>
@@ -486,7 +509,7 @@ public interface IWindowPickerOverlayAdapter
     /// Implementations must not throw — surface unexpected failures as a null
     /// result so the workflow reports cancellation rather than crashing.
     /// </summary>
-    Task<WindowPickerResult?> ShowAsync();
+    Task<TargetSelectionResult<WindowPickerResult>?> ShowAsync();
 }
 
 /// <summary>
@@ -651,7 +674,7 @@ public sealed class CaptureWorkflowSession<TImage>
     /// Never throws for expected failures.
     /// </summary>
     public Task<WorkflowResult<TImage>> CaptureFullDesktopAsync() =>
-        RouteCaptureAsync(FullDesktopMode, CaptureMode.FullDesktop, _capture.CaptureFullDesktop);
+        CaptureModeAsync(CaptureMode.FullDesktop);
 
     /// <summary>
     /// Routes an Active Window Trigger through the same production workflow as
@@ -665,7 +688,7 @@ public sealed class CaptureWorkflowSession<TImage>
     /// Frame or operation state is retained. Never throws for expected failures.
     /// </summary>
     public Task<WorkflowResult<TImage>> CaptureActiveWindowAsync() =>
-        RouteCaptureAsync(ActiveWindowMode, CaptureMode.ActiveWindow, _capture.CaptureActiveWindow);
+        CaptureModeAsync(CaptureMode.ActiveWindow);
 
     /// <summary>
     /// Routes a Selection Trigger through the production workflow. The
@@ -678,71 +701,8 @@ public sealed class CaptureWorkflowSession<TImage>
     /// preserved: the geometry's signed X/Y is forwarded to the capture
     /// adapter untouched. Never throws for expected failures.
     /// </summary>
-    public async Task<WorkflowResult<TImage>> CaptureSelectionAsync()
-    {
-        if (!TryBeginOperation())
-        {
-            return WorkflowResultFor(SelectionMode, WorkflowStatus.OperationInProgress,
-                error: "A capture is already in progress.");
-        }
-
-        var totalSw = Stopwatch.StartNew();
-        try
-        {
-            // The overlay runs on the caller's thread (the UI thread in
-            // production), where the modal Win32 message loop must live. The
-            // adapter returns confirmed geometry or null for cancellation.
-            var geometry = await _selectionOverlay.ShowAsync(_rememberedSelection.GetInitialGeometry());
-
-            if (geometry is null)
-            {
-                return WorkflowResultFor(SelectionMode, WorkflowStatus.Cancelled,
-                    error: "Selection cancelled.",
-                    totalMs: totalSw.Elapsed.TotalMilliseconds);
-            }
-
-            _rememberedSelection.Remember(geometry);
-
-            // With confirmed geometry in hand, Capture runs off-thread just
-            // like the immediate-capture routes — the adapter may block on
-            // native pixel acquisition.
-            var captureResult = await RunOffThread(() => _capture.CaptureSelection(geometry));
-            if (!captureResult.Success)
-            {
-                return WorkflowResultFor(SelectionMode, WorkflowStatus.CaptureFailed,
-                    error: captureResult.Error,
-                    captureMs: captureResult.ElapsedMs,
-                    totalMs: totalSw.Elapsed.TotalMilliseconds);
-            }
-
-            var frame = captureResult.Frame!;
-            _lastFrame = frame;
-
-            var previewResult = _preview.Present(frame);
-            if (!previewResult.Success)
-            {
-                return WorkflowResultFor(SelectionMode, WorkflowStatus.PreviewFailed,
-                    frame: frame,
-                    dimensions: captureResult.Dimensions,
-                    error: previewResult.Error,
-                    captureMs: captureResult.ElapsedMs,
-                    displayMs: previewResult.ElapsedMs,
-                    totalMs: totalSw.Elapsed.TotalMilliseconds);
-            }
-
-            return WorkflowResultFor(SelectionMode, WorkflowStatus.Succeeded,
-                frame: frame,
-                dimensions: captureResult.Dimensions,
-                previewImage: previewResult.Image,
-                captureMs: captureResult.ElapsedMs,
-                displayMs: previewResult.ElapsedMs,
-                totalMs: totalSw.Elapsed.TotalMilliseconds);
-        }
-        finally
-        {
-            EndOperation();
-        }
-    }
+    public Task<WorkflowResult<TImage>> CaptureSelectionAsync() =>
+        CaptureModeAsync(CaptureMode.Selection);
 
     /// <summary>
     /// Routes a Selected Monitor Trigger through the production workflow. The
@@ -755,70 +715,8 @@ public sealed class CaptureWorkflowSession<TImage>
     /// preserved: the target's signed X/Y is forwarded to the capture adapter
     /// untouched. Never throws for expected failures.
     /// </summary>
-    public async Task<WorkflowResult<TImage>> CaptureSelectedMonitorAsync()
-    {
-        if (!TryBeginOperation())
-        {
-            return WorkflowResultFor(SelectedMonitorMode, WorkflowStatus.OperationInProgress,
-                error: "A capture is already in progress.");
-        }
-
-        var totalSw = Stopwatch.StartNew();
-        try
-        {
-            // The picker runs on the caller's thread (the UI thread in
-            // production), where the modal Win32 message loop must live. The
-            // adapter returns the confirmed monitor target or null for
-            // cancellation (gap clicks keep the overlay open inside the adapter).
-            var target = await _monitorPickerOverlay.ShowAsync();
-
-            if (target is null)
-            {
-                return WorkflowResultFor(SelectedMonitorMode, WorkflowStatus.Cancelled,
-                    error: "Selected Monitor cancelled.",
-                    totalMs: totalSw.Elapsed.TotalMilliseconds);
-            }
-
-            // With a confirmed monitor target in hand, Capture runs off-thread
-            // just like the other routes — the adapter may block on native
-            // pixel acquisition.
-            var captureResult = await RunOffThread(() => _capture.CaptureMonitor(target));
-            if (!captureResult.Success)
-            {
-                return WorkflowResultFor(SelectedMonitorMode, WorkflowStatus.CaptureFailed,
-                    error: captureResult.Error,
-                    captureMs: captureResult.ElapsedMs,
-                    totalMs: totalSw.Elapsed.TotalMilliseconds);
-            }
-
-            var frame = captureResult.Frame!;
-            _lastFrame = frame;
-
-            var previewResult = _preview.Present(frame);
-            if (!previewResult.Success)
-            {
-                return WorkflowResultFor(SelectedMonitorMode, WorkflowStatus.PreviewFailed,
-                    frame: frame,
-                    dimensions: captureResult.Dimensions,
-                    error: previewResult.Error,
-                    captureMs: captureResult.ElapsedMs,
-                    displayMs: previewResult.ElapsedMs,
-                    totalMs: totalSw.Elapsed.TotalMilliseconds);
-            }
-
-            return WorkflowResultFor(SelectedMonitorMode, WorkflowStatus.Succeeded,
-                frame: frame,
-                dimensions: captureResult.Dimensions,
-                previewImage: previewResult.Image,
-                captureMs: captureResult.ElapsedMs,
-                displayMs: previewResult.ElapsedMs,
-                totalMs: totalSw.Elapsed.TotalMilliseconds);
-        }
-        finally
-        {
-            EndOperation();
-        }
-    }
+    public Task<WorkflowResult<TImage>> CaptureSelectedMonitorAsync() =>
+        CaptureModeAsync(CaptureMode.SelectedMonitor);
 
     /// <summary>
     /// Routes a Selected Window Trigger through the production workflow. The
@@ -832,79 +730,8 @@ public sealed class CaptureWorkflowSession<TImage>
     /// coordinate window bounds are preserved. Never throws for expected
     /// failures.
     /// </summary>
-    public async Task<WorkflowResult<TImage>> CaptureSelectedWindowAsync()
-    {
-        if (!TryBeginOperation())
-        {
-            return WorkflowResultFor(SelectedWindowMode, WorkflowStatus.OperationInProgress,
-                error: "A capture is already in progress.");
-        }
-
-        var totalSw = Stopwatch.StartNew();
-        try
-        {
-            // The picker runs on the caller's thread (the UI thread in
-            // production), where the modal Win32 message loop must live. The
-            // adapter returns a confirming outcome (window or empty-desktop
-            // fallback) or null for cancellation (Escape).
-            var result = await _windowPickerOverlay.ShowAsync();
-
-            if (result is null)
-            {
-                return WorkflowResultFor(SelectedWindowMode, WorkflowStatus.Cancelled,
-                    error: "Selected Window cancelled.",
-                    totalMs: totalSw.Elapsed.TotalMilliseconds);
-            }
-
-            // A confirmed window is captured by handle; an empty-desktop click
-            // routes to Full Desktop (including the taskbar). The route label
-            // stays "Selected Window" in both cases — the user invoked this
-            // route, and the fallback is an internal capture-path detail. The
-            // fallback is a Full-Desktop-content capture, so it composes the
-            // Full Desktop effective options (only the pointer flag is
-            // applicable; spec #34 — Selected Window's own options threading is
-            // a separate slice).
-            var fullDesktopOptions = _captureOptions.EffectiveFor(CaptureMode.FullDesktop);
-            var captureResult = result.Outcome == WindowPickerOutcome.EmptyDesktopFallback
-                ? await RunOffThread(() => _capture.CaptureFullDesktop(fullDesktopOptions))
-                : await RunOffThread(() => _capture.CaptureWindow(result.Target!));
-
-            if (!captureResult.Success)
-            {
-                return WorkflowResultFor(SelectedWindowMode, WorkflowStatus.CaptureFailed,
-                    error: captureResult.Error,
-                    captureMs: captureResult.ElapsedMs,
-                    totalMs: totalSw.Elapsed.TotalMilliseconds);
-            }
-
-            var frame = captureResult.Frame!;
-            _lastFrame = frame;
-
-            var previewResult = _preview.Present(frame);
-            if (!previewResult.Success)
-            {
-                return WorkflowResultFor(SelectedWindowMode, WorkflowStatus.PreviewFailed,
-                    frame: frame,
-                    dimensions: captureResult.Dimensions,
-                    error: previewResult.Error,
-                    captureMs: captureResult.ElapsedMs,
-                    displayMs: previewResult.ElapsedMs,
-                    totalMs: totalSw.Elapsed.TotalMilliseconds);
-            }
-
-            return WorkflowResultFor(SelectedWindowMode, WorkflowStatus.Succeeded,
-                frame: frame,
-                dimensions: captureResult.Dimensions,
-                previewImage: previewResult.Image,
-                captureMs: captureResult.ElapsedMs,
-                displayMs: previewResult.ElapsedMs,
-                totalMs: totalSw.Elapsed.TotalMilliseconds);
-        }
-        finally
-        {
-            EndOperation();
-        }
-    }
+    public Task<WorkflowResult<TImage>> CaptureSelectedWindowAsync() =>
+        CaptureModeAsync(CaptureMode.SelectedWindow);
 
     /// <summary>
     /// Shared Capture Mode routing for an immediate-capture Trigger (no Target
@@ -913,70 +740,157 @@ public sealed class CaptureWorkflowSession<TImage>
     /// Full Desktop and Active Window route through this so their behavior —
     /// and their test coverage — stays symmetric at the seam.
     /// </summary>
-    private async Task<WorkflowResult<TImage>> RouteCaptureAsync(
-        string mode, CaptureMode captureMode, Func<CaptureOptions, CaptureFrameResult> captureFunc)
+    private async Task<WorkflowResult<TImage>> CaptureModeAsync(CaptureMode initialMode)
     {
         if (!TryBeginOperation())
         {
-            return WorkflowResultFor(mode, WorkflowStatus.OperationInProgress,
+            return WorkflowResultFor(ModeLabel(initialMode), WorkflowStatus.OperationInProgress,
                 error: "A capture is already in progress.");
         }
 
-        // Compose the effective CaptureOptions for this mode once — committed
-        // defaults overlaid with any session override the user applied through
-        // the SessionCaptureOptions holder (spec #34/#35). The same resolved
-        // value reaches the capture adapter and, through it, the managed/native
-        // contract, so the workflow never offers one combination and captures
-        // another.
-        var options = _captureOptions.EffectiveFor(captureMode);
-
         var totalSw = Stopwatch.StartNew();
+        var mode = initialMode;
+        bool switched = false;
         try
         {
-            // Capture runs on the thread pool — the adapter may block on native
-            // pixel acquisition. The session's caller (the UI thread, in
-            // production) is freed for the duration.
-            var captureResult = await RunOffThread(() => captureFunc(options));
-            if (!captureResult.Success)
+            while (true)
             {
-                return WorkflowResultFor(mode, WorkflowStatus.CaptureFailed,
-                    error: captureResult.Error,
-                    captureMs: captureResult.ElapsedMs,
-                    totalMs: totalSw.Elapsed.TotalMilliseconds);
+                CaptureFrameResult captureResult;
+                switch (mode)
+                {
+                    case CaptureMode.FullDesktop:
+                    {
+                        var options = _captureOptions.EffectiveFor(mode);
+                        captureResult = await RunOffThread(() => _capture.CaptureFullDesktop(options));
+                        break;
+                    }
+                    case CaptureMode.ActiveWindow:
+                    {
+                        var options = _captureOptions.EffectiveFor(mode);
+                        captureResult = await RunOffThread(() => _capture.CaptureActiveWindow(options));
+                        break;
+                    }
+                    case CaptureMode.Selection:
+                    {
+                        var result = await _selectionOverlay.ShowAsync(
+                            switched ? null : _rememberedSelection.GetInitialGeometry());
+                        if (result is null)
+                            return Cancelled(mode, totalSw);
+                        if (result.RequestedMode is CaptureMode requestedMode)
+                        {
+                            mode = requestedMode;
+                            switched = true;
+                            continue;
+                        }
+
+                        var geometry = result.Target!;
+                        _rememberedSelection.Remember(geometry);
+                        captureResult = await RunOffThread(() => _capture.CaptureSelection(geometry));
+                        break;
+                    }
+                    case CaptureMode.SelectedMonitor:
+                    {
+                        var result = await _monitorPickerOverlay.ShowAsync();
+                        if (result is null)
+                            return Cancelled(mode, totalSw);
+                        if (result.RequestedMode is CaptureMode requestedMode)
+                        {
+                            mode = requestedMode;
+                            switched = true;
+                            continue;
+                        }
+
+                        captureResult = await RunOffThread(() => _capture.CaptureMonitor(result.Target!));
+                        break;
+                    }
+                    case CaptureMode.SelectedWindow:
+                    {
+                        var selection = await _windowPickerOverlay.ShowAsync();
+                        if (selection is null)
+                            return Cancelled(mode, totalSw);
+                        if (selection.RequestedMode is CaptureMode requestedMode)
+                        {
+                            mode = requestedMode;
+                            switched = true;
+                            continue;
+                        }
+
+                        var result = selection.Target!;
+                        if (result.Outcome == WindowPickerOutcome.EmptyDesktopFallback)
+                        {
+                            var options = _captureOptions.EffectiveFor(CaptureMode.FullDesktop);
+                            captureResult = await RunOffThread(() => _capture.CaptureFullDesktop(options));
+                        }
+                        else
+                        {
+                            captureResult = await RunOffThread(() => _capture.CaptureWindow(result.Target!));
+                        }
+                        break;
+                    }
+                    default:
+                        throw new ArgumentOutOfRangeException(nameof(mode));
+                }
+
+                return CompleteCapture(mode, captureResult, totalSw);
             }
-
-            var frame = captureResult.Frame!;
-            _lastFrame = frame;
-
-            // Preview runs on the caller's thread. In production this is the UI
-            // thread, which is required for WriteableBitmap construction. The
-            // adapter's TImage-aware result keeps the session WinUI-free.
-            var previewResult = _preview.Present(frame);
-            if (!previewResult.Success)
-            {
-                // Frame is preserved for retry — see WorkflowResult.Frame doc.
-                return WorkflowResultFor(mode, WorkflowStatus.PreviewFailed,
-                    frame: frame,
-                    dimensions: captureResult.Dimensions,
-                    error: previewResult.Error,
-                    captureMs: captureResult.ElapsedMs,
-                    displayMs: previewResult.ElapsedMs,
-                    totalMs: totalSw.Elapsed.TotalMilliseconds);
-            }
-
-            return WorkflowResultFor(mode, WorkflowStatus.Succeeded,
-                frame: frame,
-                dimensions: captureResult.Dimensions,
-                previewImage: previewResult.Image,
-                captureMs: captureResult.ElapsedMs,
-                displayMs: previewResult.ElapsedMs,
-                totalMs: totalSw.Elapsed.TotalMilliseconds);
         }
         finally
         {
             EndOperation();
         }
     }
+
+    private WorkflowResult<TImage> CompleteCapture(
+        CaptureMode mode,
+        CaptureFrameResult captureResult,
+        Stopwatch totalSw)
+    {
+        string label = ModeLabel(mode);
+        if (!captureResult.Success)
+        {
+            return WorkflowResultFor(label, WorkflowStatus.CaptureFailed,
+                error: captureResult.Error,
+                captureMs: captureResult.ElapsedMs,
+                totalMs: totalSw.Elapsed.TotalMilliseconds);
+        }
+
+        var frame = captureResult.Frame!;
+        _lastFrame = frame;
+        var previewResult = _preview.Present(frame);
+        if (!previewResult.Success)
+        {
+            return WorkflowResultFor(label, WorkflowStatus.PreviewFailed,
+                frame: frame,
+                dimensions: captureResult.Dimensions,
+                error: previewResult.Error,
+                captureMs: captureResult.ElapsedMs,
+                displayMs: previewResult.ElapsedMs,
+                totalMs: totalSw.Elapsed.TotalMilliseconds);
+        }
+
+        return WorkflowResultFor(label, WorkflowStatus.Succeeded,
+            frame: frame,
+            dimensions: captureResult.Dimensions,
+            previewImage: previewResult.Image,
+            captureMs: captureResult.ElapsedMs,
+            displayMs: previewResult.ElapsedMs,
+            totalMs: totalSw.Elapsed.TotalMilliseconds);
+    }
+
+    private static WorkflowResult<TImage> Cancelled(CaptureMode mode, Stopwatch totalSw) =>
+        WorkflowResultFor(ModeLabel(mode), WorkflowStatus.Cancelled,
+            error: $"{ModeLabel(mode)} cancelled.",
+            totalMs: totalSw.Elapsed.TotalMilliseconds);
+
+    private static string ModeLabel(CaptureMode mode) => mode switch
+    {
+        CaptureMode.FullDesktop => FullDesktopMode,
+        CaptureMode.ActiveWindow => ActiveWindowMode,
+        CaptureMode.SelectedWindow => SelectedWindowMode,
+        CaptureMode.SelectedMonitor => SelectedMonitorMode,
+        CaptureMode.Selection => SelectionMode,
+        _ => throw new ArgumentOutOfRangeException(nameof(mode)),
+    };
 
     /// <summary>
     /// Attempts to enter an operation. Returns false if one is already in

@@ -168,7 +168,7 @@ public sealed partial class RegionOverlayWindow : IDisposable
 
     #endregion
 
-    private readonly TaskCompletionSource<SelectionGeometry?> _tcs = new();
+    private readonly TaskCompletionSource<TargetSelectionResult<SelectionGeometry>?> _tcs = new();
     private IntPtr _hwnd;
     private WndProc? _wndProc; // prevent GC
     private static readonly string _className = "captchoRegion_" + Guid.NewGuid().ToString("N");
@@ -210,7 +210,7 @@ public sealed partial class RegionOverlayWindow : IDisposable
         InitializeComponent();
     }
 
-    public Task<SelectionGeometry?> ShowAndWaitAsync()
+    public Task<TargetSelectionResult<SelectionGeometry>?> ShowAndWaitAsync()
     {
         _vdx = GetSystemMetrics(SM_XVIRTUALSCREEN);
         _vdy = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -342,6 +342,17 @@ public sealed partial class RegionOverlayWindow : IDisposable
     {
         int vx = LoWord(lParam) + _vdx;
         int vy = HiWord(lParam) + _vdy;
+        var requestedMode = TargetSelectionModeControls.HitTest(
+            vx, vy, new Rectangle(_vdx, _vdy, _vdw, _vdh));
+        if (requestedMode is captcho.Capture.CaptureMode mode)
+        {
+            if (mode != captcho.Capture.CaptureMode.Selection)
+            {
+                DestroyWindow(_hwnd);
+                _tcs.TrySetResult(TargetSelectionResult<SelectionGeometry>.RouteTo(mode));
+            }
+            return;
+        }
 
         if (_currentSelection != null && _currentSelection.MeetsMinimumSize)
         {
@@ -522,13 +533,14 @@ public sealed partial class RegionOverlayWindow : IDisposable
         // Per spec #27, the overlay returns confirmed geometry and does NOT
         // perform Capture. The runtime CaptureWorkflowSession owns Capture of
         // this geometry, the resulting Frame, and the preview transition.
-        _tcs.TrySetResult(new SelectionGeometry
-        {
-            X = sel.X,
-            Y = sel.Y,
-            Width = (uint)sel.Width,
-            Height = (uint)sel.Height,
-        });
+        _tcs.TrySetResult(TargetSelectionResult<SelectionGeometry>.Confirmed(
+            new SelectionGeometry
+            {
+                X = sel.X,
+                Y = sel.Y,
+                Width = (uint)sel.Width,
+                Height = (uint)sel.Height,
+            }));
     }
 
     private void Cancel()
@@ -630,6 +642,9 @@ public sealed partial class RegionOverlayWindow : IDisposable
         // it needs no magnifier; an idle overlay is unobstructed.
         if (_dragMode == DragMode.NewSelection || _dragMode == DragMode.ResizeHandle)
             DrawMagnifier(g);
+
+        TargetSelectionModeControls.Draw(
+            g, captcho.Capture.CaptureMode.Selection, new Rectangle(_vdx, _vdy, _vdw, _vdh));
 
         // Do NOT dispose bmp — it wraps _bits, not an owned HBITMAP.
         // Disposing would try to free memory we don't own.
