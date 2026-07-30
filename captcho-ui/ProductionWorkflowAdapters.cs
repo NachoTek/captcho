@@ -197,6 +197,25 @@ public sealed class WriteableBitmapPreviewAdapter : IPreviewAdapter<WriteableBit
     }
 }
 
+/// <summary>Production adapter for post-capture Annotation.</summary>
+public sealed class AnnotationOverlayAdapter : IAnnotationOverlayAdapter
+{
+    public async Task<AnnotationPresentResult> ShowAsync(ContiguousBitmap sourceFrame)
+    {
+        ArgumentNullException.ThrowIfNull(sourceFrame);
+
+        try
+        {
+            using var overlay = new AnnotationOverlayWindow(sourceFrame);
+            return await overlay.ShowAndWaitAsync();
+        }
+        catch (Exception ex)
+        {
+            return AnnotationPresentResult.Fail($"Annotation failed: {ex.Message}");
+        }
+    }
+}
+
 /// <summary>
 /// Production <see cref="ISelectionOverlayAdapter"/>. Wraps the Win32 layered
 /// <see cref="RegionOverlayWindow"/>: shows the transparent overlay over the

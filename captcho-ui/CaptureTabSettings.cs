@@ -65,6 +65,9 @@ internal sealed class CaptureTabSettings : EditableTabSession
     /// <summary>How long confirmed Selection geometry is retained.</summary>
     public RememberSelectionLifetime RememberSelection => Working.EffectiveRememberSelection;
 
+    /// <summary>Whether captured Frames open in Annotation before Export.</summary>
+    public bool AnnotationEnabled => Working.AnnotationEnabled;
+
     /// <summary>
     /// Sets the working mouse-pointer default from user input. Never persists or
     /// mutates the original persisted settings.
@@ -113,6 +116,9 @@ internal sealed class CaptureTabSettings : EditableTabSession
             : RememberSelectionLifetime.Never;
     }
 
+    /// <summary>Sets whether the post-capture Annotation gate is enabled.</summary>
+    public void EditAnnotationEnabled(bool value) => Working.AnnotationEnabled = value;
+
     // ── Validation ──────────────────────────────────────────────────────
 
     /// <summary>
@@ -133,7 +139,8 @@ internal sealed class CaptureTabSettings : EditableTabSession
     /// </summary>
     public override bool IsDirty =>
         Working.CaptureOptions != Baseline.CaptureOptions
-        || Working.EffectiveRememberSelection != Baseline.EffectiveRememberSelection;
+        || Working.EffectiveRememberSelection != Baseline.EffectiveRememberSelection
+        || Working.AnnotationEnabled != Baseline.AnnotationEnabled;
 
     // ── Capture slice: merge, defaults ──────────────────────────────────
 
@@ -147,6 +154,7 @@ internal sealed class CaptureTabSettings : EditableTabSession
         ArgumentNullException.ThrowIfNull(target);
         target.CaptureOptions = Working.CaptureOptions;
         target.RememberSelection = Working.EffectiveRememberSelection;
+        target.AnnotationEnabled = Working.AnnotationEnabled;
         if (Working.EffectiveRememberSelection != RememberSelectionLifetime.Always)
             target.RememberedSelection = null;
     }
@@ -164,5 +172,6 @@ internal sealed class CaptureTabSettings : EditableTabSession
         working.CaptureOptions = CaptureOptions.WithDefaults();
         working.RememberSelection = RememberSelectionLifetime.Never;
         working.RememberedSelection = null;
+        working.AnnotationEnabled = true;
     }
 }

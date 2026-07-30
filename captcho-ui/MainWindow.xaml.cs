@@ -194,7 +194,9 @@ public sealed partial class MainWindow : Window
                     ? null
                     : new ConfigurationRememberedSelectionPersistence(
                         _settings,
-                        _configurationService)));
+                        _configurationService)),
+            new AnnotationOverlayAdapter(),
+            () => _settings.AnnotationEnabled);
 
         // Initialize Global Hotkeys after the window has an HWND.
         // In WinUI 3, the HWND is available immediately after construction.
@@ -736,9 +738,9 @@ public sealed partial class MainWindow : Window
         switch (result.Status)
         {
             case WorkflowStatus.Succeeded:
+                PreviewImage.Source = null;
                 if (result.PreviewImage is not null)
                 {
-                    PreviewImage.Source = null;
                     PreviewImage.Source = result.PreviewImage;
                 }
                 if (result.Frame is not null)
@@ -771,6 +773,10 @@ public sealed partial class MainWindow : Window
                 // The session preserves the Frame on the result; the user can
                 // retry the Trigger to re-attempt the preview transition.
                 StatusText.Text = result.Error ?? $"{result.Mode} — preview failed.";
+                break;
+
+            case WorkflowStatus.AnnotationFailed:
+                StatusText.Text = result.Error ?? $"{result.Mode} — Annotation failed.";
                 break;
         }
 

@@ -165,6 +165,13 @@ public sealed partial class SettingsWindow : Window
 
     // ── Capture tab event routing ──────────────────────────────────────────────
 
+    private void AnnotationEnabledToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_applyingView)
+            return;
+        ApplyView(_session.EditAnnotationEnabled(AnnotationEnabledToggle.IsOn));
+    }
+
     /// <summary>
     /// Routes a mouse-pointer toggle change into the session and rebinds. Suppressed
     /// while <see cref="ApplyView"/> is programmatically setting toggle state so the
@@ -301,6 +308,7 @@ public sealed partial class SettingsWindow : Window
             // carries shadow=off when decorations are off, so IsOn follows it
             // and IsEnabled explains why the control is unavailable.
             CapturePointerToggle.IsOn = view.Capture.IncludePointer;
+            AnnotationEnabledToggle.IsOn = view.Capture.AnnotationEnabled;
             CaptureDecorationsToggle.IsOn = view.Capture.IncludeDecorations;
             CaptureShadowToggle.IsOn = view.Capture.IncludeShadow;
             RememberSelectionCombo.SelectedIndex = (int)view.Capture.RememberSelection;

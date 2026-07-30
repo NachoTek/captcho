@@ -107,6 +107,13 @@ public sealed class AppSettings
     /// </summary>
     public RememberedSelectionGeometry? RememberedSelection { get; set; }
 
+    /// <summary>
+    /// Whether a captured Frame must pass through Annotation before Export.
+    /// Older Configuration files omit this property and therefore retain the
+    /// enabled-by-default post-capture workflow.
+    /// </summary>
+    public bool AnnotationEnabled { get; set; } = true;
+
     // Future properties can be added here. System.Text.Json will ignore
     // unknown properties on read and only serialize declared ones.
 
@@ -121,6 +128,7 @@ public sealed class AppSettings
         CaptureOptions = CaptureOptions.WithDefaults(),
         RememberSelection = RememberSelectionLifetime.Never,
         RememberedSelection = null,
+        AnnotationEnabled = true,
     };
 
     /// <summary>
@@ -248,5 +256,6 @@ public sealed class AppSettings
         RememberedSelection = EffectiveRememberSelection == RememberSelectionLifetime.Always
             ? RememberedSelection?.Normalized()
             : null,
+        AnnotationEnabled = AnnotationEnabled,
     };
 }

@@ -59,6 +59,13 @@ public enum WorkflowStatus
     PreviewFailed,
 
     /// <summary>
+    /// Capture succeeded but Annotation could not be presented.
+    /// The source Frame is preserved so presentation can be retried without
+    /// another Capture.
+    /// </summary>
+    AnnotationFailed,
+
+    /// <summary>
     /// Another workflow operation was already in progress when this Trigger
     /// arrived. No work was performed.
     /// </summary>
@@ -531,6 +538,57 @@ public interface IPreviewAdapter<TImage>
     PreviewPresentResult<TImage> Present(ContiguousBitmap frame);
 }
 
+/// <summary>Terminal outcome of one post-capture Annotation interaction.</summary>
+public enum AnnotationOutcome
+{
+    Confirmed,
+    Cancelled,
+    Failed,
+}
+
+/// <summary>
+/// WinUI-free result returned by Annotation. Confirmation carries
+/// the frozen composed Frame; cancellation carries no Frame; failure preserves
+/// an error for user-visible reporting.
+/// </summary>
+public sealed class AnnotationPresentResult
+{
+    public AnnotationOutcome Outcome { get; }
+    public ContiguousBitmap? Frame { get; }
+    public string? Error { get; }
+    public double ElapsedMs { get; }
+
+    private AnnotationPresentResult(
+        AnnotationOutcome outcome,
+        ContiguousBitmap? frame,
+        string? error,
+        double elapsedMs)
+    {
+        Outcome = outcome;
+        Frame = frame;
+        Error = error;
+        ElapsedMs = elapsedMs;
+    }
+
+    public static AnnotationPresentResult Confirmed(ContiguousBitmap frame, double elapsedMs = 0) =>
+        new(AnnotationOutcome.Confirmed, frame ?? throw new ArgumentNullException(nameof(frame)), null, elapsedMs);
+
+    public static AnnotationPresentResult Cancelled(double elapsedMs = 0) =>
+        new(AnnotationOutcome.Cancelled, null, null, elapsedMs);
+
+    public static AnnotationPresentResult Fail(string error, double elapsedMs = 0) =>
+        new(AnnotationOutcome.Failed, null, error ?? "Annotation presentation failed.", elapsedMs);
+}
+
+/// <summary>
+/// Presents the source Frame in full-screen Annotation and returns
+/// either its composed Frame, cancellation, or a presentation failure.
+/// </summary>
+public interface IAnnotationOverlayAdapter
+{
+    Task<AnnotationPresentResult> ShowAsync(ContiguousBitmap sourceFrame);
+}
+
 /// <summary>
 /// WinUI-free runtime workflow session. Owns Capture Mode routing, operation
 /// state, the captured Frame, and the preview transition for the production
@@ -564,6 +622,8 @@ public sealed class CaptureWorkflowSession<TImage>
     private readonly ISelectionOverlayAdapter _selectionOverlay;
     private readonly IMonitorPickerOverlayAdapter _monitorPickerOverlay;
     private readonly IWindowPickerOverlayAdapter _windowPickerOverlay;
+    private readonly IAnnotationOverlayAdapter _annotationOverlay;
+    private readonly Func<bool> _annotationEnabled;
 
     // Workflow-side Capture-options override holder. Composed committed defaults
     // with per-Capture-Mode session overrides to produce the effective options
@@ -654,6 +714,23 @@ public sealed class CaptureWorkflowSession<TImage>
         IWindowPickerOverlayAdapter windowPickerOverlay,
         SessionCaptureOptions captureOptions,
         RememberedSelectionState rememberedSelection)
+        : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
+               captureOptions, rememberedSelection, DisabledAnnotationOverlayAdapter.Instance,
+               static () => false)
+    {
+    }
+
+    /// <summary>Creates a workflow with the post-capture Annotation gate.</summary>
+    public CaptureWorkflowSession(
+        IWorkflowCaptureAdapter capture,
+        IPreviewAdapter<TImage> preview,
+        ISelectionOverlayAdapter selectionOverlay,
+        IMonitorPickerOverlayAdapter monitorPickerOverlay,
+        IWindowPickerOverlayAdapter windowPickerOverlay,
+        SessionCaptureOptions captureOptions,
+        RememberedSelectionState rememberedSelection,
+        IAnnotationOverlayAdapter annotationOverlay,
+        Func<bool> annotationEnabled)
     {
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
         _preview = preview ?? throw new ArgumentNullException(nameof(preview));
@@ -662,6 +739,8 @@ public sealed class CaptureWorkflowSession<TImage>
         _windowPickerOverlay = windowPickerOverlay ?? throw new ArgumentNullException(nameof(windowPickerOverlay));
         _captureOptions = captureOptions ?? throw new ArgumentNullException(nameof(captureOptions));
         _rememberedSelection = rememberedSelection ?? throw new ArgumentNullException(nameof(rememberedSelection));
+        _annotationOverlay = annotationOverlay ?? throw new ArgumentNullException(nameof(annotationOverlay));
+        _annotationEnabled = annotationEnabled ?? throw new ArgumentNullException(nameof(annotationEnabled));
     }
 
     /// <summary>
@@ -831,7 +910,7 @@ public sealed class CaptureWorkflowSession<TImage>
                         throw new ArgumentOutOfRangeException(nameof(mode));
                 }
 
-                return CompleteCapture(mode, captureResult, totalSw);
+                return await CompleteCaptureAsync(mode, captureResult, totalSw);
             }
         }
         finally
@@ -840,7 +919,7 @@ public sealed class CaptureWorkflowSession<TImage>
         }
     }
 
-    private WorkflowResult<TImage> CompleteCapture(
+    private async Task<WorkflowResult<TImage>> CompleteCaptureAsync(
         CaptureMode mode,
         CaptureFrameResult captureResult,
         Stopwatch totalSw)
@@ -855,6 +934,39 @@ public sealed class CaptureWorkflowSession<TImage>
         }
 
         var frame = captureResult.Frame!;
+        if (_annotationEnabled())
+        {
+            var annotationResult = await _annotationOverlay.ShowAsync(frame);
+            if (annotationResult.Outcome == AnnotationOutcome.Cancelled)
+            {
+                return WorkflowResultFor(label, WorkflowStatus.Cancelled,
+                    error: "Annotation cancelled.",
+                    captureMs: captureResult.ElapsedMs,
+                    displayMs: annotationResult.ElapsedMs,
+                    totalMs: totalSw.Elapsed.TotalMilliseconds);
+            }
+
+            if (annotationResult.Outcome == AnnotationOutcome.Failed)
+            {
+                return WorkflowResultFor(label, WorkflowStatus.AnnotationFailed,
+                    frame: frame,
+                    dimensions: captureResult.Dimensions,
+                    error: annotationResult.Error,
+                    captureMs: captureResult.ElapsedMs,
+                    displayMs: annotationResult.ElapsedMs,
+                    totalMs: totalSw.Elapsed.TotalMilliseconds);
+            }
+
+            var composedFrame = annotationResult.Frame!;
+            _lastFrame = composedFrame;
+            return WorkflowResultFor(label, WorkflowStatus.Succeeded,
+                frame: composedFrame,
+                dimensions: $"{composedFrame.Width}×{composedFrame.Height}",
+                captureMs: captureResult.ElapsedMs,
+                displayMs: annotationResult.ElapsedMs,
+                totalMs: totalSw.Elapsed.TotalMilliseconds);
+        }
+
         _lastFrame = frame;
         var previewResult = _preview.Present(frame);
         if (!previewResult.Success)
@@ -912,6 +1024,14 @@ public sealed class CaptureWorkflowSession<TImage>
     /// the WinUI thread free.
     /// </summary>
     private static Task<T> RunOffThread<T>(Func<T> work) => Task.Run(work);
+
+    private sealed class DisabledAnnotationOverlayAdapter : IAnnotationOverlayAdapter
+    {
+        public static DisabledAnnotationOverlayAdapter Instance { get; } = new();
+
+        public Task<AnnotationPresentResult> ShowAsync(ContiguousBitmap sourceFrame) =>
+            Task.FromResult(AnnotationPresentResult.Fail("Annotation is disabled."));
+    }
 
     private static WorkflowResult<TImage> WorkflowResultFor(
         string mode,

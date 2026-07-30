@@ -40,6 +40,16 @@ public class AppSettingsTests : IDisposable
         GlobalHotkeyRoute.RectangularRegion,
     };
 
+    [Fact]
+    public void Annotation_IsEnabledByDefaultAndPreservedByNormalization()
+    {
+        Assert.True(AppSettings.WithDefaults().AnnotationEnabled);
+
+        var normalized = new AppSettings { AnnotationEnabled = false }.Normalized();
+
+        Assert.False(normalized.AnnotationEnabled);
+    }
+
     // ── Default: null states means every global hotkey is enabled ───────────────
 
     [Fact]

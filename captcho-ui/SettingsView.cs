@@ -45,7 +45,8 @@ public sealed record CaptureTabContent(
     bool IncludePointer,
     bool IncludeDecorations,
     bool IncludeShadow,
-    RememberSelectionLifetime RememberSelection);
+    RememberSelectionLifetime RememberSelection,
+    bool AnnotationEnabled);
 
 /// <summary>
 /// Immutable snapshot of everything the Settings window code-behind binds. Produced

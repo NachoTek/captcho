@@ -16,6 +16,21 @@ namespace captcho.UI.Tests;
 
 public class CaptureTabSettingsTests
 {
+    [Fact]
+    public void AnnotationToggle_IsEditableResettableAndWrittenWithCaptureSettings()
+    {
+        var tab = new CaptureTabSettings(AppSettings.WithDefaults());
+        var target = AppSettings.WithDefaults();
+
+        tab.EditAnnotationEnabled(false);
+        tab.WriteInto(target);
+
+        Assert.False(tab.AnnotationEnabled);
+        Assert.False(target.AnnotationEnabled);
+        tab.Reset();
+        Assert.True(tab.AnnotationEnabled);
+    }
+
     // ── Construction ────────────────────────────────────────────────────
 
     [Fact]

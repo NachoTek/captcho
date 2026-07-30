@@ -165,6 +165,13 @@ public sealed class SettingsSession
         return ClearTransientStatus();
     }
 
+    /// <summary>Sets whether captured Frames pass through Annotation.</summary>
+    public SettingsView EditAnnotationEnabled(bool value)
+    {
+        _capture.EditAnnotationEnabled(value);
+        return ClearTransientStatus();
+    }
+
     // ── Session verbs ───────────────────────────────────────────────────
 
     /// <summary>
@@ -311,7 +318,8 @@ public sealed class SettingsSession
                 IncludePointer: _capture.IncludePointer,
                 IncludeDecorations: _capture.IncludeDecorations,
                 IncludeShadow: _capture.IncludeShadow,
-                RememberSelection: _capture.RememberSelection),
+                RememberSelection: _capture.RememberSelection,
+                AnnotationEnabled: _capture.AnnotationEnabled),
 
             Export: new ExportTabContent(
                 Heading: _export.Heading,
