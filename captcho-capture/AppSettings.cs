@@ -24,6 +24,8 @@ public enum SettingsField
     GlobalHotkeyEnabledStates,
     /// <summary>The <see cref="AppSettings.CaptureOptions"/> field.</summary>
     CaptureOptions,
+    /// <summary>The <see cref="AppSettings.AnnotationSettings"/> field.</summary>
+    AnnotationSettings,
 }
 
 /// <summary>
@@ -98,6 +100,14 @@ public sealed class AppSettings
     [JsonPropertyName("captureOptions")]
     public CaptureOptions CaptureOptions { get; set; } = CaptureOptions.WithDefaults();
 
+    /// <summary>
+    /// Persistent defaults for the post-capture Annotation toolbar. Older settings files
+    /// omit this object and retain the pen defaults through the property initializer and
+    /// <see cref="EffectiveAnnotationSettings"/>.
+    /// </summary>
+    [JsonPropertyName("annotationSettings")]
+    public AnnotationSettings AnnotationSettings { get; set; } = AnnotationSettings.WithDefaults();
+
     /// <summary>How long confirmed Selection geometry is retained.</summary>
     public RememberSelectionLifetime RememberSelection { get; set; } = RememberSelectionLifetime.Never;
 
@@ -126,6 +136,7 @@ public sealed class AppSettings
         SaveLocation = ExportDefaults.DefaultSaveDirectory,
         FilenameTemplate = ExportDefaults.DefaultFilenameTemplate,
         CaptureOptions = CaptureOptions.WithDefaults(),
+        AnnotationSettings = AnnotationSettings.WithDefaults(),
         RememberSelection = RememberSelectionLifetime.Never,
         RememberedSelection = null,
         AnnotationEnabled = true,
@@ -161,6 +172,11 @@ public sealed class AppSettings
     [JsonIgnore]
     public CaptureOptions EffectiveCaptureOptions =>
         (CaptureOptions ?? CaptureOptions.WithDefaults()).Normalized();
+
+    /// <summary>Resolves safe Annotation defaults for runtime use.</summary>
+    [JsonIgnore]
+    public AnnotationSettings EffectiveAnnotationSettings =>
+        (AnnotationSettings ?? AnnotationSettings.WithDefaults()).Normalized();
 
     /// <summary>Returns a valid remembered-Selection lifetime for runtime use.</summary>
     [JsonIgnore]
@@ -234,6 +250,16 @@ public sealed class AppSettings
             }
         }
 
+        if (AnnotationSettings is null
+            || !Enum.IsDefined(AnnotationSettings.DefaultTool)
+            || AnnotationSettings.StrokeWidth < AnnotationSettings.MinimumStrokeWidth
+            || AnnotationSettings.StrokeWidth > AnnotationSettings.MaximumStrokeWidth)
+        {
+            issues.Add(new SettingsIssue(
+                SettingsField.AnnotationSettings,
+                "Annotation defaults must use a supported tool and a stroke width from 1 through 64."));
+        }
+
         return issues;
     }
 
@@ -252,6 +278,7 @@ public sealed class AppSettings
             ? null
             : new Dictionary<GlobalHotkeyRoute, bool>(GlobalHotkeyEnabledStates),
         CaptureOptions = EffectiveCaptureOptions,
+        AnnotationSettings = EffectiveAnnotationSettings,
         RememberSelection = EffectiveRememberSelection,
         RememberedSelection = EffectiveRememberSelection == RememberSelectionLifetime.Always
             ? RememberedSelection?.Normalized()

@@ -223,6 +223,39 @@ public sealed partial class SettingsWindow : Window
         ApplyView(_session.EditRememberSelection(lifetime));
     }
 
+    // ── Annotation tab event routing ─────────────────────────────────────────
+
+    private void AnnotationToolCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_applyingView || AnnotationToolCombo.SelectedIndex < 0)
+            return;
+
+        ApplyView(_session.EditAnnotationDefaultTool(
+            (AnnotationTool)AnnotationToolCombo.SelectedIndex));
+    }
+
+    private void AnnotationPenColorCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_applyingView || AnnotationPenColorCombo.SelectedIndex < 0)
+            return;
+
+        ApplyView(_session.EditAnnotationPenColor(AnnotationColorForIndex(
+            AnnotationPenColorCombo.SelectedIndex)));
+    }
+
+    private void AnnotationStrokeWidthInput_ValueChanged(
+        NumberBox sender,
+        NumberBoxValueChangedEventArgs args)
+    {
+        if (_applyingView)
+            return;
+
+        int value = double.IsNaN(args.NewValue)
+            ? 0
+            : (int)Math.Round(args.NewValue);
+        ApplyView(_session.EditAnnotationStrokeWidth(value));
+    }
+
     // ── Command buttons ─────────────────────────────────────────────────
 
     /// <summary>
@@ -316,6 +349,10 @@ public sealed partial class SettingsWindow : Window
             CaptureShadowNoteText.Visibility = view.Capture.IncludeDecorations
                 ? Visibility.Collapsed
                 : Visibility.Visible;
+
+            AnnotationToolCombo.SelectedIndex = (int)view.Annotation.DefaultTool;
+            AnnotationPenColorCombo.SelectedIndex = AnnotationColorIndex(view.Annotation.PenColor);
+            AnnotationStrokeWidthInput.Value = view.Annotation.StrokeWidth;
         }
         finally
         {
@@ -345,7 +382,26 @@ public sealed partial class SettingsWindow : Window
         SaveStatusText.Foreground = view.StatusIsError
             ? (Brush)Application.Current.Resources["TextFillColorCriticalBrush"]
             : (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"];
+
+        AnnotationSettingsErrorText.Text = view.Annotation.Error ?? string.Empty;
+        AnnotationSettingsErrorText.Visibility = string.IsNullOrEmpty(view.Annotation.Error)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
     }
+
+    private static AnnotationColor AnnotationColorForIndex(int index) => index switch
+    {
+        1 => AnnotationColor.BlueOpaque,
+        2 => AnnotationColor.BlackOpaque,
+        _ => AnnotationColor.RedOpaque,
+    };
+
+    private static int AnnotationColorIndex(AnnotationColor color) => color switch
+    {
+        var value when value == AnnotationColor.BlueOpaque => 1,
+        var value when value == AnnotationColor.BlackOpaque => 2,
+        _ => 0,
+    };
 
     /// <summary>
     /// Clears and rebuilds the Global Hotkeys tab rows. Toggle switches are populated before

@@ -3,8 +3,8 @@
 // Every SettingsSession action (open, edit, Apply/OK/Cancel/Reset) returns a fresh
 // SettingsView carrying everything the code-behind needs to rebind: the editable
 // General-tab fields (flat, per the #8 design), the Global Hotkeys rows, the
-// editable Capture-tab content (Capture-options defaults), nested read-only tab
-// content, composed button gating, and an inline status message. The view is a
+// editable Capture and Annotation tab content, nested read-only tab content,
+// composed button gating, and an inline status message. The view is a
 // record so value-equality behaves predictably for callers that want to diff.
 // Read-only tab content is nested so it stays self-contained as it grows; the
 // small, fixed General field set stays flat to keep binding sites simple.
@@ -48,6 +48,13 @@ public sealed record CaptureTabContent(
     RememberSelectionLifetime RememberSelection,
     bool AnnotationEnabled);
 
+/// <summary>Editable defaults shown by the Annotation Settings tab.</summary>
+public sealed record AnnotationTabContent(
+    AnnotationTool DefaultTool,
+    AnnotationColor PenColor,
+    int StrokeWidth,
+    string? Error);
+
 /// <summary>
 /// Immutable snapshot of everything the Settings window code-behind binds. Produced
 /// by <see cref="SettingsSession"/> on open and after every edit or session verb.
@@ -67,6 +74,9 @@ public sealed record SettingsView(
 
     // ── Capture tab (editable) ──
     CaptureTabContent Capture,
+
+    // ── Annotation tab (editable) ──
+    AnnotationTabContent Annotation,
 
     // ── Read-only tabs ──
     ExportTabContent Export,

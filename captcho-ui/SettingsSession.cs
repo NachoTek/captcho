@@ -40,6 +40,7 @@ public sealed class SettingsSession
     private readonly GeneralTabSettings _general;
     private readonly GlobalHotkeyTabSettings _globalHotkeyTab;
     private readonly CaptureTabSettings _capture;
+    private readonly AnnotationTabSettings _annotation;
     private readonly ExportTabSettings _export;
     private readonly InterfaceTabSettings _interface;
 
@@ -73,10 +74,11 @@ public sealed class SettingsSession
         _general = new GeneralTabSettings(runtime);
         _globalHotkeyTab = new GlobalHotkeyTabSettings(runtime, globalHotkeys);
         _capture = new CaptureTabSettings(runtime);
+        _annotation = new AnnotationTabSettings(runtime);
         _export = new ExportTabSettings();
         _interface = new InterfaceTabSettings();
 
-        _editableTabs = new EditableTabSession[] { _general, _globalHotkeyTab, _capture };
+        _editableTabs = new EditableTabSession[] { _general, _globalHotkeyTab, _capture, _annotation };
     }
 
     // ── View ────────────────────────────────────────────────────────────
@@ -169,6 +171,29 @@ public sealed class SettingsSession
     public SettingsView EditAnnotationEnabled(bool value)
     {
         _capture.EditAnnotationEnabled(value);
+        return ClearTransientStatus();
+    }
+
+    // ── Editable Annotation-tab edits ───────────────────────────────────
+
+    /// <summary>Sets the default Annotation tool for new sessions.</summary>
+    public SettingsView EditAnnotationDefaultTool(AnnotationTool value)
+    {
+        _annotation.EditDefaultTool(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>Sets the default pen color for new Annotation sessions.</summary>
+    public SettingsView EditAnnotationPenColor(AnnotationColor value)
+    {
+        _annotation.EditPenColor(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>Sets the default pen stroke width for new Annotation sessions.</summary>
+    public SettingsView EditAnnotationStrokeWidth(int value)
+    {
+        _annotation.EditStrokeWidth(value);
         return ClearTransientStatus();
     }
 
@@ -320,6 +345,12 @@ public sealed class SettingsSession
                 IncludeShadow: _capture.IncludeShadow,
                 RememberSelection: _capture.RememberSelection,
                 AnnotationEnabled: _capture.AnnotationEnabled),
+
+            Annotation: new AnnotationTabContent(
+                DefaultTool: _annotation.DefaultTool,
+                PenColor: _annotation.PenColor,
+                StrokeWidth: _annotation.StrokeWidth,
+                Error: _annotation.FirstError),
 
             Export: new ExportTabContent(
                 Heading: _export.Heading,

@@ -2,8 +2,8 @@
 
 Layout:
   ┌─────────────────────────────────────────┐
-  │  TabView: General, Global Hotkeys, Export,    │
-  │            Interface                    │
+  │  TabView: General, Global Hotkeys, Capture,  │
+  │            Annotation, Export, Interface     │
   ├─────────────────────────────────────────┤
   │ [Reset to Defaults] [OK] [Cancel] [Apply]   [Save status] │
   └─────────────────────────────────────────┘
@@ -153,6 +153,46 @@ Layout:
                                    TextWrapping="Wrap"
                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                    Text="Never starts each Selection clean. Session reuses it until Captcho exits. Always reuses it across restarts while the monitor layout remains compatible."/>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabViewItem>
+
+            <TabViewItem Header="Annotation">
+                <ScrollViewer Padding="20" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="Annotation Defaults"
+                                   FontSize="16" FontWeight="SemiBold"
+                                   AutomationProperties.HeadingLevel="Level1"/>
+                        <TextBlock TextWrapping="Wrap"
+                                   FontSize="13"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   Text="These defaults initialize each post-capture Annotation session. Changes affect new strokes, not existing annotations."/>
+                        <ComboBox x:Name="AnnotationToolCombo"
+                                  Header="Default tool"
+                                  MinWidth="240"
+                                  SelectionChanged="AnnotationToolCombo_SelectionChanged">
+                            <ComboBoxItem Content="Pen"/>
+                        </ComboBox>
+                        <ComboBox x:Name="AnnotationPenColorCombo"
+                                  Header="Pen color"
+                                  MinWidth="240"
+                                  SelectionChanged="AnnotationPenColorCombo_SelectionChanged">
+                            <ComboBoxItem Content="Red"/>
+                            <ComboBoxItem Content="Blue"/>
+                            <ComboBoxItem Content="Black"/>
+                        </ComboBox>
+                        <NumberBox x:Name="AnnotationStrokeWidthInput"
+                                   Header="Pen stroke width (pixels)"
+                                   Minimum="1" Maximum="64"
+                                   SmallChange="1" LargeChange="4"
+                                   SpinButtonPlacementMode="Compact"
+                                   ValueChanged="AnnotationStrokeWidthInput_ValueChanged"
+                                   MinWidth="240"/>
+                        <TextBlock x:Name="AnnotationSettingsErrorText"
+                                   Foreground="{ThemeResource TextFillColorCriticalBrush}"
+                                   FontSize="12"
+                                   TextWrapping="Wrap"
+                                   Visibility="Collapsed"/>
                     </StackPanel>
                 </ScrollViewer>
             </TabViewItem>

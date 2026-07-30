@@ -198,15 +198,21 @@ public sealed class WriteableBitmapPreviewAdapter : IPreviewAdapter<WriteableBit
 }
 
 /// <summary>Production adapter for post-capture Annotation.</summary>
-public sealed class AnnotationOverlayAdapter : IAnnotationOverlayAdapter
+public sealed class AnnotationOverlayAdapter : IAnnotationOverlayStateAdapter
 {
     public async Task<AnnotationPresentResult> ShowAsync(ContiguousBitmap sourceFrame)
+        => await ShowAsync(sourceFrame, AnnotationToolState.WithDefaults());
+
+    public async Task<AnnotationPresentResult> ShowAsync(
+        ContiguousBitmap sourceFrame,
+        AnnotationToolState initialToolState)
     {
         ArgumentNullException.ThrowIfNull(sourceFrame);
+        ArgumentNullException.ThrowIfNull(initialToolState);
 
         try
         {
-            using var overlay = new AnnotationOverlayWindow(sourceFrame);
+            using var overlay = new AnnotationOverlayWindow(sourceFrame, initialToolState);
             return await overlay.ShowAndWaitAsync();
         }
         catch (Exception ex)

@@ -6,7 +6,7 @@ using Xunit;
 
 namespace captcho.UI.Tests;
 
-internal sealed class FakeAnnotationOverlayAdapter : IAnnotationOverlayAdapter
+internal class FakeAnnotationOverlayAdapter : IAnnotationOverlayAdapter
 {
     public int CallCount { get; private set; }
     public ContiguousBitmap? LastSourceFrame { get; private set; }
@@ -17,6 +17,19 @@ internal sealed class FakeAnnotationOverlayAdapter : IAnnotationOverlayAdapter
         CallCount++;
         LastSourceFrame = sourceFrame;
         return Task.FromResult(NextResult);
+    }
+}
+
+internal sealed class FakeConfiguredAnnotationOverlayAdapter : FakeAnnotationOverlayAdapter, IAnnotationOverlayStateAdapter
+{
+    public AnnotationToolState? InitialToolState { get; private set; }
+
+    public Task<AnnotationPresentResult> ShowAsync(
+        ContiguousBitmap sourceFrame,
+        AnnotationToolState initialToolState)
+    {
+        InitialToolState = initialToolState;
+        return base.ShowAsync(sourceFrame);
     }
 }
 
@@ -121,6 +134,63 @@ public class AnnotationGateTests
         Assert.Equal("Could not present Annotation.", failed.Error);
     }
 
+    [Fact]
+    public async Task EnabledAnnotation_ReceivesCommittedToolDefaultsForNewSession()
+    {
+        var defaults = new AnnotationToolState(
+            AnnotationTool.Pen,
+            new AnnotationColor(12, 34, 56),
+            9);
+        var annotation = new FakeConfiguredAnnotationOverlayAdapter
+        {
+            NextResult = AnnotationPresentResult.Confirmed(Frame(2, 2)),
+        };
+        var session = new CaptureWorkflowSession<object>(
+            SuccessfulCapture(Frame(2, 2)),
+            new FakePreviewAdapter(),
+            new FakeSelectionOverlayAdapter(),
+            new FakeMonitorPickerOverlayAdapter(),
+            new FakeWindowPickerOverlayAdapter(),
+            new SessionCaptureOptions(AppSettings.WithDefaults()),
+            RememberedSelectionState.Disabled,
+            annotation,
+            () => true,
+            () => defaults);
+
+        await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(defaults, annotation.InitialToolState);
+    }
+
+    [Fact]
+    public async Task Workflow_ConfirmedPenFrameCarriesTheComposedPixels()
+    {
+        var source = BitmapBufferConverter.StripPadding(
+            new byte[4 * 4],
+            4,
+            1,
+            16);
+        var annotation = new FakePenAnnotationOverlayAdapter();
+        var session = new CaptureWorkflowSession<object>(
+            SuccessfulCapture(source),
+            new FakePreviewAdapter(),
+            new FakeSelectionOverlayAdapter(),
+            new FakeMonitorPickerOverlayAdapter(),
+            new FakeWindowPickerOverlayAdapter(),
+            new SessionCaptureOptions(AppSettings.WithDefaults()),
+            RememberedSelectionState.Disabled,
+            annotation,
+            () => true,
+            () => new AnnotationToolState(AnnotationTool.Pen, new AnnotationColor(255, 0, 0), 1));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        Assert.Equal(255, result.Frame!.Pixels[2]);
+        Assert.Equal(255, result.Frame.Pixels[3]);
+    }
+
     private static CaptureWorkflowSession<object> Session(
         FakeCaptureAdapter capture,
         FakePreviewAdapter preview,
@@ -144,4 +214,21 @@ public class AnnotationGateTests
 
     private static ContiguousBitmap Frame(int width, int height) =>
         ExportTestHelpers.CreateTestBitmap(width, height);
+}
+
+internal sealed class FakePenAnnotationOverlayAdapter : IAnnotationOverlayStateAdapter
+{
+    public Task<AnnotationPresentResult> ShowAsync(ContiguousBitmap sourceFrame) =>
+        ShowAsync(sourceFrame, AnnotationToolState.WithDefaults());
+
+    public Task<AnnotationPresentResult> ShowAsync(
+        ContiguousBitmap sourceFrame,
+        AnnotationToolState initialToolState)
+    {
+        var annotation = new AnnotationSession(sourceFrame, initialToolState);
+        annotation.BeginStroke(new AnnotationPoint(0, 0));
+        annotation.AppendStrokePoint(new AnnotationPoint(3, 0));
+        annotation.CommitStroke();
+        return Task.FromResult(AnnotationPresentResult.Confirmed(annotation.Render()));
+    }
 }

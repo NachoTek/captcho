@@ -590,6 +590,17 @@ public interface IAnnotationOverlayAdapter
 }
 
 /// <summary>
+/// Optional Annotation adapter capability for overlays that consume the committed
+/// toolbar defaults when a session opens.
+/// </summary>
+public interface IAnnotationOverlayStateAdapter : IAnnotationOverlayAdapter
+{
+    Task<AnnotationPresentResult> ShowAsync(
+        ContiguousBitmap sourceFrame,
+        AnnotationToolState initialToolState);
+}
+
+/// <summary>
 /// WinUI-free runtime workflow session. Owns Capture Mode routing, operation
 /// state, the captured Frame, and the preview transition for the production
 /// GUI. WinUI windows and code-behind are thin event/rendering adapters over
@@ -624,6 +635,7 @@ public sealed class CaptureWorkflowSession<TImage>
     private readonly IWindowPickerOverlayAdapter _windowPickerOverlay;
     private readonly IAnnotationOverlayAdapter _annotationOverlay;
     private readonly Func<bool> _annotationEnabled;
+    private readonly Func<AnnotationToolState> _annotationToolState;
 
     // Workflow-side Capture-options override holder. Composed committed defaults
     // with per-Capture-Mode session overrides to produce the effective options
@@ -731,6 +743,24 @@ public sealed class CaptureWorkflowSession<TImage>
         RememberedSelectionState rememberedSelection,
         IAnnotationOverlayAdapter annotationOverlay,
         Func<bool> annotationEnabled)
+        : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
+               captureOptions, rememberedSelection, annotationOverlay, annotationEnabled,
+               static () => AnnotationToolState.WithDefaults())
+    {
+    }
+
+    /// <summary>Creates a workflow with Annotation and committed toolbar defaults.</summary>
+    public CaptureWorkflowSession(
+        IWorkflowCaptureAdapter capture,
+        IPreviewAdapter<TImage> preview,
+        ISelectionOverlayAdapter selectionOverlay,
+        IMonitorPickerOverlayAdapter monitorPickerOverlay,
+        IWindowPickerOverlayAdapter windowPickerOverlay,
+        SessionCaptureOptions captureOptions,
+        RememberedSelectionState rememberedSelection,
+        IAnnotationOverlayAdapter annotationOverlay,
+        Func<bool> annotationEnabled,
+        Func<AnnotationToolState> annotationToolState)
     {
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
         _preview = preview ?? throw new ArgumentNullException(nameof(preview));
@@ -741,6 +771,7 @@ public sealed class CaptureWorkflowSession<TImage>
         _rememberedSelection = rememberedSelection ?? throw new ArgumentNullException(nameof(rememberedSelection));
         _annotationOverlay = annotationOverlay ?? throw new ArgumentNullException(nameof(annotationOverlay));
         _annotationEnabled = annotationEnabled ?? throw new ArgumentNullException(nameof(annotationEnabled));
+        _annotationToolState = annotationToolState ?? throw new ArgumentNullException(nameof(annotationToolState));
     }
 
     /// <summary>
@@ -936,7 +967,10 @@ public sealed class CaptureWorkflowSession<TImage>
         var frame = captureResult.Frame!;
         if (_annotationEnabled())
         {
-            var annotationResult = await _annotationOverlay.ShowAsync(frame);
+            var annotationState = _annotationToolState();
+            var annotationResult = _annotationOverlay is IAnnotationOverlayStateAdapter statefulOverlay
+                ? await statefulOverlay.ShowAsync(frame, annotationState)
+                : await _annotationOverlay.ShowAsync(frame);
             if (annotationResult.Outcome == AnnotationOutcome.Cancelled)
             {
                 return WorkflowResultFor(label, WorkflowStatus.Cancelled,

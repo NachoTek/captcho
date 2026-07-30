@@ -11,9 +11,9 @@ using captcho.Capture;
 namespace captcho.UI;
 
 /// <summary>
-/// Borderless layered Annotation surface over the Virtual Desktop. This gate
-/// displays the frozen source Frame and returns it unchanged on confirmation;
-/// subsequent Annotation-tool tickets will compose edits on this same surface.
+/// Borderless layered Annotation surface over the Virtual Desktop. It displays the
+/// frozen source Frame, maintains one toolbar state and document, and returns the
+/// composed Frame on confirmation.
 /// </summary>
 public sealed class AnnotationOverlayWindow : IDisposable
 {
@@ -25,6 +25,8 @@ public sealed class AnnotationOverlayWindow : IDisposable
     private const int WM_CLOSE = 0x0010;
     private const int WM_DESTROY = 0x0002;
     private const int WM_KEYDOWN = 0x0100;
+    private const int WM_MOUSEMOVE = 0x0200;
+    private const int WM_LBUTTONDOWN = 0x0201;
     private const int WM_LBUTTONUP = 0x0202;
     private const int VK_ESCAPE = 0x1B;
     private const int VK_RETURN = 0x0D;
@@ -91,6 +93,8 @@ public sealed class AnnotationOverlayWindow : IDisposable
     [DllImport("user32.dll")] private static extern bool DestroyWindow(IntPtr window);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr window, int command);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")] private static extern IntPtr SetCapture(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool ReleaseCapture();
     [DllImport("user32.dll")] private static extern IntPtr LoadCursor(IntPtr instance, int cursorName);
     [DllImport("user32.dll")] private static extern bool UpdateLayeredWindow(IntPtr window, IntPtr destinationDc, ref Point destination, ref Size size, IntPtr sourceDc, ref Point source, int colorKey, ref BlendFunction blend, int flags);
     [DllImport("user32.dll")] private static extern bool GetMessage(out Message message, IntPtr window, uint minimum, uint maximum);
@@ -111,6 +115,7 @@ public sealed class AnnotationOverlayWindow : IDisposable
     [ThreadStatic] private static AnnotationOverlayWindow? _current;
 
     private readonly ContiguousBitmap _sourceFrame;
+    private readonly AnnotationSession _annotationSession;
     private readonly TaskCompletionSource<AnnotationPresentResult> _completion = new();
     private readonly Stopwatch _stopwatch = new();
     private IntPtr _window;
@@ -120,11 +125,27 @@ public sealed class AnnotationOverlayWindow : IDisposable
     private WindowProcedure? _windowProcedure;
     private AnnotationPresentResult? _pendingResult;
     private int _virtualX, _virtualY, _virtualWidth, _virtualHeight;
+    private Rectangle _frameBounds;
+    private bool _drawing;
+    private Rectangle _penButton;
+    private Rectangle _colorButton;
+    private Rectangle _widthDownButton;
+    private Rectangle _widthUpButton;
     private Rectangle _confirmButton;
     private Rectangle _cancelButton;
 
-    public AnnotationOverlayWindow(ContiguousBitmap sourceFrame) =>
+    public AnnotationOverlayWindow(ContiguousBitmap sourceFrame)
+        : this(sourceFrame, AnnotationToolState.WithDefaults())
+    {
+    }
+
+    public AnnotationOverlayWindow(
+        ContiguousBitmap sourceFrame,
+        AnnotationToolState initialToolState)
+    {
         _sourceFrame = sourceFrame ?? throw new ArgumentNullException(nameof(sourceFrame));
+        _annotationSession = new AnnotationSession(sourceFrame, initialToolState);
+    }
 
     public Task<AnnotationPresentResult> ShowAndWaitAsync()
     {
@@ -220,10 +241,39 @@ public sealed class AnnotationOverlayWindow : IDisposable
             case WM_CLOSE:
                 Cancel();
                 return IntPtr.Zero;
+            case WM_LBUTTONDOWN:
+                var downPoint = new System.Drawing.Point(SignedLowWord(lParam), SignedHighWord(lParam));
+                if (HandleToolbarClick(downPoint))
+                    return IntPtr.Zero;
+                if (_frameBounds.Contains(downPoint))
+                {
+                    _drawing = true;
+                    SetCapture(window);
+                    _annotationSession.BeginStroke(ToFramePoint(downPoint));
+                    Render();
+                }
+                return IntPtr.Zero;
+            case WM_MOUSEMOVE when _drawing:
+                var movePoint = new System.Drawing.Point(SignedLowWord(lParam), SignedHighWord(lParam));
+                _annotationSession.AppendStrokePoint(ToFramePoint(movePoint));
+                Render();
+                return IntPtr.Zero;
             case WM_LBUTTONUP:
-                var point = new System.Drawing.Point(SignedLowWord(lParam), SignedHighWord(lParam));
-                if (_confirmButton.Contains(point)) Confirm();
-                else if (_cancelButton.Contains(point)) Cancel();
+                if (_drawing)
+                {
+                    _drawing = false;
+                    ReleaseCapture();
+                    var point = new System.Drawing.Point(SignedLowWord(lParam), SignedHighWord(lParam));
+                    _annotationSession.AppendStrokePoint(ToFramePoint(point));
+                    _annotationSession.CommitStroke();
+                    Render();
+                }
+                else
+                {
+                    var point = new System.Drawing.Point(SignedLowWord(lParam), SignedHighWord(lParam));
+                    if (_confirmButton.Contains(point)) Confirm();
+                    else if (_cancelButton.Contains(point)) Cancel();
+                }
                 return IntPtr.Zero;
             case WM_DESTROY:
                 PostQuitMessage(0);
@@ -235,7 +285,7 @@ public sealed class AnnotationOverlayWindow : IDisposable
 
     private void Confirm()
     {
-        Complete(AnnotationPresentResult.Confirmed(_sourceFrame, ElapsedMilliseconds()));
+        Complete(AnnotationPresentResult.Confirmed(_annotationSession.Render(), ElapsedMilliseconds()));
     }
 
     private void Cancel()
@@ -266,6 +316,7 @@ public sealed class AnnotationOverlayWindow : IDisposable
 
     private void Render()
     {
+        ReleaseRenderSurface();
         var bitmapInfo = new BitmapInfoHeader
         {
             Size = (uint)Marshal.SizeOf<BitmapInfoHeader>(),
@@ -292,16 +343,18 @@ public sealed class AnnotationOverlayWindow : IDisposable
         using var graphics = Graphics.FromImage(surface);
         graphics.Clear(Color.FromArgb(255, 18, 18, 20));
 
-        var pixels = GCHandle.Alloc(_sourceFrame.Pixels, GCHandleType.Pinned);
+        var composed = _annotationSession.Render();
+        var composedPixels = GCHandle.Alloc(composed.Pixels, GCHandleType.Pinned);
         try
         {
             using var source = new Bitmap(
-                _sourceFrame.Width,
-                _sourceFrame.Height,
-                _sourceFrame.Stride,
+                composed.Width,
+                composed.Height,
+                composed.Stride,
                 PixelFormat.Format32bppArgb,
-                pixels.AddrOfPinnedObject());
-            var destination = FitFrame(_sourceFrame.Width, _sourceFrame.Height, _virtualWidth, _virtualHeight);
+                composedPixels.AddrOfPinnedObject());
+            var destination = FitFrame(composed.Width, composed.Height, _virtualWidth, _virtualHeight);
+            _frameBounds = destination;
             graphics.InterpolationMode = destination.Size == source.Size
                 ? InterpolationMode.NearestNeighbor
                 : InterpolationMode.HighQualityBicubic;
@@ -309,7 +362,7 @@ public sealed class AnnotationOverlayWindow : IDisposable
         }
         finally
         {
-            pixels.Free();
+            composedPixels.Free();
         }
 
         DrawControls(graphics);
@@ -330,25 +383,116 @@ public sealed class AnnotationOverlayWindow : IDisposable
 
     private void DrawControls(Graphics graphics)
     {
-        const int width = 138;
+        const int buttonWidth = 92;
         const int height = 42;
-        const int gap = 12;
-        int startX = (_virtualWidth - (width * 2 + gap)) / 2;
-        _confirmButton = new Rectangle(startX, 20, width, height);
-        _cancelButton = new Rectangle(startX + width + gap, 20, width, height);
+        const int gap = 8;
+        const int colorWidth = 54;
+        const int widthButton = 38;
+        const int widthLabel = 86;
+        int contentWidth = buttonWidth + colorWidth + widthButton * 2 + widthLabel + buttonWidth * 2 + gap * 6;
+        int startX = Math.Max(8, (_virtualWidth - contentWidth) / 2);
+        int y = 20;
+        int x = startX;
+        _penButton = new Rectangle(x, y, buttonWidth, height);
+        x += buttonWidth + gap;
+        _colorButton = new Rectangle(x, y, colorWidth, height);
+        x += colorWidth + gap;
+        _widthDownButton = new Rectangle(x, y, widthButton, height);
+        x += widthButton + gap;
+        var widthText = new Rectangle(x, y, widthLabel, height);
+        x += widthLabel + gap;
+        _widthUpButton = new Rectangle(x, y, widthButton, height);
+        x += widthButton + gap * 2;
+        _confirmButton = new Rectangle(x, y, buttonWidth, height);
+        x += buttonWidth + gap;
+        _cancelButton = new Rectangle(x, y, buttonWidth, height);
 
         graphics.SmoothingMode = SmoothingMode.AntiAlias;
         using var panel = new SolidBrush(Color.FromArgb(220, 28, 30, 34));
-        graphics.FillRectangle(panel, startX - 12, 8, width * 2 + gap + 24, height + 24);
+        graphics.FillRectangle(panel, startX - 12, 8, contentWidth + 24, height + 24);
+        using var pen = new SolidBrush(Color.FromArgb(255, 38, 139, 210));
+        using var color = new SolidBrush(ToDrawingColor(_annotationSession.ToolState.PenColor));
+        using var neutral = new SolidBrush(Color.FromArgb(255, 70, 72, 78));
         using var confirm = new SolidBrush(Color.FromArgb(255, 38, 139, 210));
         using var cancel = new SolidBrush(Color.FromArgb(255, 70, 72, 78));
+        graphics.FillRectangle(pen, _penButton);
+        graphics.FillRectangle(color, _colorButton);
+        graphics.FillRectangle(neutral, _widthDownButton);
+        graphics.FillRectangle(neutral, widthText);
+        graphics.FillRectangle(neutral, _widthUpButton);
         graphics.FillRectangle(confirm, _confirmButton);
         graphics.FillRectangle(cancel, _cancelButton);
         using var font = new Font("Segoe UI", 12, FontStyle.Bold);
+        using var smallFont = new Font("Segoe UI", 10, FontStyle.Bold);
         using var text = new SolidBrush(Color.White);
-        DrawCentered(graphics, "Confirm  Enter", font, text, _confirmButton);
-        DrawCentered(graphics, "Cancel  Esc", font, text, _cancelButton);
+        DrawCentered(graphics, "Pen", font, text, _penButton);
+        DrawCentered(graphics, "Color", smallFont, text, _colorButton);
+        DrawCentered(graphics, "-", font, text, _widthDownButton);
+        DrawCentered(graphics, $"Width {_annotationSession.ToolState.StrokeWidth}", smallFont, text, widthText);
+        DrawCentered(graphics, "+", font, text, _widthUpButton);
+        DrawCentered(graphics, "Confirm", smallFont, text, _confirmButton);
+        DrawCentered(graphics, "Cancel", smallFont, text, _cancelButton);
     }
+
+    private bool HandleToolbarClick(System.Drawing.Point point)
+    {
+        if (_penButton.Contains(point))
+        {
+            _annotationSession.SetTool(AnnotationTool.Pen);
+            Render();
+            return true;
+        }
+
+        if (_colorButton.Contains(point))
+        {
+            var colors = new[]
+            {
+                AnnotationColor.RedOpaque,
+                AnnotationColor.BlueOpaque,
+                AnnotationColor.BlackOpaque,
+            };
+            int current = Array.IndexOf(colors, _annotationSession.ToolState.PenColor);
+            _annotationSession.SetPenColor(colors[(current + 1 + colors.Length) % colors.Length]);
+            Render();
+            return true;
+        }
+
+        if (_widthDownButton.Contains(point))
+        {
+            _annotationSession.SetStrokeWidth(Math.Max(
+                AnnotationSettings.MinimumStrokeWidth,
+                _annotationSession.ToolState.StrokeWidth - 1));
+            Render();
+            return true;
+        }
+
+        if (_widthUpButton.Contains(point))
+        {
+            _annotationSession.SetStrokeWidth(Math.Min(
+                AnnotationSettings.MaximumStrokeWidth,
+                _annotationSession.ToolState.StrokeWidth + 1));
+            Render();
+            return true;
+        }
+
+        return false;
+    }
+
+    private AnnotationPoint ToFramePoint(System.Drawing.Point point)
+    {
+        int x = Math.Clamp(
+            (int)((point.X - _frameBounds.X) * (long)_sourceFrame.Width / _frameBounds.Width),
+            0,
+            _sourceFrame.Width - 1);
+        int y = Math.Clamp(
+            (int)((point.Y - _frameBounds.Y) * (long)_sourceFrame.Height / _frameBounds.Height),
+            0,
+            _sourceFrame.Height - 1);
+        return new AnnotationPoint(x, y);
+    }
+
+    private static Color ToDrawingColor(AnnotationColor color) =>
+        Color.FromArgb(color.Alpha, color.Red, color.Green, color.Blue);
 
     private static void DrawCentered(Graphics graphics, string value, Font font, Brush brush, Rectangle bounds)
     {
@@ -375,12 +519,17 @@ public sealed class AnnotationOverlayWindow : IDisposable
 
     private void Cleanup()
     {
-        if (_bitmap != IntPtr.Zero) { DeleteObject(_bitmap); _bitmap = IntPtr.Zero; }
-        if (_bitmapDc != IntPtr.Zero) { DeleteDC(_bitmapDc); _bitmapDc = IntPtr.Zero; }
+        ReleaseRenderSurface();
         _bits = IntPtr.Zero;
         _window = IntPtr.Zero;
         _windowProcedure = null;
     }
 
     public void Dispose() => Cleanup();
+
+    private void ReleaseRenderSurface()
+    {
+        if (_bitmapDc != IntPtr.Zero) { DeleteDC(_bitmapDc); _bitmapDc = IntPtr.Zero; }
+        if (_bitmap != IntPtr.Zero) { DeleteObject(_bitmap); _bitmap = IntPtr.Zero; }
+    }
 }

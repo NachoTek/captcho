@@ -196,7 +196,8 @@ public sealed partial class MainWindow : Window
                         _settings,
                         _configurationService)),
             new AnnotationOverlayAdapter(),
-            () => _settings.AnnotationEnabled);
+            () => _settings.AnnotationEnabled,
+            () => _settings.EffectiveAnnotationSettings.ToToolState());
 
         // Initialize Global Hotkeys after the window has an HWND.
         // In WinUI 3, the HWND is available immediately after construction.

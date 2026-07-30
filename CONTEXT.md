@@ -37,7 +37,7 @@ An optional interactive step where the user picks what to capture. Skipped for F
 _Avoid_: Target picking, source selection
 
 **Annotation**:
-Post-capture markup on a full-screen overlay that displays the captured Frame. The user draws, marks, or annotates the frozen Frame before Export. Available when enabled in Settings; if disabled, the existing preview workflow is retained.
+Post-capture markup on a full-screen overlay that displays the captured Frame. The user draws, marks, or annotates the frozen Frame before Export. V1 keeps one global Annotation tool state and one source-plus-strokes composite; the pen renders both in-progress and committed strokes without mutating the source Frame. Available when enabled in Settings; if disabled, the existing preview workflow is retained.
 _Avoid_: Markup, drawing, annotation overlay
 
 **Capture**:
@@ -75,7 +75,7 @@ _Avoid_: Desktop bounds, screen area, combined display
 ### User Interface
 
 **Settings**:
-User-facing preferences configurable through the UI — hotkeys, export behavior, annotation toggles, theme.
+User-facing preferences configurable through the UI — hotkeys, export behavior, Annotation defaults and toggles, theme.
 _Avoid_: Preferences, options, config
 
 **Configuration**:
