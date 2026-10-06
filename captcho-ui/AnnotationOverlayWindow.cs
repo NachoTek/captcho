@@ -30,6 +30,7 @@ public sealed class AnnotationOverlayWindow : IDisposable
     private const int WM_LBUTTONUP = 0x0202;
     private const int VK_ESCAPE = 0x1B;
     private const int VK_RETURN = 0x0D;
+    private const int VK_CONTROL = 0x11;
     private const int SM_XVIRTUALSCREEN = 76;
     private const int SM_YVIRTUALSCREEN = 77;
     private const int SM_CXVIRTUALSCREEN = 78;
@@ -131,6 +132,8 @@ public sealed class AnnotationOverlayWindow : IDisposable
     private Rectangle _colorButton;
     private Rectangle _widthDownButton;
     private Rectangle _widthUpButton;
+    private Rectangle _undoButton;
+    private Rectangle _redoButton;
     private Rectangle _confirmButton;
     private Rectangle _cancelButton;
 
@@ -241,6 +244,15 @@ public sealed class AnnotationOverlayWindow : IDisposable
             case WM_CLOSE:
                 Cancel();
                 return IntPtr.Zero;
+            case WM_KEYDOWN when wParam.ToInt32() is 'Z' or 'Y' or 'z' or 'y':
+                if (IsControlDown())
+                {
+                    bool redo = wParam.ToInt32() is 'Y' or 'y'
+                        || (wParam.ToInt32() is 'Z' or 'z' && IsShiftDown());
+                    if (redo ? _annotationSession.Redo() : _annotationSession.Undo())
+                        Render();
+                }
+                return IntPtr.Zero;
             case WM_LBUTTONDOWN:
                 var downPoint = new System.Drawing.Point(SignedLowWord(lParam), SignedHighWord(lParam));
                 if (HandleToolbarClick(downPoint))
@@ -282,6 +294,24 @@ public sealed class AnnotationOverlayWindow : IDisposable
                 return DefWindowProcW(window, message, wParam, lParam);
         }
     }
+
+    private static bool IsControlDown()
+    {
+        const int VK_LCONTROL = 0xA2;
+        const int VK_RCONTROL = 0xA3;
+        return IsKeyDown(VK_CONTROL) || IsKeyDown(VK_LCONTROL) || IsKeyDown(VK_RCONTROL);
+    }
+
+    private static bool IsShiftDown()
+    {
+        const int VK_SHIFT = 0x10;
+        return IsKeyDown(VK_SHIFT);
+    }
+
+    private static bool IsKeyDown(int virtualKey) =>
+        (GetKeyState(virtualKey) & 0x8000) != 0;
+
+    [DllImport("user32.dll")] private static extern short GetKeyState(int virtualKey);
 
     private void Confirm()
     {
@@ -389,7 +419,8 @@ public sealed class AnnotationOverlayWindow : IDisposable
         const int colorWidth = 54;
         const int widthButton = 38;
         const int widthLabel = 86;
-        int contentWidth = buttonWidth + colorWidth + widthButton * 2 + widthLabel + buttonWidth * 2 + gap * 6;
+        const int undoWidth = 58;
+        int contentWidth = buttonWidth + colorWidth + widthButton * 2 + widthLabel + undoWidth * 2 + buttonWidth * 2 + gap * 7;
         int startX = Math.Max(8, (_virtualWidth - contentWidth) / 2);
         int y = 20;
         int x = startX;
@@ -403,6 +434,10 @@ public sealed class AnnotationOverlayWindow : IDisposable
         x += widthLabel + gap;
         _widthUpButton = new Rectangle(x, y, widthButton, height);
         x += widthButton + gap * 2;
+        _undoButton = new Rectangle(x, y, undoWidth, height);
+        x += undoWidth + gap;
+        _redoButton = new Rectangle(x, y, undoWidth, height);
+        x += undoWidth + gap * 2;
         _confirmButton = new Rectangle(x, y, buttonWidth, height);
         x += buttonWidth + gap;
         _cancelButton = new Rectangle(x, y, buttonWidth, height);
@@ -413,6 +448,7 @@ public sealed class AnnotationOverlayWindow : IDisposable
         using var pen = new SolidBrush(Color.FromArgb(255, 38, 139, 210));
         using var color = new SolidBrush(ToDrawingColor(_annotationSession.ToolState.PenColor));
         using var neutral = new SolidBrush(Color.FromArgb(255, 70, 72, 78));
+        using var neutralDisabled = new SolidBrush(Color.FromArgb(255, 48, 50, 54));
         using var confirm = new SolidBrush(Color.FromArgb(255, 38, 139, 210));
         using var cancel = new SolidBrush(Color.FromArgb(255, 70, 72, 78));
         graphics.FillRectangle(pen, _penButton);
@@ -420,16 +456,21 @@ public sealed class AnnotationOverlayWindow : IDisposable
         graphics.FillRectangle(neutral, _widthDownButton);
         graphics.FillRectangle(neutral, widthText);
         graphics.FillRectangle(neutral, _widthUpButton);
+        graphics.FillRectangle(_annotationSession.CanUndo ? neutral : neutralDisabled, _undoButton);
+        graphics.FillRectangle(_annotationSession.CanRedo ? neutral : neutralDisabled, _redoButton);
         graphics.FillRectangle(confirm, _confirmButton);
         graphics.FillRectangle(cancel, _cancelButton);
         using var font = new Font("Segoe UI", 12, FontStyle.Bold);
         using var smallFont = new Font("Segoe UI", 10, FontStyle.Bold);
         using var text = new SolidBrush(Color.White);
+        using var textDisabled = new SolidBrush(Color.FromArgb(255, 130, 132, 138));
         DrawCentered(graphics, "Pen", font, text, _penButton);
         DrawCentered(graphics, "Color", smallFont, text, _colorButton);
         DrawCentered(graphics, "-", font, text, _widthDownButton);
         DrawCentered(graphics, $"Width {_annotationSession.ToolState.StrokeWidth}", smallFont, text, widthText);
         DrawCentered(graphics, "+", font, text, _widthUpButton);
+        DrawCentered(graphics, "Undo", smallFont, _annotationSession.CanUndo ? text : textDisabled, _undoButton);
+        DrawCentered(graphics, "Redo", smallFont, _annotationSession.CanRedo ? text : textDisabled, _redoButton);
         DrawCentered(graphics, "Confirm", smallFont, text, _confirmButton);
         DrawCentered(graphics, "Cancel", smallFont, text, _cancelButton);
     }
@@ -472,6 +513,20 @@ public sealed class AnnotationOverlayWindow : IDisposable
                 AnnotationSettings.MaximumStrokeWidth,
                 _annotationSession.ToolState.StrokeWidth + 1));
             Render();
+            return true;
+        }
+
+        if (_undoButton.Contains(point))
+        {
+            if (_annotationSession.Undo())
+                Render();
+            return true;
+        }
+
+        if (_redoButton.Contains(point))
+        {
+            if (_annotationSession.Redo())
+                Render();
             return true;
         }
 

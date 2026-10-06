@@ -110,6 +110,7 @@ public sealed class AnnotationStroke
 public sealed class AnnotationDocument
 {
     private readonly List<AnnotationStroke> _strokes = new();
+    private readonly List<AnnotationStroke> _redoStrokes = new();
     private List<AnnotationPoint>? _inProgressPoints;
     private AnnotationToolState? _inProgressState;
 
@@ -118,6 +119,8 @@ public sealed class AnnotationDocument
 
     public ContiguousBitmap SourceFrame { get; }
     public IReadOnlyList<AnnotationStroke> Strokes => _strokes.AsReadOnly();
+    public bool CanUndo => _strokes.Count > 0 && _inProgressPoints is null;
+    public bool CanRedo => _redoStrokes.Count > 0 && _inProgressPoints is null;
 
     public AnnotationStroke? InProgressStroke =>
         _inProgressPoints is null || _inProgressState is null
@@ -151,6 +154,8 @@ public sealed class AnnotationDocument
             return false;
 
         _strokes.Add(stroke);
+        if (_redoStrokes.Count > 0)
+            _redoStrokes.Clear();
         CancelStroke();
         return true;
     }
@@ -159,6 +164,32 @@ public sealed class AnnotationDocument
     {
         _inProgressPoints = null;
         _inProgressState = null;
+    }
+
+    /// <summary>Undo removes the latest committed stroke and updates the composed Frame on the next render.</summary>
+    public bool Undo()
+    {
+        if (_inProgressPoints is not null)
+            return false;
+        if (_strokes.Count == 0)
+            return false;
+
+        _redoStrokes.Add(_strokes[^1]);
+        _strokes.RemoveAt(_strokes.Count - 1);
+        return true;
+    }
+
+    /// <summary>Redo restores the most recently undone stroke in its original order and style.</summary>
+    public bool Redo()
+    {
+        if (_inProgressPoints is not null)
+            return false;
+        if (_redoStrokes.Count == 0)
+            return false;
+
+        _strokes.Add(_redoStrokes[^1]);
+        _redoStrokes.RemoveAt(_redoStrokes.Count - 1);
+        return true;
     }
 
     public ContiguousBitmap Render() => AnnotationRenderer.Render(SourceFrame, _strokes, InProgressStroke);
@@ -199,6 +230,10 @@ public sealed class AnnotationSession
     public void AppendStrokePoint(AnnotationPoint point) => Document.AppendStrokePoint(point);
     public bool CommitStroke() => Document.CommitStroke();
     public void CancelStroke() => Document.CancelStroke();
+    public bool Undo() => Document.Undo();
+    public bool Redo() => Document.Redo();
+    public bool CanUndo => Document.CanUndo;
+    public bool CanRedo => Document.CanRedo;
     public ContiguousBitmap Render() => Document.Render();
 }
 

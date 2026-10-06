@@ -84,6 +84,130 @@ public class AnnotationDocumentTests
         Assert.Equal(source.Pixels, session.Render().Pixels);
     }
 
+    // spec #38: document history
+
+    [Fact]
+    public void Undo_RemovesTheLatestCommittedStrokeAndUpdatesTheComposedFrame()
+    {
+        var source = SolidFrame(6, 1, new AnnotationColor(20, 30, 40));
+        var session = new AnnotationSession(source, new AnnotationToolState(
+            AnnotationTool.Pen,
+            new AnnotationColor(255, 0, 0),
+            1));
+
+        session.BeginStroke(new AnnotationPoint(1, 0));
+        session.CommitStroke();
+        session.BeginStroke(new AnnotationPoint(4, 0));
+        session.CommitStroke();
+
+        Assert.Equal(2, session.Document.Strokes.Count);
+        Assert.True(session.Undo());
+
+        var committed = Assert.Single(session.Document.Strokes);
+        Assert.Equal(new AnnotationPoint(1, 0), committed.Points[0]);
+        Assert.Equal(new AnnotationColor(255, 0, 0), Pixel(session.Render(), 1, 0));
+        Assert.Equal(new AnnotationColor(20, 30, 40), Pixel(session.Render(), 4, 0));
+        Assert.Equal(source.Pixels[0], session.Render().Pixels[0]);
+    }
+
+    [Fact]
+    public void Redo_RestoresTheMostRecentlyUndoneStrokeInOriginalOrderAndStyle()
+    {
+        var source = SolidFrame(6, 1, new AnnotationColor(20, 30, 40));
+        var session = new AnnotationSession(source);
+
+        session.BeginStroke(new AnnotationPoint(1, 0));
+        session.CommitStroke();
+        session.SetPenColor(new AnnotationColor(0, 0, 255));
+        session.BeginStroke(new AnnotationPoint(4, 0));
+        session.CommitStroke();
+
+        session.Undo();
+        session.Undo();
+        Assert.Empty(session.Document.Strokes);
+
+        Assert.True(session.Redo());
+        Assert.True(session.Redo());
+
+        Assert.Equal(2, session.Document.Strokes.Count);
+        Assert.Equal(new AnnotationColor(255, 0, 0), session.Document.Strokes[0].Color);
+        Assert.Equal(new AnnotationColor(0, 0, 255), session.Document.Strokes[1].Color);
+        Assert.Equal(new AnnotationColor(255, 0, 0), Pixel(session.Render(), 1, 0));
+        Assert.Equal(new AnnotationColor(0, 0, 255), Pixel(session.Render(), 4, 0));
+    }
+
+    [Fact]
+    public void CommittingANewStrokeAfterUndo_ClearsAllRedoHistory()
+    {
+        var source = SolidFrame(6, 1, new AnnotationColor(20, 30, 40));
+        var session = new AnnotationSession(source);
+
+        session.BeginStroke(new AnnotationPoint(1, 0));
+        session.CommitStroke();
+        session.Undo();
+        Assert.True(session.CanRedo);
+
+        session.BeginStroke(new AnnotationPoint(4, 0));
+        session.CommitStroke();
+
+        Assert.False(session.CanRedo);
+        Assert.False(session.Redo());
+        var committed = Assert.Single(session.Document.Strokes);
+        Assert.Equal(new AnnotationPoint(4, 0), committed.Points[0]);
+    }
+
+    [Fact]
+    public void UndoRedo_OnEmptyHistory_DoNothingAndStayInactive()
+    {
+        var session = new AnnotationSession(SolidFrame(3, 1, new AnnotationColor(0, 0, 0)));
+
+        Assert.False(session.CanUndo);
+        Assert.False(session.CanRedo);
+        Assert.False(session.Undo());
+        Assert.False(session.Redo());
+        Assert.Empty(session.Document.Strokes);
+    }
+
+    [Fact]
+    public void Undo_WhileAStrokeIsInProgress_DoesNotAffectInputOrSourcePixels()
+    {
+        var source = SolidFrame(5, 1, new AnnotationColor(20, 30, 40));
+        var session = new AnnotationSession(source);
+
+        session.BeginStroke(new AnnotationPoint(1, 0));
+        session.AppendStrokePoint(new AnnotationPoint(3, 0));
+
+        Assert.False(session.CanUndo);
+        Assert.False(session.Undo());
+        Assert.False(session.Redo());
+        Assert.NotNull(session.Document.InProgressStroke);
+        Assert.Equal(new AnnotationColor(255, 0, 0), Pixel(session.Render(), 2, 0));
+    }
+
+    [Fact]
+    public void RepeatedUndoAndRedo_AreIdempotentAtTheBoundaries()
+    {
+        var source = SolidFrame(5, 1, new AnnotationColor(20, 30, 40));
+        var session = new AnnotationSession(source, new AnnotationToolState(
+            AnnotationTool.Pen,
+            new AnnotationColor(255, 0, 0),
+            1));
+
+        session.BeginStroke(new AnnotationPoint(1, 0));
+        session.CommitStroke();
+
+        Assert.True(session.Undo());
+        Assert.False(session.Undo());
+        Assert.True(session.Redo());
+        Assert.False(session.Redo());
+
+        var committed = Assert.Single(session.Document.Strokes);
+        Assert.Equal(new AnnotationPoint(1, 0), committed.Points[0]);
+        var rendered = session.Render();
+        Assert.Equal(new AnnotationColor(255, 0, 0), Pixel(rendered, 1, 0));
+        Assert.Equal(new AnnotationColor(20, 30, 40), Pixel(rendered, 0, 0));
+    }
+
     private static ContiguousBitmap SolidFrame(int width, int height, AnnotationColor color)
     {
         var pixels = new byte[width * height * 4];

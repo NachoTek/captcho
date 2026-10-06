@@ -191,6 +191,38 @@ public class AnnotationGateTests
         Assert.Equal(255, result.Frame.Pixels[3]);
     }
 
+    // spec #38: undo and redo committed annotations
+
+    [Fact]
+    public async Task Workflow_ConfirmedFrameAfterUndo_ComposesWithoutTheUndoneStroke()
+    {
+        var source = BitmapBufferConverter.StripPadding(
+            new byte[6 * 4],
+            6,
+            1,
+            24);
+        var annotation = new FakeUndoRedoAnnotationOverlayAdapter();
+        var session = new CaptureWorkflowSession<object>(
+            SuccessfulCapture(source),
+            new FakePreviewAdapter(),
+            new FakeSelectionOverlayAdapter(),
+            new FakeMonitorPickerOverlayAdapter(),
+            new FakeWindowPickerOverlayAdapter(),
+            new SessionCaptureOptions(AppSettings.WithDefaults()),
+            RememberedSelectionState.Disabled,
+            annotation,
+            () => true,
+            () => new AnnotationToolState(AnnotationTool.Pen, new AnnotationColor(255, 0, 0), 1));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        Assert.Equal(255, result.Frame!.Pixels[2]);
+        Assert.Equal(0, result.Frame.Pixels[3 * 4 + 2]);
+        Assert.Equal(0, result.Frame.Pixels[3 * 4 + 3]);
+    }
+
     private static CaptureWorkflowSession<object> Session(
         FakeCaptureAdapter capture,
         FakePreviewAdapter preview,
@@ -229,6 +261,25 @@ internal sealed class FakePenAnnotationOverlayAdapter : IAnnotationOverlayStateA
         annotation.BeginStroke(new AnnotationPoint(0, 0));
         annotation.AppendStrokePoint(new AnnotationPoint(3, 0));
         annotation.CommitStroke();
+        return Task.FromResult(AnnotationPresentResult.Confirmed(annotation.Render()));
+    }
+}
+
+internal sealed class FakeUndoRedoAnnotationOverlayAdapter : IAnnotationOverlayStateAdapter
+{
+    public Task<AnnotationPresentResult> ShowAsync(ContiguousBitmap sourceFrame) =>
+        ShowAsync(sourceFrame, AnnotationToolState.WithDefaults());
+
+    public Task<AnnotationPresentResult> ShowAsync(
+        ContiguousBitmap sourceFrame,
+        AnnotationToolState initialToolState)
+    {
+        var annotation = new AnnotationSession(sourceFrame, initialToolState);
+        annotation.BeginStroke(new AnnotationPoint(0, 0));
+        annotation.CommitStroke();
+        annotation.BeginStroke(new AnnotationPoint(3, 0));
+        annotation.CommitStroke();
+        annotation.Undo();
         return Task.FromResult(AnnotationPresentResult.Confirmed(annotation.Render()));
     }
 }
