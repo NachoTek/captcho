@@ -177,38 +177,35 @@ public sealed partial class SettingsWindow : Window
     /// while <see cref="ApplyView"/> is programmatically setting toggle state so the
     /// rebind does not re-enter the session.
     /// </summary>
-    private void CapturePointerToggle_Toggled(object sender, RoutedEventArgs e)
-    {
-        if (_applyingView)
-            return;
-        var view = _session.EditCaptureIncludePointer(CapturePointerToggle.IsOn);
-        ApplyView(view);
-    }
+    private void CapturePointerToggle_Toggled(object sender, RoutedEventArgs e) =>
+        EditCapture(() => _session.EditCaptureIncludePointer(CapturePointerToggle.IsOn));
 
     /// <summary>
     /// Routes a window-decorations toggle change into the session and rebinds. The
     /// session reconciles the decoration/shadow dependency immediately, so the
-    /// returned view carries shadow=off when decorations are turned off; ApplyView
-    /// reflects that by disabling and clearing the shadow toggle.
+    /// returned view carries the reconciled values; ApplyView reflects that by
+    /// disabling and clearing the shadow toggle when decorations are off.
     /// </summary>
-    private void CaptureDecorationsToggle_Toggled(object sender, RoutedEventArgs e)
-    {
-        if (_applyingView)
-            return;
-        var view = _session.EditCaptureIncludeDecorations(CaptureDecorationsToggle.IsOn);
-        ApplyView(view);
-    }
+    private void CaptureDecorationsToggle_Toggled(object sender, RoutedEventArgs e) =>
+        EditCapture(() => _session.EditCaptureIncludeDecorations(CaptureDecorationsToggle.IsOn));
 
     /// <summary>
     /// Routes a window-shadow toggle change into the session and rebinds. Suppressed
     /// while <see cref="ApplyView"/> is programmatically setting toggle state.
     /// </summary>
-    private void CaptureShadowToggle_Toggled(object sender, RoutedEventArgs e)
+    private void CaptureShadowToggle_Toggled(object sender, RoutedEventArgs e) =>
+        EditCapture(() => _session.EditCaptureIncludeShadow(CaptureShadowToggle.IsOn));
+
+    /// <summary>
+    /// Shared shape for a Capture-tab toggle edit: suppressed while
+    /// <see cref="ApplyView"/> is programmatically setting toggle state, routes
+    /// the edit through the session, and rebinds from the returned view.
+    /// </summary>
+    private void EditCapture(Func<SettingsView> edit)
     {
         if (_applyingView)
             return;
-        var view = _session.EditCaptureIncludeShadow(CaptureShadowToggle.IsOn);
-        ApplyView(view);
+        ApplyView(edit());
     }
 
     private void RememberSelectionCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -336,7 +333,7 @@ public sealed partial class SettingsWindow : Window
         {
             // Reflect the working Capture-options values. All three toggles are
             // driven from the view so Reset/Cancel/decoration-dependency changes
-            // all rebnd through this single site. The decoration/shadow
+            // all rebind through this single site. The decoration/shadow
             // dependency (spec #30) is enforced by the session; the view already
             // carries shadow=off when decorations are off, so IsOn follows it
             // and IsEnabled explains why the control is unavailable.

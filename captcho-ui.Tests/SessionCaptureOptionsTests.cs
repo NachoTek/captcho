@@ -252,6 +252,63 @@ public class SessionCaptureOptionsTests
         Assert.False(effective.IncludeShadow);
     }
 
+    [Fact]
+    public void OverrideDecorations_TurningBackOn_RestoresRememberedShadow()
+    {
+        // Turning decorations off remembers that shadow was on (when it was);
+        // turning decorations back on restores the remembered value, so a
+        // decorations round-trip does not silently discard the session's shadow
+        // override.
+        var committed = AppSettings.WithDefaults();
+        var session = new SessionCaptureOptions(committed);
+
+        session.OverrideIncludeDecorations(CaptureMode.ActiveWindow, false);
+        session.OverrideIncludeDecorations(CaptureMode.ActiveWindow, true);
+
+        var effective = session.EffectiveFor(CaptureMode.ActiveWindow);
+        Assert.True(effective.IncludeDecorations);
+        Assert.True(effective.IncludeShadow);
+    }
+
+    [Fact]
+    public void OverrideDecorations_RepeatedOff_DoesNotWipeRememberedShadow()
+    {
+        // Only the on→off transition records the shadow memory: a repeated
+        // decorations-off call must not wipe what the first transition
+        // remembered, so the later re-enable still restores shadow.
+        var committed = AppSettings.WithDefaults();
+        var session = new SessionCaptureOptions(committed);
+
+        session.OverrideIncludeDecorations(CaptureMode.ActiveWindow, false);
+        session.OverrideIncludeDecorations(CaptureMode.ActiveWindow, false);
+        session.OverrideIncludeDecorations(CaptureMode.ActiveWindow, true);
+
+        var effective = session.EffectiveFor(CaptureMode.ActiveWindow);
+        Assert.True(effective.IncludeDecorations);
+        Assert.True(effective.IncludeShadow);
+    }
+
+    [Fact]
+    public void OverrideDecorations_RoundTrip_PreservesCommittedShadowOffDefault()
+    {
+        // Symmetric for the committed-off starting point: a decorations
+        // round-trip must not switch shadow on when the committed default (and
+        // no override) had it off.
+        var committed = new AppSettings
+        {
+            CaptureOptions = new CaptureOptions(
+                IncludePointer: false,
+                IncludeDecorations: true,
+                IncludeShadow: false),
+        };
+        var session = new SessionCaptureOptions(committed);
+
+        session.OverrideIncludeDecorations(CaptureMode.ActiveWindow, false);
+        session.OverrideIncludeDecorations(CaptureMode.ActiveWindow, true);
+
+        Assert.False(session.EffectiveFor(CaptureMode.ActiveWindow).IncludeShadow);
+    }
+
     // ── AC #3: cleared on application exit ──────────────────────────────
 
     [Fact]

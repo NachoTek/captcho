@@ -122,10 +122,18 @@ public static class NativeMethods
 
     /// <summary>
     /// Capture a single frame from the window identified by the given HWND handle.
-    /// The handle is passed as ulong (u64) matching the Rust FFI signature.
+    /// The handle is passed as ulong (u64) matching the Rust FFI signature. All
+    /// three Capture-option flags are applicable to a window Capture, so pointer,
+    /// decorations, and shadow are each carried across this contract (the
+    /// Selected Window route threads the effective options here). Each flag
+    /// marshals as a 4-byte BOOL matching the Rust i32 contract.
     /// </summary>
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-    public static extern NativeCaptureResult captcho_capture_window_by_handle(ulong hwnd);
+    public static extern NativeCaptureResult captcho_capture_window_by_handle(
+        ulong hwnd,
+        [MarshalAs(UnmanagedType.Bool)] bool includeCursor,
+        [MarshalAs(UnmanagedType.Bool)] bool includeDecorations,
+        [MarshalAs(UnmanagedType.Bool)] bool includeShadow);
 
     // ── S05 exports ──────────────────────────────────────────────────────
 
@@ -354,22 +362,8 @@ public sealed class SafeCaptureResult : IDisposable
     /// </summary>
     public static SafeCaptureResult CaptureAllMonitors(CaptureOptions options)
     {
-        ArgumentNullException.ThrowIfNull(options);
-        var normalized = options.Normalized();
-        NativeCaptureResult native;
-        try
-        {
-            native = NativeMethods.captcho_capture_all_monitors(normalized.IncludePointer);
-        }
-        catch (DllNotFoundException ex)
-        {
-            return FromInteropError("DLL not found", ex.Message);
-        }
-        catch (EntryPointNotFoundException ex)
-        {
-            return FromInteropError("Export not found", ex.Message);
-        }
-        return new SafeCaptureResult(native);
+        var normalized = NormalizedOptions(options);
+        return InvokeNative(() => NativeMethods.captcho_capture_all_monitors(normalized.IncludePointer));
     }
 
     /// <summary>
@@ -397,6 +391,40 @@ public sealed class SafeCaptureResult : IDisposable
         return result;
     }
 
+    /// <summary>
+    /// Validates and reconciles CaptureOptions for a native call. Shared by every
+    /// options-carrying factory so the null check and the decoration/shadow
+    /// dependency reconciliation happen in one place.
+    /// </summary>
+    private static CaptureOptions NormalizedOptions(CaptureOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return options.Normalized();
+    }
+
+    /// <summary>
+    /// Invokes a native capture export, translating DllNotFoundException and
+    /// EntryPointNotFoundException into interop-error results so callers never
+    /// see a raw interop exception. Shared by every factory method.
+    /// </summary>
+    private static SafeCaptureResult InvokeNative(Func<NativeCaptureResult> capture)
+    {
+        NativeCaptureResult native;
+        try
+        {
+            native = capture();
+        }
+        catch (DllNotFoundException ex)
+        {
+            return FromInteropError("DLL not found", ex.Message);
+        }
+        catch (EntryPointNotFoundException ex)
+        {
+            return FromInteropError("Export not found", ex.Message);
+        }
+        return new SafeCaptureResult(native);
+    }
+
     // ── Factory methods for S03 window capture ──────────────────────────
 
     /// <summary>
@@ -418,25 +446,11 @@ public sealed class SafeCaptureResult : IDisposable
     /// </summary>
     public static SafeCaptureResult CaptureActiveWindow(CaptureOptions options)
     {
-        ArgumentNullException.ThrowIfNull(options);
-        var normalized = options.Normalized();
-        NativeCaptureResult native;
-        try
-        {
-            native = NativeMethods.captcho_capture_active_window(
-                normalized.IncludePointer,
-                normalized.IncludeDecorations,
-                normalized.IncludeShadow);
-        }
-        catch (DllNotFoundException ex)
-        {
-            return FromInteropError("DLL not found", ex.Message);
-        }
-        catch (EntryPointNotFoundException ex)
-        {
-            return FromInteropError("Export not found", ex.Message);
-        }
-        return new SafeCaptureResult(native);
+        var normalized = NormalizedOptions(options);
+        return InvokeNative(() => NativeMethods.captcho_capture_active_window(
+            normalized.IncludePointer,
+            normalized.IncludeDecorations,
+            normalized.IncludeShadow));
     }
 
     /// <summary>
@@ -464,24 +478,29 @@ public sealed class SafeCaptureResult : IDisposable
 
     /// <summary>
     /// Captures a single frame from the window identified by the given HWND handle.
+    /// Preserves today's defaults (pointer excluded, decorations and shadow
+    /// included) for callers that do not participate in the workflow's
+    /// Capture-options composition (CLI, cs-tester). Handles DllNotFoundException
+    /// and EntryPointNotFoundException gracefully.
     /// </summary>
-    /// <param name="hwnd">Window handle. IntPtr.Zero will be rejected by native code.</param>
     public static SafeCaptureResult CaptureWindowByHandle(IntPtr hwnd)
+        => CaptureWindowByHandle(hwnd, CaptureOptions.WithDefaults());
+
+    /// <summary>
+    /// Captures a single frame from the window identified by the given HWND
+    /// handle, composing all three applicable Capture-option flags (pointer,
+    /// decorations, shadow) into the managed/native contract. This is the
+    /// workflow-facing entry point for the Selected Window route. Handles
+    /// DllNotFoundException and EntryPointNotFoundException gracefully.
+    /// </summary>
+    public static SafeCaptureResult CaptureWindowByHandle(IntPtr hwnd, CaptureOptions options)
     {
-        NativeCaptureResult native;
-        try
-        {
-            native = NativeMethods.captcho_capture_window_by_handle((ulong)hwnd.ToInt64());
-        }
-        catch (DllNotFoundException ex)
-        {
-            return FromInteropError("DLL not found", ex.Message);
-        }
-        catch (EntryPointNotFoundException ex)
-        {
-            return FromInteropError("Export not found", ex.Message);
-        }
-        return new SafeCaptureResult(native);
+        var normalized = NormalizedOptions(options);
+        return InvokeNative(() => NativeMethods.captcho_capture_window_by_handle(
+            (ulong)hwnd.ToInt64(),
+            normalized.IncludePointer,
+            normalized.IncludeDecorations,
+            normalized.IncludeShadow));
     }
 
     // ── Factory method for S05 region capture ────────────────────────────

@@ -296,6 +296,13 @@ fn validate_window_for_capture(hwnd: windows::Win32::Foundation::HWND, phase: &s
     Ok(())
 }
 
+/// Captures the mouse-pointer, window-decoration, and window-shadow FFI flags
+/// for window paths that do not participate in Capture-options composition
+/// (the CLI window-under-cursor route). Matches the C# legacy factories'
+/// `CaptureOptions.WithDefaults()`: pointer excluded, decorations included,
+/// shadow included.
+const DEFAULT_WINDOW_FLAGS: (i32, i32, i32) = (0, 1, 1);
+
 /// Maps the mouse-pointer Capture option (spec #34) to windows-capture's
 /// `CursorCaptureSettings`. `include_cursor` is the FFI flag (nonzero = include,
 /// zero = exclude) marshalled from the C# `bool`. Shared by every monitor/window
@@ -316,25 +323,37 @@ fn cursor_setting(include_cursor: i32) -> windows_capture::settings::CursorCaptu
 /// `include_cursor` realizes the mouse-pointer Capture option (spec #34):
 /// nonzero composites the cursor into the captured Frame, zero excludes it.
 ///
-/// `_include_decorations` and `_include_shadow` carry the window-decoration and
-/// window-shadow Capture options across the FFI contract (spec #34) but are
-/// intentionally unused at the pixel layer in this slice: windows-capture's
-/// `Settings` expose no native window-chrome toggle, and WGC captures the window
-/// as-is (chrome included by default, matching `IncludeDecorations = true`).
-/// Client-area cropping and shadow compositing are focused follow-ups; until
-/// then the flags are accepted so the managed→native contract stays complete.
+/// `include_decorations` realizes the window-decoration Capture option:
+/// nonzero keeps the WGC window Frame as-is (chrome included, the WGC default);
+/// zero crops the captured Frame to the window's client area so title bar and
+/// frame are excluded.
+///
+/// `include_shadow` realizes the window-shadow Capture option: nonzero captures
+/// the desktop region covering the window's DWM extended frame bounds (window
+/// plus its drop shadow as composited on the desktop) instead of the window
+/// item, so the Frame includes the shadow pixels around the chrome. Shadow is
+/// only requested alongside decorations — callers reconcile that dependency
+/// before the flags reach this function — and a shadow flag without
+/// decorations is ignored (the client-crop branch still applies).
 fn do_capture_window(
     window: windows_capture::window::Window,
     phase_label: &str,
     include_cursor: i32,
-    _include_decorations: i32,
-    _include_shadow: i32,
+    include_decorations: i32,
+    include_shadow: i32,
 ) -> CaptureResult {
     use windows_capture::capture::GraphicsCaptureApiHandler;
     use windows_capture::settings::{
         ColorFormat, DirtyRegionSettings, DrawBorderSettings,
         MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
     };
+
+    // The shadow path composites the window (with its DWM-drawn shadow) over the
+    // desktop, so it captures the desktop region covering the window's extended
+    // frame bounds rather than the window item itself.
+    if include_shadow != 0 && include_decorations != 0 {
+        return do_capture_window_with_shadow(&window, phase_label, include_cursor);
+    }
 
     // Shared result slot
     let result_slot: Arc<Mutex<Option<Result<CapturedFrameData, String>>>> =
@@ -410,6 +429,17 @@ fn do_capture_window(
         );
     }
 
+    let frame_data = if include_decorations == 0 {
+        // Decorations excluded: crop the captured window Frame to the client
+        // area so the title bar and window frame are not part of the Frame.
+        match crop_window_frame_to_client(&window, frame_data, phase_label) {
+            Ok(cropped) => cropped,
+            Err(e) => return e,
+        }
+    } else {
+        frame_data
+    };
+
     let width = frame_data.width;
     let height = frame_data.height;
     let stride = frame_data.stride;
@@ -419,6 +449,231 @@ fn do_capture_window(
     let result = CaptureResult::from_frame(frame_data.pixels, width, height, stride);
     register_frame(result.frame_data, len, len);
     result
+}
+
+/// Window geometry in physical (unscaled) screen pixels, used to translate
+/// between Win32 window coordinates and WGC frame pixels.
+struct WindowScreenRect {
+    left: i32,
+    top: i32,
+    width: u32,
+    height: u32,
+}
+
+impl WindowScreenRect {
+    fn right(&self) -> i32 {
+        self.left + self.width as i32
+    }
+
+    fn bottom(&self) -> i32 {
+        self.top + self.height as i32
+    }
+}
+
+/// The window's physical window rect (including chrome), via GetWindowRect.
+fn get_window_screen_rect(
+    hwnd: windows::Win32::Foundation::HWND,
+    phase: &str,
+) -> Result<WindowScreenRect, CaptureResult> {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+    let mut rect = RECT::default();
+    if let Err(e) = unsafe { GetWindowRect(hwnd, &mut rect) } {
+        return Err(CaptureResult::error(
+            CaptureStatus::InternalError,
+            format!("decorate[{}]: GetWindowRect failed: {}", phase, e),
+        ));
+    }
+
+    let width = rect.right.saturating_sub(rect.left).max(0) as u32;
+    let height = rect.bottom.saturating_sub(rect.top).max(0) as u32;
+    if width == 0 || height == 0 {
+        return Err(CaptureResult::error(
+            CaptureStatus::CaptureUnavailable,
+            format!("decorate[{}]: window rect has zero dimensions", phase),
+        ));
+    }
+
+    Ok(WindowScreenRect { left: rect.left, top: rect.top, width, height })
+}
+
+/// The window's client area translated to physical screen coordinates.
+fn get_client_screen_rect(
+    hwnd: windows::Win32::Foundation::HWND,
+    phase: &str,
+) -> Result<WindowScreenRect, CaptureResult> {
+    use windows::Win32::Foundation::{POINT, RECT};
+    use windows::Win32::Graphics::Gdi::ClientToScreen;
+    use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+
+    let mut client = RECT::default();
+    if let Err(e) = unsafe { GetClientRect(hwnd, &mut client) } {
+        return Err(CaptureResult::error(
+            CaptureStatus::InternalError,
+            format!("decorate[{}]: GetClientRect failed: {}", phase, e),
+        ));
+    }
+
+    let mut origin = POINT { x: client.left, y: client.top };
+    if !unsafe { ClientToScreen(hwnd, &mut origin) }.as_bool() {
+        return Err(CaptureResult::error(
+            CaptureStatus::InternalError,
+            format!("decorate[{}]: ClientToScreen failed", phase),
+        ));
+    }
+
+    let width = client.right.saturating_sub(client.left).max(0) as u32;
+    let height = client.bottom.saturating_sub(client.top).max(0) as u32;
+    if width == 0 || height == 0 {
+        return Err(CaptureResult::error(
+            CaptureStatus::CaptureUnavailable,
+            format!("decorate[{}]: client rect has zero dimensions", phase),
+        ));
+    }
+
+    Ok(WindowScreenRect { left: origin.x, top: origin.y, width, height })
+}
+
+/// Crop a captured WGC window Frame to the window's client area.
+///
+/// The WGC frame's top-left pixel corresponds to the window rect's top-left
+/// (physical coordinates), so the client area maps to the client rect's offset
+/// within the window rect. Rows are copied with a tight stride. When the client
+/// rect is not fully inside the window rect (unexpected geometry), the
+/// intersection is used; an empty intersection is an error.
+fn crop_window_frame_to_client(
+    window: &windows_capture::window::Window,
+    frame: CapturedFrameData,
+    phase: &str,
+) -> Result<CapturedFrameData, CaptureResult> {
+    let hwnd = windows::Win32::Foundation::HWND(window.as_raw_hwnd());
+
+    let window_rect = get_window_screen_rect(hwnd, phase)?;
+    let client_rect = get_client_screen_rect(hwnd, phase)?;
+
+    // Client offset within the window, clamped to the frame dimensions.
+    let offset_x = (client_rect.left - window_rect.left).max(0) as u32;
+    let offset_y = (client_rect.top - window_rect.top).max(0) as u32;
+    let max_x = offset_x.saturating_add(client_rect.width);
+    let max_y = offset_y.saturating_add(client_rect.height);
+    let crop_w = max_x.min(frame.width).saturating_sub(offset_x);
+    let crop_h = max_y.min(frame.height).saturating_sub(offset_y);
+    if crop_w == 0 || crop_h == 0 {
+        return Err(CaptureResult::error(
+            CaptureStatus::CaptureUnavailable,
+            format!(
+                "decorate[{}]: client area is empty in the captured frame (offset={}x{}, frame={}x{})",
+                phase, offset_x, offset_y, frame.width, frame.height
+            ),
+        ));
+    }
+
+    let copy_bytes = crop_w as usize * 4;
+    if frame.stride as usize < offset_x as usize * 4 + copy_bytes {
+        return Err(CaptureResult::error(
+            CaptureStatus::InvalidBuffer,
+            format!(
+                "decorate[{}]: client crop exceeds frame stride (stride={}, offset_x={}, width={})",
+                phase, frame.stride, offset_x, crop_w
+            ),
+        ));
+    }
+
+    let mut pixels = Vec::with_capacity(copy_bytes * crop_h as usize);
+    for row in 0..crop_h as usize {
+        let src_start = (offset_y as usize + row) * frame.stride as usize + offset_x as usize * 4;
+        let src_end = src_start + copy_bytes;
+        pixels.extend_from_slice(&frame.pixels[src_start..src_end]);
+    }
+
+    Ok(CapturedFrameData {
+        pixels,
+        width: crop_w,
+        height: crop_h,
+        stride: copy_bytes as u32,
+    })
+}
+
+/// Capture the window including its DWM drop shadow.
+///
+/// The shadow is composited by DWM onto the desktop behind the window, so it is
+/// not part of a WGC window-item capture. This path captures the desktop region
+/// covering the window's extended frame bounds (the window plus its shadow
+/// margins) instead, cropped from a full virtual-desktop capture. The
+/// mouse-pointer option is honored through the desktop capture.
+fn do_capture_window_with_shadow(
+    window: &windows_capture::window::Window,
+    phase_label: &str,
+    include_cursor: i32,
+) -> CaptureResult {
+    use windows::Win32::Foundation::RECT;
+
+    let hwnd = windows::Win32::Foundation::HWND(window.as_raw_hwnd());
+
+    // DWMWA_EXTENDED_FRAME_BOUNDS = 9: the window bounds including the DWM
+    // drop shadow, in physical screen coordinates.
+    let mut extended = RECT::default();
+    let hr = unsafe {
+        windows::Win32::Graphics::Dwm::DwmGetWindowAttribute(
+            hwnd,
+            windows::Win32::Graphics::Dwm::DWMWA_EXTENDED_FRAME_BOUNDS,
+            &mut extended as *mut RECT as *mut std::ffi::c_void,
+            std::mem::size_of::<RECT>() as u32,
+        )
+    };
+    if hr.is_err() {
+        return CaptureResult::error(
+            CaptureStatus::CaptureUnavailable,
+            format!("shadow[{}]: DwmGetWindowAttribute(EXTENDED_FRAME_BOUNDS) failed", phase_label),
+        );
+    }
+
+    let width = extended.right.saturating_sub(extended.left).max(0) as u32;
+    let height = extended.bottom.saturating_sub(extended.top).max(0) as u32;
+    if width == 0 || height == 0 {
+        return CaptureResult::error(
+            CaptureStatus::CaptureUnavailable,
+            format!("shadow[{}]: extended frame bounds have zero dimensions", phase_label),
+        );
+    }
+
+    // Capture the full virtual desktop with the cursor option, then crop the
+    // extended-bounds region. Reuses the region path's validated cropping.
+    let captured = do_capture_region_with_cursor(extended.left, extended.top, width, height, include_cursor);
+    if captured.status == CaptureStatus::Ok {
+        return captured;
+    }
+
+    // The desktop-region path can fail when the extended bounds extend past the
+    // virtual desktop (shadow bleeding off-screen). Fall back to cropping the
+    // intersection with the desktop so an off-screen shadow is clipped rather
+    // than failing the whole capture.
+    let desktop = match desktop_bounds_for_clipping() {
+        Some(b) => b,
+        None => return captured,
+    };
+
+    let left = extended.left.max(desktop.x);
+    let top = extended.top.max(desktop.y);
+    let right = extended.right.min(desktop.right());
+    let bottom = extended.bottom.min(desktop.bottom());
+    if right <= left || bottom <= top {
+        return captured;
+    }
+
+    do_capture_region_with_cursor(left, top, (right - left) as u32, (bottom - top) as u32, include_cursor)
+}
+
+/// Current virtual-desktop bounds via monitor enumeration, for clipping a
+/// window's extended frame bounds to the visible desktop.
+fn desktop_bounds_for_clipping() -> Option<monitor_utils::VirtualDesktopBounds> {
+    use windows_capture::monitor::Monitor;
+
+    let monitors = Monitor::enumerate().ok()?;
+    let bounds: Vec<monitor_utils::MonitorBounds> =
+        monitors.iter().map(get_monitor_bounds).collect::<Result<Vec<_>, _>>().ok()?;
+    monitor_utils::compute_virtual_desktop_bounds(&bounds)
 }
 
 /// Capture a single frame from the primary monitor using Windows Graphics Capture.
@@ -974,8 +1229,22 @@ pub extern "C" fn captcho_capture_region(x: i32, y: i32, width: u32, height: u32
     }
 }
 
-/// Implementation for rectangular region capture.
+/// Implementation for rectangular region capture. Preserves the historical
+/// pointer-excluded default for the region export's callers.
 fn do_capture_region(x: i32, y: i32, width: u32, height: u32) -> CaptureResult {
+    do_capture_region_with_cursor(x, y, width, height, 0)
+}
+
+/// Implementation for rectangular region capture with an explicit mouse-pointer
+/// flag, so desktop-region composites (e.g. the window-shadow path) can honor
+/// the pointer Capture option.
+fn do_capture_region_with_cursor(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    include_cursor: i32,
+) -> CaptureResult {
     use windows_capture::monitor::Monitor;
 
     // Phase 1: early zero-dimension rejection (no WGC needed)
@@ -1039,7 +1308,7 @@ fn do_capture_region(x: i32, y: i32, width: u32, height: u32) -> CaptureResult {
     }
 
     // Phase 4: capture full virtual desktop
-    let captured = do_capture_all_monitors();
+    let captured = do_capture_all_monitors(include_cursor);
     if captured.status != CaptureStatus::Ok {
         // Propagate capture failure as-is; no intermediate frame to free
         return captured;
@@ -1191,7 +1460,8 @@ fn do_capture_window_under_cursor() -> CaptureResult {
     }
 
     let window = Window::from_raw_hwnd(top_hwnd.0);
-    do_capture_window(window, "window_under_cursor", 0, 1, 1)
+    let (default_cursor, default_decorations, default_shadow) = DEFAULT_WINDOW_FLAGS;
+    do_capture_window(window, "window_under_cursor", default_cursor, default_decorations, default_shadow)
 }
 
 /// Capture a single frame from the window identified by the given native handle.
@@ -1200,13 +1470,23 @@ fn do_capture_window_under_cursor() -> CaptureResult {
 /// invalid, stale, refers to a non-capturable window (desktop, child, invisible,
 /// minimized), or WGC cannot capture it, a non-OK `CaptureResult` is returned.
 ///
+/// `include_cursor`, `include_decorations`, and `include_shadow` carry the
+/// mouse-pointer, window-decoration, and window-shadow Capture options across
+/// the FFI contract (spec #34). The Selected Window route threads the effective
+/// options here; see `do_capture_window` for how each flag is realized.
+///
 /// # Safety
 /// This function is safe to call from C#. The returned struct contains
 /// pointers that must be freed using the matching free functions.
 #[no_mangle]
-pub extern "C" fn captcho_capture_window_by_handle(hwnd: u64) -> CaptureResult {
+pub extern "C" fn captcho_capture_window_by_handle(
+    hwnd: u64,
+    include_cursor: i32,
+    include_decorations: i32,
+    include_shadow: i32,
+) -> CaptureResult {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        do_capture_window_by_handle(hwnd)
+        do_capture_window_by_handle(hwnd, include_cursor, include_decorations, include_shadow)
     })) {
         Ok(result) => result,
         Err(_) => CaptureResult::error(
@@ -1217,7 +1497,12 @@ pub extern "C" fn captcho_capture_window_by_handle(hwnd: u64) -> CaptureResult {
 }
 
 /// Implementation for capture by explicit window handle.
-fn do_capture_window_by_handle(hwnd: u64) -> CaptureResult {
+fn do_capture_window_by_handle(
+    hwnd: u64,
+    include_cursor: i32,
+    include_decorations: i32,
+    include_shadow: i32,
+) -> CaptureResult {
     use windows::Win32::Foundation::HWND;
     use windows_capture::window::Window;
 
@@ -1236,7 +1521,7 @@ fn do_capture_window_by_handle(hwnd: u64) -> CaptureResult {
     }
 
     let window = Window::from_raw_hwnd(raw_hwnd.0);
-    do_capture_window(window, "window_by_handle", 0, 1, 1)
+    do_capture_window(window, "window_by_handle", include_cursor, include_decorations, include_shadow)
 }
 
 /// Free an error message string previously returned in a `CaptureResult`.

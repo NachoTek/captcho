@@ -121,13 +121,27 @@ public class CaptureTabSettingsTests
     }
 
     [Fact]
-    public void EditIncludeDecorations_TurningOffWhileShadowWasOn_DoesNotRetainShadowValue()
+    public void EditIncludeDecorations_TurningBackOn_RestoresRememberedShadow()
     {
-        // After decorations are turned off, shadow is forced off. Turning decorations
-        // back on does NOT restore the old shadow value — it stays off, matching
-        // CaptureOptions.Normalized() (which is a one-way reconciliation, not a
-        // restore). The user must explicitly opt back in.
+        // Turning decorations off forces shadow off and remembers that shadow was
+        // on; turning decorations back on restores the remembered value, so a
+        // decorations round-trip does not silently discard the user's shadow choice.
         var tab = new CaptureTabSettings(AppSettings.WithDefaults());
+
+        tab.EditIncludeDecorations(false);
+        tab.EditIncludeDecorations(true);
+
+        Assert.True(tab.IncludeShadow);
+    }
+
+    [Fact]
+    public void EditIncludeDecorations_RoundTrip_PreservesShadowOffChoice()
+    {
+        // The remember/restore is symmetric for the other starting point: a user
+        // who had shadow off does not get shadow switched on by a decorations
+        // round-trip.
+        var tab = new CaptureTabSettings(AppSettings.WithDefaults());
+        tab.EditIncludeShadow(false);
 
         tab.EditIncludeDecorations(false);
         tab.EditIncludeDecorations(true);

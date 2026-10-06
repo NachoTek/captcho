@@ -101,7 +101,7 @@ Layout:
             <TabViewItem Header="Capture">
                 <ScrollViewer Padding="20" VerticalScrollBarVisibility="Auto">
                     <StackPanel Spacing="12">
-                        <TextBlock Text="Capture Options"
+                        <TextBlock Text="Capture Settings"
                                    FontSize="16" FontWeight="SemiBold"
                                    AutomationProperties.HeadingLevel="Level1"/>
                         <TextBlock TextWrapping="Wrap"

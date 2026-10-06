@@ -81,15 +81,35 @@ internal sealed class CaptureTabSettings : EditableTabSession
     /// Sets the working decorations default from user input. Reconciles shadow
     /// immediately through <see cref="CaptureOptions.Normalized"/>: turning
     /// decorations off forces shadow off so the working snapshot never carries an
-    /// impossible combination, even before Apply. Turning decorations back on does
-    /// not restore the old shadow value — the user must explicitly opt back in.
-    /// Never persists or mutates the original persisted settings.
+    /// impossible combination, even before Apply. The reconciliation is symmetric —
+    /// turning decorations off remembers whether shadow was on, and turning them
+    /// back on restores the remembered value, so a decorations round-trip never
+    /// silently discards the user's shadow choice. Never persists or mutates the
+    /// original persisted settings.
     /// </summary>
     public void EditIncludeDecorations(bool value)
     {
-        var candidate = Working.CaptureOptions with { IncludeDecorations = value };
+        var current = Working.CaptureOptions;
+        var candidate = current with { IncludeDecorations = value };
+        if (!value && current.IncludeShadow)
+        {
+            // Remember the shadow-on choice across the decorations-off span so
+            // re-enabling decorations can restore it symmetrically.
+            _rememberedShadow = true;
+        }
         Working.CaptureOptions = candidate.Normalized();
+        if (value && _rememberedShadow)
+        {
+            Working.CaptureOptions = Working.CaptureOptions with { IncludeShadow = true };
+            _rememberedShadow = false;
+        }
     }
+
+    // Whether shadow was on at the moment decorations were turned off — restored
+    // when decorations are turned back on, then cleared. Not a persisted field:
+    // it exists only to make the edit-time reconciliation symmetric within one
+    // editing session.
+    private bool _rememberedShadow;
 
     /// <summary>
     /// Sets the working shadow default from user input. Silently refused when
@@ -105,6 +125,8 @@ internal sealed class CaptureTabSettings : EditableTabSession
             // so the working snapshot never carries an inconsistent combination.
             return;
         }
+        // An explicit shadow edit supersedes any remembered round-trip value.
+        _rememberedShadow = false;
         Working.CaptureOptions = Working.CaptureOptions with { IncludeShadow = value };
     }
 

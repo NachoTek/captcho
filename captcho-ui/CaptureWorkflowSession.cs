@@ -289,17 +289,21 @@ public interface IWorkflowCaptureAdapter
     CaptureFrameResult CaptureMonitor(MonitorTarget target);
 
     /// <summary>
-    /// Captures a single Selected Window into a Frame. The target carries the
+    /// Captures a single Selected Window into a Frame with the effective
+    /// CaptureOptions for the Selected Window mode. The target carries the
     /// window's stable HWND (the identity the picker confirmed), its title, and
     /// its full Virtual Desktop bounds (which may cross monitor boundaries and
-    /// sit at negative coordinates). Capture is performed by handle so the
-    /// frozen Frame matches the window the user clicked even if later window
-    /// movement would have moved its bounds. Implementations must not throw for
-    /// expected failures — surface them through CaptureFrameResult.Fail instead
-    /// (including the "window vanished before capture" case, so the workflow
-    /// can report it as CaptureFailed without retaining stale state).
+    /// sit at negative coordinates). Pointer, decorations, and shadow are each
+    /// applicable to a window Capture; the workflow session composes the
+    /// options from committed defaults and session overrides and forwards them
+    /// here. Capture is performed by handle so the frozen Frame matches the
+    /// window the user clicked even if later window movement would have moved
+    /// its bounds. Implementations must not throw for expected failures —
+    /// surface them through CaptureFrameResult.Fail instead (including the
+    /// "window vanished before capture" case, so the workflow can report it as
+    /// CaptureFailed without retaining stale state).
     /// </summary>
-    CaptureFrameResult CaptureWindow(WindowTarget target);
+    CaptureFrameResult CaptureWindow(WindowTarget target, CaptureOptions options);
 }
 
 /// <summary>
@@ -933,7 +937,8 @@ public sealed class CaptureWorkflowSession<TImage>
                         }
                         else
                         {
-                            captureResult = await RunOffThread(() => _capture.CaptureWindow(result.Target!));
+                            var windowOptions = _captureOptions.EffectiveFor(CaptureMode.SelectedWindow);
+                            captureResult = await RunOffThread(() => _capture.CaptureWindow(result.Target!, windowOptions));
                         }
                         break;
                     }

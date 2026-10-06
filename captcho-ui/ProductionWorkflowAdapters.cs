@@ -86,19 +86,22 @@ public sealed class WindowsCaptureAdapter : IWorkflowCaptureAdapter
     }
 
     /// <summary>
-    /// Captures a single Selected Window and returns a CaptureFrameResult
-    /// carrying the Frame and dimensions on success or a user-visible error
-    /// on failure — including the "window vanished before capture" case, which
-    /// the native engine surfaces as a failed status. Capture is performed by
-    /// handle via the native window-by-handle export, so the frozen Frame
-    /// matches the window the user clicked even if later movement would have
-    /// shifted its bounds. Never throws for expected failures.
+    /// Captures a single Selected Window with the effective CaptureOptions for
+    /// the Selected Window mode and returns a CaptureFrameResult carrying the
+    /// Frame and dimensions on success or a user-visible error on failure —
+    /// including the "window vanished before capture" case, which the native
+    /// engine surfaces as a failed status. Pointer, decorations, and shadow are
+    /// each applicable and forwarded into the managed/native contract. Capture
+    /// is performed by handle via the native window-by-handle export, so the
+    /// frozen Frame matches the window the user clicked even if later movement
+    /// would have shifted its bounds. Never throws for expected failures.
     /// </summary>
-    public CaptureFrameResult CaptureWindow(WindowTarget target)
+    public CaptureFrameResult CaptureWindow(WindowTarget target, CaptureOptions options)
     {
         ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(options);
         return Capture("Selected Window",
-            () => SafeCaptureResult.CaptureWindowByHandle(target.Handle));
+            () => SafeCaptureResult.CaptureWindowByHandle(target.Handle, options));
     }
 
     /// <summary>

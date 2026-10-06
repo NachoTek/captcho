@@ -146,25 +146,65 @@ public sealed class SessionCaptureOptions
     /// <summary>
     /// Overrides the decorations default for the given Capture Mode. Reconciles
     /// shadow immediately through the decoration/shadow dependency: if decorations
-    /// are turned off, any existing shadow override is replaced with false (spec #30).
-    /// Never writes back to committed Configuration.
+    /// are turned off, any existing shadow override is replaced with false (spec
+    /// #30). The reconciliation is symmetric — the on→off transition remembers
+    /// whether the effective shadow value was on, and turning decorations back
+    /// on restores the remembered value, so a decorations round-trip never
+    /// silently discards the session's shadow choice. Never writes back to
+    /// committed Configuration.
     /// </summary>
     public void OverrideIncludeDecorations(CaptureMode mode, bool value)
     {
         var set = GetOrCreate(mode);
-        set.Decorations = value;
+        bool decorationsCurrentlyEffective =
+            set.Decorations.HasValue
+                ? set.Decorations.Value
+                : _committed.EffectiveCaptureOptions.IncludeDecorations;
         if (!value)
         {
+            // Remember the effective shadow-on state only at the on→off
+            // transition, so a repeated decorations-off call cannot wipe the
+            // memory an earlier transition recorded.
+            if (decorationsCurrentlyEffective)
+            {
+                set.RememberedShadow = EffectiveShadowFor(mode, set);
+            }
             // Mirror CaptureOptions.Normalized: turning decorations off forces shadow off.
             set.Shadow = false;
         }
+        else if (set.RememberedShadow)
+        {
+            set.Shadow = true;
+            set.RememberedShadow = false;
+        }
+        set.Decorations = value;
+    }
+
+    /// <summary>
+    /// The effective shadow value for <paramref name="mode"/> under the override
+    /// set <paramref name="set"/> (override if set, else the committed default),
+    /// reconciled through the decoration/shadow dependency.
+    /// </summary>
+    private bool EffectiveShadowFor(CaptureMode mode, OverrideSet set)
+    {
+        bool effectiveDecorations =
+            set.Decorations.HasValue
+                ? set.Decorations.Value
+                : _committed.EffectiveCaptureOptions.IncludeDecorations;
+
+        bool effectiveShadow =
+            IsShadowVisible(mode) && set.Shadow.HasValue
+                ? set.Shadow.Value
+                : _committed.EffectiveCaptureOptions.IncludeShadow;
+
+        return effectiveDecorations && effectiveShadow;
     }
 
     /// <summary>
     /// Overrides the shadow default for the given Capture Mode. Silently refused
     /// when decorations are currently off in the override namespace — shadow is
-    /// only meaningful when decorations are included (spec #30). Never writes back
-    /// to committed Configuration.
+    /// only meaningful when decorations are included (spec #30). Never writes
+    /// back to committed Configuration.
     /// </summary>
     public void OverrideIncludeShadow(CaptureMode mode, bool value)
     {
@@ -182,6 +222,8 @@ public sealed class SessionCaptureOptions
             // Refuse: decorations are off, so shadow cannot be turned on. Stays off.
             return;
         }
+        // An explicit shadow override supersedes any remembered round-trip value.
+        set.RememberedShadow = false;
         set.Shadow = value;
     }
 
@@ -236,13 +278,16 @@ public sealed class SessionCaptureOptions
     /// Per-mode override namespace: each field is either null (use the committed
     /// default) or non-null (the value the user pinned for the session). Three
     /// independent fields rather than one nullable CaptureOptions so per-field
-    /// override status is observable.
+    /// override status is observable. <see cref="RememberedShadow"/> carries the
+    /// shadow-on memory across a decorations-off span so the decoration/shadow
+    /// reconciliation can be symmetric.
     /// </summary>
     private sealed class OverrideSet
     {
         public bool? Pointer;
         public bool? Decorations;
         public bool? Shadow;
+        public bool RememberedShadow;
 
         public void Deconstruct(out bool? pointer, out bool? decorations, out bool? shadow)
         {

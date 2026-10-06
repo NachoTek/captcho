@@ -49,6 +49,7 @@ internal sealed class FakeCaptureAdapter : IWorkflowCaptureAdapter
     public int WindowCallCount { get; private set; }
     public CaptureFrameResult? NextWindowResult { get; set; }
     public WindowTarget? LastWindowTarget { get; private set; }
+    public CaptureOptions? LastWindowOptions { get; private set; }
 
     public CaptureFrameResult CaptureFullDesktop(CaptureOptions options)
     {
@@ -78,10 +79,11 @@ internal sealed class FakeCaptureAdapter : IWorkflowCaptureAdapter
         return NextMonitorResult ?? CaptureFrameResult.Fail("FakeCaptureAdapter: NextMonitorResult not configured.");
     }
 
-    public CaptureFrameResult CaptureWindow(WindowTarget target)
+    public CaptureFrameResult CaptureWindow(WindowTarget target, CaptureOptions options)
     {
         WindowCallCount++;
         LastWindowTarget = target;
+        LastWindowOptions = options;
         return NextWindowResult ?? CaptureFrameResult.Fail("FakeCaptureAdapter: NextWindowResult not configured.");
     }
 }
@@ -196,11 +198,11 @@ internal sealed class SlowGateCaptureAdapter : IWorkflowCaptureAdapter
         return _inner.CaptureMonitor(target);
     }
 
-    public CaptureFrameResult CaptureWindow(WindowTarget target)
+    public CaptureFrameResult CaptureWindow(WindowTarget target, CaptureOptions options)
     {
         _started.TrySetResult(true);
         _release.Task.Wait();
-        return _inner.CaptureWindow(target);
+        return _inner.CaptureWindow(target, options);
     }
 }
 
@@ -2839,6 +2841,64 @@ public class CaptureWorkflowSessionCaptureOptionsTests
         Assert.Equal(1, capture.CallCount);
         Assert.Equal(0, capture.WindowCallCount);
         Assert.True(capture.LastFullDesktopOptions!.IncludePointer);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_WindowConfirmed_ForwardsSelectedWindowEffectiveOptions()
+    {
+        // A confirmed Selected Window is a window Capture, so pointer,
+        // decorations, and shadow are each applicable and the workflow composes
+        // the Selected Window effective options (committed defaults overlaid with
+        // any Selected Window session overrides) and forwards them to the
+        // adapter's window route.
+        var committed = new AppSettings
+        {
+            CaptureOptions = new CaptureOptions(
+                IncludePointer: false, IncludeDecorations: true, IncludeShadow: true),
+        };
+        var picker = new FakeWindowPickerOverlayAdapter
+        {
+            NextResult = new WindowPickerResult
+            {
+                Outcome = WindowPickerOutcome.WindowConfirmed,
+                Target = new WindowTarget { Handle = new IntPtr(0x1234) },
+            },
+        };
+        var (session, options, capture) = NewSession(committed, picker);
+
+        await session.CaptureSelectedWindowAsync();
+
+        Assert.Equal(1, capture.WindowCallCount);
+        Assert.NotNull(capture.LastWindowOptions);
+        Assert.Equal(
+            committed.CaptureOptions.Normalized(),
+            capture.LastWindowOptions);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedWindowAsync_SessionOverrides_TakePrecedenceOnWindowRoute()
+    {
+        // Selected Window session overrides take precedence over committed
+        // defaults and are observable in the options forwarded on the window
+        // route (spec #35, applied to the Selected Window mode).
+        var committed = AppSettings.WithDefaults(); // pointer off, decorations/shadow on
+        var picker = new FakeWindowPickerOverlayAdapter
+        {
+            NextResult = new WindowPickerResult
+            {
+                Outcome = WindowPickerOutcome.WindowConfirmed,
+                Target = new WindowTarget { Handle = new IntPtr(0x1234) },
+            },
+        };
+        var (session, options, capture) = NewSession(committed, picker);
+        options.OverrideIncludePointer(CaptureMode.SelectedWindow, true);
+        options.OverrideIncludeDecorations(CaptureMode.SelectedWindow, false);
+
+        await session.CaptureSelectedWindowAsync();
+
+        Assert.True(capture.LastWindowOptions!.IncludePointer);
+        Assert.False(capture.LastWindowOptions!.IncludeDecorations);
+        Assert.False(capture.LastWindowOptions!.IncludeShadow);
     }
 
     [Fact]
