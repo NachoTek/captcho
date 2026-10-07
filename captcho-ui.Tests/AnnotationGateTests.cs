@@ -170,18 +170,18 @@ public class AnnotationGateTests
             4,
             1,
             16);
-        var annotation = new FakePenAnnotationOverlayAdapter();
-        var session = new CaptureWorkflowSession<object>(
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            script.BeginStroke(new AnnotationPoint(0, 0));
+            script.AppendStrokePoint(new AnnotationPoint(3, 0));
+            script.CommitStroke();
+        });
+        var session = Session(
             SuccessfulCapture(source),
             new FakePreviewAdapter(),
-            new FakeSelectionOverlayAdapter(),
-            new FakeMonitorPickerOverlayAdapter(),
-            new FakeWindowPickerOverlayAdapter(),
-            new SessionCaptureOptions(AppSettings.WithDefaults()),
-            RememberedSelectionState.Disabled,
             annotation,
-            () => true,
-            () => new AnnotationToolState(AnnotationTool.Pen, new AnnotationColor(255, 0, 0), 1));
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Pen, new AnnotationColor(255, 0, 0), 1));
 
         var result = await session.CaptureFullDesktopAsync();
 
@@ -196,23 +196,20 @@ public class AnnotationGateTests
     [Fact]
     public async Task Workflow_ConfirmedFrameAfterUndo_ComposesWithoutTheUndoneStroke()
     {
-        var source = BitmapBufferConverter.StripPadding(
-            new byte[6 * 4],
-            6,
-            1,
-            24);
-        var annotation = new FakeUndoRedoAnnotationOverlayAdapter();
-        var session = new CaptureWorkflowSession<object>(
-            SuccessfulCapture(source),
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            script.BeginStroke(new AnnotationPoint(0, 0));
+            script.CommitStroke();
+            script.BeginStroke(new AnnotationPoint(3, 0));
+            script.CommitStroke();
+            script.Undo();
+        });
+        var session = Session(
+            SuccessfulCapture(Frame6x1()),
             new FakePreviewAdapter(),
-            new FakeSelectionOverlayAdapter(),
-            new FakeMonitorPickerOverlayAdapter(),
-            new FakeWindowPickerOverlayAdapter(),
-            new SessionCaptureOptions(AppSettings.WithDefaults()),
-            RememberedSelectionState.Disabled,
             annotation,
-            () => true,
-            () => new AnnotationToolState(AnnotationTool.Pen, new AnnotationColor(255, 0, 0), 1));
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Pen, new AnnotationColor(255, 0, 0), 1));
 
         var result = await session.CaptureFullDesktopAsync();
 
@@ -223,11 +220,99 @@ public class AnnotationGateTests
         Assert.Equal(0, result.Frame.Pixels[3 * 4 + 3]);
     }
 
+    [Fact]
+    public async Task Workflow_ConfirmedFrameAfterRedo_ComposesWithTheRestoredStroke()
+    {
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            script.BeginStroke(new AnnotationPoint(0, 0));
+            script.CommitStroke();
+            script.BeginStroke(new AnnotationPoint(3, 0));
+            script.CommitStroke();
+            script.Undo();
+            script.Redo();
+        });
+        var session = Session(
+            SuccessfulCapture(Frame6x1()),
+            new FakePreviewAdapter(),
+            annotation,
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Pen, new AnnotationColor(255, 0, 0), 1));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        Assert.Equal(255, result.Frame!.Pixels[2]);
+        Assert.Equal(255, result.Frame!.Pixels[3 * 4 + 2]);
+    }
+
+    [Fact]
+    public async Task Workflow_CommittingAfterUndo_ClearsTheRedoBranch()
+    {
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            script.BeginStroke(new AnnotationPoint(0, 0));
+            script.CommitStroke();
+            script.Undo();
+            script.BeginStroke(new AnnotationPoint(3, 0));
+            script.CommitStroke();
+            Assert.False(script.Redo());
+        });
+        var session = Session(
+            SuccessfulCapture(Frame6x1()),
+            new FakePreviewAdapter(),
+            annotation,
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Pen, new AnnotationColor(255, 0, 0), 1));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        Assert.Equal(0, result.Frame!.Pixels[2]);
+        Assert.Equal(0, result.Frame.Pixels[3]);
+        Assert.Equal(255, result.Frame.Pixels[3 * 4 + 2]);
+    }
+
+    [Fact]
+    public async Task Workflow_EmptyHistory_ConfirmedFrameEqualsTheSourcePixels()
+    {
+        var source = Frame6x1();
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            Assert.False(script.CanUndo);
+            Assert.False(script.CanRedo);
+            Assert.False(script.Undo());
+            Assert.False(script.Redo());
+        });
+        var session = Session(
+            SuccessfulCapture(source),
+            new FakePreviewAdapter(),
+            annotation,
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Pen, new AnnotationColor(255, 0, 0), 1));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        Assert.Equal(source.Pixels, result.Frame!.Pixels);
+    }
+
+    private static ContiguousBitmap Frame6x1() =>
+        BitmapBufferConverter.StripPadding(
+            new byte[6 * 4],
+            6,
+            1,
+            24);
+
     private static CaptureWorkflowSession<object> Session(
         FakeCaptureAdapter capture,
         FakePreviewAdapter preview,
-        FakeAnnotationOverlayAdapter annotation,
-        bool annotationEnabled) =>
+        IAnnotationOverlayAdapter annotation,
+        bool annotationEnabled,
+        AnnotationToolState? toolState = null) =>
         new(
             capture,
             preview,
@@ -237,7 +322,8 @@ public class AnnotationGateTests
             new SessionCaptureOptions(AppSettings.WithDefaults()),
             RememberedSelectionState.Disabled,
             annotation,
-            () => annotationEnabled);
+            () => annotationEnabled,
+            () => toolState ?? AnnotationToolState.WithDefaults());
 
     private static FakeCaptureAdapter SuccessfulCapture(ContiguousBitmap frame) => new()
     {
@@ -248,8 +334,12 @@ public class AnnotationGateTests
         ExportTestHelpers.CreateTestBitmap(width, height);
 }
 
-internal sealed class FakePenAnnotationOverlayAdapter : IAnnotationOverlayStateAdapter
+internal sealed class ScriptedAnnotationOverlayAdapter : IAnnotationOverlayStateAdapter
 {
+    private readonly Action<AnnotationSession> _script;
+
+    public ScriptedAnnotationOverlayAdapter(Action<AnnotationSession> script) => _script = script;
+
     public Task<AnnotationPresentResult> ShowAsync(ContiguousBitmap sourceFrame) =>
         ShowAsync(sourceFrame, AnnotationToolState.WithDefaults());
 
@@ -258,28 +348,7 @@ internal sealed class FakePenAnnotationOverlayAdapter : IAnnotationOverlayStateA
         AnnotationToolState initialToolState)
     {
         var annotation = new AnnotationSession(sourceFrame, initialToolState);
-        annotation.BeginStroke(new AnnotationPoint(0, 0));
-        annotation.AppendStrokePoint(new AnnotationPoint(3, 0));
-        annotation.CommitStroke();
-        return Task.FromResult(AnnotationPresentResult.Confirmed(annotation.Render()));
-    }
-}
-
-internal sealed class FakeUndoRedoAnnotationOverlayAdapter : IAnnotationOverlayStateAdapter
-{
-    public Task<AnnotationPresentResult> ShowAsync(ContiguousBitmap sourceFrame) =>
-        ShowAsync(sourceFrame, AnnotationToolState.WithDefaults());
-
-    public Task<AnnotationPresentResult> ShowAsync(
-        ContiguousBitmap sourceFrame,
-        AnnotationToolState initialToolState)
-    {
-        var annotation = new AnnotationSession(sourceFrame, initialToolState);
-        annotation.BeginStroke(new AnnotationPoint(0, 0));
-        annotation.CommitStroke();
-        annotation.BeginStroke(new AnnotationPoint(3, 0));
-        annotation.CommitStroke();
-        annotation.Undo();
+        _script(annotation);
         return Task.FromResult(AnnotationPresentResult.Confirmed(annotation.Render()));
     }
 }

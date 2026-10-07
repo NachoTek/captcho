@@ -244,14 +244,11 @@ public sealed class AnnotationOverlayWindow : IDisposable
             case WM_CLOSE:
                 Cancel();
                 return IntPtr.Zero;
-            case WM_KEYDOWN when wParam.ToInt32() is 'Z' or 'Y' or 'z' or 'y':
-                if (IsControlDown())
-                {
-                    bool redo = wParam.ToInt32() is 'Y' or 'y'
-                        || (wParam.ToInt32() is 'Z' or 'z' && IsShiftDown());
-                    if (redo ? _annotationSession.Redo() : _annotationSession.Undo())
-                        Render();
-                }
+            case WM_KEYDOWN when wParam.ToInt32() is ('Z' or 'Y' or 'z' or 'y') && IsControlDown():
+                int key = wParam.ToInt32();
+                bool redo = key is 'Y' or 'y' || (key is 'Z' or 'z' && IsShiftDown());
+                if (redo ? _annotationSession.Redo() : _annotationSession.Undo())
+                    Render();
                 return IntPtr.Zero;
             case WM_LBUTTONDOWN:
                 var downPoint = new System.Drawing.Point(SignedLowWord(lParam), SignedHighWord(lParam));
@@ -518,19 +515,23 @@ public sealed class AnnotationOverlayWindow : IDisposable
 
         if (_undoButton.Contains(point))
         {
-            if (_annotationSession.Undo())
-                Render();
+            UndoOrRedo(undo: true);
             return true;
         }
 
         if (_redoButton.Contains(point))
         {
-            if (_annotationSession.Redo())
-                Render();
+            UndoOrRedo(undo: false);
             return true;
         }
 
         return false;
+    }
+
+    private void UndoOrRedo(bool undo)
+    {
+        if (undo ? _annotationSession.Undo() : _annotationSession.Redo())
+            Render();
     }
 
     private AnnotationPoint ToFramePoint(System.Drawing.Point point)

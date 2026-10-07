@@ -169,7 +169,7 @@ public class AnnotationDocumentTests
     }
 
     [Fact]
-    public void Undo_WhileAStrokeIsInProgress_DoesNotAffectInputOrSourcePixels()
+    public void Undo_WhileAStrokeIsInProgress_PreservesTheInProgressStrokeAndSourcePixels()
     {
         var source = SolidFrame(5, 1, new AnnotationColor(20, 30, 40));
         var session = new AnnotationSession(source);
