@@ -8,6 +8,22 @@ namespace captcho.Capture;
 public enum AnnotationTool
 {
     Pen,
+    Rectangle,
+    Ellipse,
+    Line,
+    Arrow,
+}
+
+/// <summary>
+/// Fill treatment for the closed shape tools. Shapes that support filling snapshot
+/// this alongside the shared stroke color and width.
+/// </summary>
+public enum AnnotationFillStyle
+{
+    /// <summary>No fill; only the shape outline is drawn.</summary>
+    None,
+    /// <summary>The shape interior is filled with the shared color, drawn under the outline.</summary>
+    Solid,
 }
 
 /// <summary>RGBA color used by annotation strokes.</summary>
@@ -32,7 +48,8 @@ public readonly record struct AnnotationPoint(int X, int Y);
 public sealed record AnnotationToolState(
     AnnotationTool Tool,
     AnnotationColor PenColor,
-    int StrokeWidth)
+    int StrokeWidth,
+    AnnotationFillStyle Fill = AnnotationFillStyle.None)
 {
     public static AnnotationToolState WithDefaults() => AnnotationSettings.WithDefaults().ToToolState();
 
@@ -41,7 +58,11 @@ public sealed record AnnotationToolState(
         PenColor,
         StrokeWidth is >= AnnotationSettings.MinimumStrokeWidth and <= AnnotationSettings.MaximumStrokeWidth
             ? StrokeWidth
-            : AnnotationSettings.DefaultStrokeWidth);
+            : AnnotationSettings.DefaultStrokeWidth,
+        Enum.IsDefined(Fill) ? Fill : AnnotationFillStyle.None);
+
+    /// <summary>Whether the tool draws a filled interior under its outline.</summary>
+    public bool ToolSupportsFill => Tool is AnnotationTool.Rectangle or AnnotationTool.Ellipse;
 }
 
 /// <summary>
@@ -75,19 +96,21 @@ public sealed record AnnotationSettings(
         new AnnotationToolState(DefaultTool, PenColor, StrokeWidth).Normalized();
 }
 
-/// <summary>Immutable committed or in-progress freehand pen stroke.</summary>
+/// <summary>Immutable committed or in-progress annotation stroke or shape.</summary>
 public sealed class AnnotationStroke
 {
     public AnnotationTool Tool { get; }
     public AnnotationColor Color { get; }
     public int StrokeWidth { get; }
+    public AnnotationFillStyle Fill { get; }
     public IReadOnlyList<AnnotationPoint> Points { get; }
 
     public AnnotationStroke(
         AnnotationTool tool,
         AnnotationColor color,
         int strokeWidth,
-        IReadOnlyList<AnnotationPoint> points)
+        IReadOnlyList<AnnotationPoint> points,
+        AnnotationFillStyle fill = AnnotationFillStyle.None)
     {
         if (!Enum.IsDefined(tool))
             throw new ArgumentOutOfRangeException(nameof(tool));
@@ -98,6 +121,7 @@ public sealed class AnnotationStroke
         Tool = tool;
         Color = color;
         StrokeWidth = strokeWidth;
+        Fill = Enum.IsDefined(fill) ? fill : AnnotationFillStyle.None;
         Points = Array.AsReadOnly(points.ToArray());
     }
 }
@@ -129,22 +153,48 @@ public sealed class AnnotationDocument
                 _inProgressState.Tool,
                 _inProgressState.PenColor,
                 _inProgressState.StrokeWidth,
-                _inProgressPoints);
+                _inProgressPoints,
+                EffectiveFill(_inProgressState));
 
     public void BeginStroke(AnnotationPoint point, AnnotationToolState toolState)
     {
         ArgumentNullException.ThrowIfNull(toolState);
         var state = toolState.Normalized();
-        if (state.Tool != AnnotationTool.Pen)
-            throw new ArgumentOutOfRangeException(nameof(toolState), "Only the pen tool is available.");
 
         _inProgressState = state;
-        _inProgressPoints = new List<AnnotationPoint> { point };
+        // Shapes drag from a fixed anchor to a moving current point, so they begin with
+        // the anchor duplicated and the drag replaces the duplicate. Pen begins with a
+        // single point and grows by appending.
+        _inProgressPoints = state.Tool == AnnotationTool.Pen
+            ? new List<AnnotationPoint> { point }
+            : new List<AnnotationPoint> { point, point };
     }
+
+    /// <summary>
+    /// The fill style a stroke actually carries: tools that cannot fill never snapshot a
+    /// lingering toolbar fill selection, so every stroke records only applicable style.
+    /// </summary>
+    private static AnnotationFillStyle EffectiveFill(AnnotationToolState state) =>
+        state.ToolSupportsFill ? state.Fill : AnnotationFillStyle.None;
 
     public void AppendStrokePoint(AnnotationPoint point)
     {
-        _inProgressPoints?.Add(point);
+        if (_inProgressPoints is null || _inProgressState?.Tool != AnnotationTool.Pen)
+            return;
+
+        _inProgressPoints.Add(point);
+    }
+
+    /// <summary>
+    /// Replaces the current drag point of an in-progress shape. The first point stays
+    /// fixed as the anchor; pen strokes ignore this and keep every appended point.
+    /// </summary>
+    public void UpdateStrokePoint(AnnotationPoint point)
+    {
+        if (_inProgressPoints is null || _inProgressState?.Tool == AnnotationTool.Pen)
+            return;
+
+        _inProgressPoints[^1] = point;
     }
 
     public bool CommitStroke()
@@ -226,8 +276,12 @@ public sealed class AnnotationSession
     public void SetStrokeWidth(int width) =>
         SetToolState(ToolState with { StrokeWidth = width });
 
+    public void SetFill(AnnotationFillStyle fill) =>
+        SetToolState(ToolState with { Fill = fill });
+
     public void BeginStroke(AnnotationPoint point) => Document.BeginStroke(point, ToolState);
     public void AppendStrokePoint(AnnotationPoint point) => Document.AppendStrokePoint(point);
+    public void UpdateStrokePoint(AnnotationPoint point) => Document.UpdateStrokePoint(point);
     public bool CommitStroke() => Document.CommitStroke();
     public void CancelStroke() => Document.CancelStroke();
     public bool Undo() => Document.Undo();
@@ -259,14 +313,156 @@ public static class AnnotationRenderer
 
     private static void DrawStroke(int width, int height, int stride, byte[] pixels, AnnotationStroke stroke)
     {
-        if (stroke.Tool != AnnotationTool.Pen || stroke.Points.Count == 0)
+        if (stroke.Points.Count == 0)
             return;
 
+        switch (stroke.Tool)
+        {
+            case AnnotationTool.Pen:
+                DrawPenStroke(width, height, stride, pixels, stroke);
+                break;
+            case AnnotationTool.Rectangle:
+                DrawRectangleStroke(width, height, stride, pixels, stroke);
+                break;
+            case AnnotationTool.Ellipse:
+                DrawEllipseStroke(width, height, stride, pixels, stroke);
+                break;
+            case AnnotationTool.Line:
+                Stamp(width, height, stride, pixels, stroke.Points[0], stroke);
+                DrawSegment(width, height, stride, pixels, stroke.Points[0], stroke.Points[^1], stroke);
+                break;
+            case AnnotationTool.Arrow:
+                DrawArrowStroke(width, height, stride, pixels, stroke);
+                break;
+        }
+    }
+
+    private static void DrawPenStroke(int width, int height, int stride, byte[] pixels, AnnotationStroke stroke)
+    {
         var points = stroke.Points;
         Stamp(width, height, stride, pixels, points[0], stroke);
         for (int i = 1; i < points.Count; i++)
             DrawSegment(width, height, stride, pixels, points[i - 1], points[i], stroke);
     }
+
+    private static void DrawRectangleStroke(int width, int height, int stride, byte[] pixels, AnnotationStroke stroke)
+    {
+        var (left, top, right, bottom) = OrderedBounds(stroke.Points[0], stroke.Points[^1]);
+        FillBoundsIfFilled(width, height, stride, pixels, stroke, left, top, right, bottom);
+        DrawSegment(width, height, stride, pixels, new AnnotationPoint(left, top), new AnnotationPoint(right, top), stroke);
+        DrawSegment(width, height, stride, pixels, new AnnotationPoint(right, top), new AnnotationPoint(right, bottom), stroke);
+        DrawSegment(width, height, stride, pixels, new AnnotationPoint(right, bottom), new AnnotationPoint(left, bottom), stroke);
+        DrawSegment(width, height, stride, pixels, new AnnotationPoint(left, bottom), new AnnotationPoint(left, top), stroke);
+    }
+
+    private static void DrawEllipseStroke(int width, int height, int stride, byte[] pixels, AnnotationStroke stroke)
+    {
+        var (left, top, right, bottom) = OrderedBounds(stroke.Points[0], stroke.Points[^1]);
+        int centerX = (left + right) / 2;
+        int centerY = (top + bottom) / 2;
+        double radiusX = Math.Max(0.5, (right - left) / 2.0);
+        double radiusY = Math.Max(0.5, (bottom - top) / 2.0);
+        FillEllipseIfFilled(width, height, stride, pixels, stroke, centerX, centerY, radiusX, radiusY);
+
+        int steps = Math.Max(1, (int)Math.Ceiling(2 * Math.PI * Math.Max(radiusX, radiusY)));
+        AnnotationPoint previous = EllipsePoint(centerX, centerY, radiusX, radiusY, 0);
+        for (int step = 1; step <= steps; step++)
+        {
+            AnnotationPoint current = EllipsePoint(centerX, centerY, radiusX, radiusY, 2 * Math.PI * step / steps);
+            DrawSegment(width, height, stride, pixels, previous, current, stroke);
+            previous = current;
+        }
+    }
+
+    private static void DrawArrowStroke(int width, int height, int stride, byte[] pixels, AnnotationStroke stroke)
+    {
+        var start = stroke.Points[0];
+        var end = stroke.Points[^1];
+        Stamp(width, height, stride, pixels, start, stroke);
+        DrawSegment(width, height, stride, pixels, start, end, stroke);
+
+        double length = Math.Sqrt(Math.Pow(end.X - start.X, 2) + Math.Pow(end.Y - start.Y, 2));
+        if (length < 1)
+            return;
+
+        // The arrowhead points toward the end along the shaft direction; the barbs keep a
+        // 30-degree angle off the shaft so wide strokes still read as an arrow.
+        double directionX = (end.X - start.X) / length;
+        double directionY = (end.Y - start.Y) / length;
+        const double BarbAngle = Math.PI / 6;
+        double headLength = Math.Max(stroke.StrokeWidth * 3.0, 8.0);
+        double cos = Math.Cos(BarbAngle);
+        double sin = Math.Sin(BarbAngle);
+        var firstBarb = new AnnotationPoint(
+            (int)Math.Round(end.X - headLength * (directionX * cos - directionY * sin), MidpointRounding.AwayFromZero),
+            (int)Math.Round(end.Y - headLength * (directionX * sin + directionY * cos), MidpointRounding.AwayFromZero));
+        var secondBarb = new AnnotationPoint(
+            (int)Math.Round(end.X - headLength * (directionX * cos + directionY * sin), MidpointRounding.AwayFromZero),
+            (int)Math.Round(end.Y - headLength * (directionY * cos - directionX * sin), MidpointRounding.AwayFromZero));
+        Stamp(width, height, stride, pixels, end, stroke);
+        DrawSegment(width, height, stride, pixels, end, firstBarb, stroke);
+        DrawSegment(width, height, stride, pixels, end, secondBarb, stroke);
+    }
+
+    private static (int Left, int Top, int Right, int Bottom) OrderedBounds(AnnotationPoint first, AnnotationPoint last) =>
+        (Math.Min(first.X, last.X),
+         Math.Min(first.Y, last.Y),
+         Math.Max(first.X, last.X),
+         Math.Max(first.Y, last.Y));
+
+    private static void FillBoundsIfFilled(
+        int width,
+        int height,
+        int stride,
+        byte[] pixels,
+        AnnotationStroke stroke,
+        int left,
+        int top,
+        int right,
+        int bottom)
+    {
+        if (stroke.Fill != AnnotationFillStyle.Solid)
+            return;
+
+        for (int y = Math.Max(0, top); y <= Math.Min(height - 1, bottom); y++)
+            for (int x = Math.Max(0, left); x <= Math.Min(width - 1, right); x++)
+                BlendPixel(pixels, y * stride + x * 4, stroke.Color);
+    }
+
+    private static void FillEllipseIfFilled(
+        int width,
+        int height,
+        int stride,
+        byte[] pixels,
+        AnnotationStroke stroke,
+        int centerX,
+        int centerY,
+        double radiusX,
+        double radiusY)
+    {
+        if (stroke.Fill != AnnotationFillStyle.Solid)
+            return;
+
+        int minX = Math.Max(0, centerX - (int)Math.Ceiling(radiusX));
+        int maxX = Math.Min(width - 1, centerX + (int)Math.Ceiling(radiusX));
+        int minY = Math.Max(0, centerY - (int)Math.Ceiling(radiusY));
+        int maxY = Math.Min(height - 1, centerY + (int)Math.Ceiling(radiusY));
+        for (int y = minY; y <= maxY; y++)
+        {
+            for (int x = minX; x <= maxX; x++)
+            {
+                double distanceX = (x - centerX) / radiusX;
+                double distanceY = (y - centerY) / radiusY;
+                if (distanceX * distanceX + distanceY * distanceY <= 1.0)
+                    BlendPixel(pixels, y * stride + x * 4, stroke.Color);
+            }
+        }
+    }
+
+    private static AnnotationPoint EllipsePoint(int centerX, int centerY, double radiusX, double radiusY, double angle) =>
+        new(
+            (int)Math.Round(centerX + radiusX * Math.Cos(angle), MidpointRounding.AwayFromZero),
+            (int)Math.Round(centerY + radiusY * Math.Sin(angle), MidpointRounding.AwayFromZero));
 
     private static void DrawSegment(
         int width,

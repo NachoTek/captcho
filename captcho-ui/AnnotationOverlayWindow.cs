@@ -128,8 +128,9 @@ public sealed class AnnotationOverlayWindow : IDisposable
     private int _virtualX, _virtualY, _virtualWidth, _virtualHeight;
     private Rectangle _frameBounds;
     private bool _drawing;
-    private Rectangle _penButton;
+    private readonly List<(Rectangle Bounds, AnnotationTool Tool)> _toolButtons = new();
     private Rectangle _colorButton;
+    private Rectangle _fillButton;
     private Rectangle _widthDownButton;
     private Rectangle _widthUpButton;
     private Rectangle _undoButton;
@@ -264,7 +265,11 @@ public sealed class AnnotationOverlayWindow : IDisposable
                 return IntPtr.Zero;
             case WM_MOUSEMOVE when _drawing:
                 var movePoint = new System.Drawing.Point(SignedLowWord(lParam), SignedHighWord(lParam));
-                _annotationSession.AppendStrokePoint(ToFramePoint(movePoint));
+                var moveFramePoint = ToFramePoint(movePoint);
+                // The document applies append vs replace by tool; each call is a no-op for
+                // the other kind of stroke, keeping this adapter free of tool rules.
+                _annotationSession.AppendStrokePoint(moveFramePoint);
+                _annotationSession.UpdateStrokePoint(moveFramePoint);
                 Render();
                 return IntPtr.Zero;
             case WM_LBUTTONUP:
@@ -273,7 +278,9 @@ public sealed class AnnotationOverlayWindow : IDisposable
                     _drawing = false;
                     ReleaseCapture();
                     var point = new System.Drawing.Point(SignedLowWord(lParam), SignedHighWord(lParam));
-                    _annotationSession.AppendStrokePoint(ToFramePoint(point));
+                    var framePoint = ToFramePoint(point);
+                    _annotationSession.AppendStrokePoint(framePoint);
+                    _annotationSession.UpdateStrokePoint(framePoint);
                     _annotationSession.CommitStroke();
                     Render();
                 }
@@ -413,18 +420,33 @@ public sealed class AnnotationOverlayWindow : IDisposable
         const int buttonWidth = 92;
         const int height = 42;
         const int gap = 8;
+        const int toolWidth = 86;
         const int colorWidth = 54;
+        const int fillWidth = 54;
         const int widthButton = 38;
         const int widthLabel = 86;
         const int undoWidth = 58;
-        int contentWidth = buttonWidth + colorWidth + widthButton * 2 + widthLabel + undoWidth * 2 + buttonWidth * 2 + gap * 7;
+        // Pen + four shapes + color + fill + width stepper + undo/redo + confirm/cancel.
+        int contentWidth = toolWidth * 5
+            + colorWidth
+            + fillWidth
+            + widthButton * 2 + widthLabel
+            + undoWidth * 2
+            + buttonWidth * 2
+            + gap * 12;
         int startX = Math.Max(8, (_virtualWidth - contentWidth) / 2);
         int y = 20;
         int x = startX;
-        _penButton = new Rectangle(x, y, buttonWidth, height);
-        x += buttonWidth + gap;
+        _toolButtons.Clear();
+        foreach (var tool in new[] { AnnotationTool.Pen, AnnotationTool.Rectangle, AnnotationTool.Ellipse, AnnotationTool.Line, AnnotationTool.Arrow })
+        {
+            _toolButtons.Add((new Rectangle(x, y, toolWidth, height), tool));
+            x += toolWidth + gap;
+        }
         _colorButton = new Rectangle(x, y, colorWidth, height);
         x += colorWidth + gap;
+        _fillButton = new Rectangle(x, y, fillWidth, height);
+        x += fillWidth + gap;
         _widthDownButton = new Rectangle(x, y, widthButton, height);
         x += widthButton + gap;
         var widthText = new Rectangle(x, y, widthLabel, height);
@@ -439,17 +461,28 @@ public sealed class AnnotationOverlayWindow : IDisposable
         x += buttonWidth + gap;
         _cancelButton = new Rectangle(x, y, buttonWidth, height);
 
+        bool fillApplies = _annotationSession.ToolState.ToolSupportsFill;
+
         graphics.SmoothingMode = SmoothingMode.AntiAlias;
         using var panel = new SolidBrush(Color.FromArgb(220, 28, 30, 34));
         graphics.FillRectangle(panel, startX - 12, 8, contentWidth + 24, height + 24);
-        using var pen = new SolidBrush(Color.FromArgb(255, 38, 139, 210));
+        using var accent = new SolidBrush(Color.FromArgb(255, 38, 139, 210));
         using var color = new SolidBrush(ToDrawingColor(_annotationSession.ToolState.PenColor));
         using var neutral = new SolidBrush(Color.FromArgb(255, 70, 72, 78));
         using var neutralDisabled = new SolidBrush(Color.FromArgb(255, 48, 50, 54));
         using var confirm = new SolidBrush(Color.FromArgb(255, 38, 139, 210));
         using var cancel = new SolidBrush(Color.FromArgb(255, 70, 72, 78));
-        graphics.FillRectangle(pen, _penButton);
+        foreach (var (bounds, tool) in _toolButtons)
+            graphics.FillRectangle(tool == _annotationSession.ToolState.Tool ? accent : neutral, bounds);
         graphics.FillRectangle(color, _colorButton);
+        if (fillApplies)
+        {
+            // Fill applies only to the closed shape tools; for the others the control is
+            // hidden outright rather than disabled.
+            graphics.FillRectangle(
+                _annotationSession.ToolState.Fill == AnnotationFillStyle.Solid ? accent : neutral,
+                _fillButton);
+        }
         graphics.FillRectangle(neutral, _widthDownButton);
         graphics.FillRectangle(neutral, widthText);
         graphics.FillRectangle(neutral, _widthUpButton);
@@ -461,8 +494,24 @@ public sealed class AnnotationOverlayWindow : IDisposable
         using var smallFont = new Font("Segoe UI", 10, FontStyle.Bold);
         using var text = new SolidBrush(Color.White);
         using var textDisabled = new SolidBrush(Color.FromArgb(255, 130, 132, 138));
-        DrawCentered(graphics, "Pen", font, text, _penButton);
+        var toolLabels = new Dictionary<AnnotationTool, string>
+        {
+            [AnnotationTool.Pen] = "Pen",
+            [AnnotationTool.Rectangle] = "Rectangle",
+            [AnnotationTool.Ellipse] = "Ellipse",
+            [AnnotationTool.Line] = "Line",
+            [AnnotationTool.Arrow] = "Arrow",
+        };
+        foreach (var (bounds, tool) in _toolButtons)
+            DrawCentered(graphics, toolLabels[tool], smallFont, text, bounds);
         DrawCentered(graphics, "Color", smallFont, text, _colorButton);
+        if (fillApplies)
+            DrawCentered(
+                graphics,
+                "Fill",
+                smallFont,
+                text,
+                _fillButton);
         DrawCentered(graphics, "-", font, text, _widthDownButton);
         DrawCentered(graphics, $"Width {_annotationSession.ToolState.StrokeWidth}", smallFont, text, widthText);
         DrawCentered(graphics, "+", font, text, _widthUpButton);
@@ -474,11 +523,14 @@ public sealed class AnnotationOverlayWindow : IDisposable
 
     private bool HandleToolbarClick(System.Drawing.Point point)
     {
-        if (_penButton.Contains(point))
+        foreach (var (bounds, tool) in _toolButtons)
         {
-            _annotationSession.SetTool(AnnotationTool.Pen);
-            Render();
-            return true;
+            if (bounds.Contains(point))
+            {
+                _annotationSession.SetTool(tool);
+                Render();
+                return true;
+            }
         }
 
         if (_colorButton.Contains(point))
@@ -491,6 +543,16 @@ public sealed class AnnotationOverlayWindow : IDisposable
             };
             int current = Array.IndexOf(colors, _annotationSession.ToolState.PenColor);
             _annotationSession.SetPenColor(colors[(current + 1 + colors.Length) % colors.Length]);
+            Render();
+            return true;
+        }
+
+        if (_fillButton.Contains(point) && _annotationSession.ToolState.ToolSupportsFill)
+        {
+            _annotationSession.SetFill(
+                _annotationSession.ToolState.Fill == AnnotationFillStyle.Solid
+                    ? AnnotationFillStyle.None
+                    : AnnotationFillStyle.Solid);
             Render();
             return true;
         }

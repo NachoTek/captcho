@@ -26,6 +26,41 @@ public class AnnotationSettingsTests : IDisposable
         Assert.Equal(AnnotationSettings.DefaultStrokeWidth, settings.EffectiveAnnotationSettings.StrokeWidth);
     }
 
+    // spec #39: every shape tool is a valid persisted default
+
+    [Theory]
+    [InlineData(AnnotationTool.Rectangle)]
+    [InlineData(AnnotationTool.Ellipse)]
+    [InlineData(AnnotationTool.Line)]
+    [InlineData(AnnotationTool.Arrow)]
+    public void Validate_AcceptsEveryShapeToolAsDefault(AnnotationTool tool)
+    {
+        var settings = AppSettings.WithDefaults();
+        settings.AnnotationSettings = new AnnotationSettings(
+            tool,
+            settings.EffectiveAnnotationSettings.PenColor,
+            settings.EffectiveAnnotationSettings.StrokeWidth);
+
+        Assert.Empty(settings.Validate());
+        Assert.Equal(tool, settings.EffectiveAnnotationSettings.ToToolState().Tool);
+    }
+
+    [Fact]
+    public void SaveThenLoad_PreservesShapeToolDefaults()
+    {
+        var service = new ConfigurationService(_tempDirectory);
+        var original = AppSettings.WithDefaults();
+        original.AnnotationSettings = new AnnotationSettings(
+            AnnotationTool.Ellipse,
+            new AnnotationColor(12, 34, 56),
+            9);
+
+        Assert.True(service.Save(original).Success);
+        var loaded = service.Load().Settings;
+
+        Assert.Equal(AnnotationTool.Ellipse, loaded.EffectiveAnnotationSettings.DefaultTool);
+    }
+
     [Fact]
     public void Validate_RejectsUnknownToolAndOutOfRangeStrokeWidth()
     {

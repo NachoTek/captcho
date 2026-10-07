@@ -208,6 +208,185 @@ public class AnnotationDocumentTests
         Assert.Equal(new AnnotationColor(20, 30, 40), Pixel(rendered, 0, 0));
     }
 
+    // spec #39: shape tools and shared style controls
+
+    [Theory]
+    [InlineData(AnnotationTool.Rectangle)]
+    [InlineData(AnnotationTool.Ellipse)]
+    [InlineData(AnnotationTool.Line)]
+    [InlineData(AnnotationTool.Arrow)]
+    public void Shape_CommitsGeometryAndStyleIndependentlyAndRenders(AnnotationTool tool)
+    {
+        var source = SolidFrame(8, 6, new AnnotationColor(20, 30, 40));
+        var session = new AnnotationSession(source, new AnnotationToolState(
+            tool,
+            new AnnotationColor(255, 0, 0),
+            1));
+
+        session.BeginStroke(new AnnotationPoint(1, 1));
+        session.UpdateStrokePoint(new AnnotationPoint(5, 4));
+        var inProgress = session.Render();
+        Assert.NotNull(session.Document.InProgressStroke);
+        Assert.Equal(tool, session.Document.InProgressStroke!.Tool);
+        Assert.NotEqual(source.Pixels, inProgress.Pixels);
+
+        session.CommitStroke();
+
+        var stroke = Assert.Single(session.Document.Strokes);
+        Assert.Equal(tool, stroke.Tool);
+        Assert.Equal(new AnnotationColor(255, 0, 0), stroke.Color);
+        Assert.Equal(1, stroke.StrokeWidth);
+        Assert.Equal(new AnnotationPoint(1, 1), stroke.Points[0]);
+        Assert.Equal(new AnnotationPoint(5, 4), stroke.Points[^1]);
+        Assert.NotEqual(source.Pixels, session.Render().Pixels);
+    }
+
+    [Theory]
+    [InlineData(AnnotationTool.Rectangle)]
+    [InlineData(AnnotationTool.Ellipse)]
+    [InlineData(AnnotationTool.Line)]
+    [InlineData(AnnotationTool.Arrow)]
+    public void Shape_UpdateStrokePointKeepsAnchorAndMovesOnlyTheDragPoint(AnnotationTool tool)
+    {
+        var session = new AnnotationSession(SolidFrame(8, 6, new AnnotationColor(0, 0, 0)), new AnnotationToolState(
+            tool,
+            new AnnotationColor(255, 0, 0),
+            1));
+
+        session.BeginStroke(new AnnotationPoint(2, 2));
+        session.UpdateStrokePoint(new AnnotationPoint(6, 3));
+        session.UpdateStrokePoint(new AnnotationPoint(4, 5));
+
+        var stroke = session.Document.InProgressStroke;
+        Assert.NotNull(stroke);
+        Assert.Equal(2, stroke!.Points.Count);
+        Assert.Equal(new AnnotationPoint(2, 2), stroke.Points[0]);
+        Assert.Equal(new AnnotationPoint(4, 5), stroke.Points[^1]);
+    }
+
+    [Fact]
+    public void Shape_AppendStrokePointIsIgnoredSoShapesStayTwoPointGeometry()
+    {
+        var session = new AnnotationSession(SolidFrame(8, 6, new AnnotationColor(0, 0, 0)), new AnnotationToolState(
+            AnnotationTool.Rectangle,
+            new AnnotationColor(255, 0, 0),
+            1));
+
+        session.BeginStroke(new AnnotationPoint(1, 1));
+        session.AppendStrokePoint(new AnnotationPoint(3, 3));
+        session.AppendStrokePoint(new AnnotationPoint(5, 5));
+
+        var stroke = session.Document.InProgressStroke;
+        Assert.NotNull(stroke);
+        Assert.Equal(new AnnotationPoint(1, 1), stroke.Points[0]);
+        Assert.Equal(new AnnotationPoint(1, 1), stroke.Points[^1]);
+    }
+
+    [Fact]
+    public void Pen_UpdateStrokePointIsIgnoredSoFreehandStrokesKeepEveryPoint()
+    {
+        var session = new AnnotationSession(SolidFrame(8, 1, new AnnotationColor(0, 0, 0)));
+
+        session.BeginStroke(new AnnotationPoint(1, 0));
+        session.AppendStrokePoint(new AnnotationPoint(3, 0));
+        session.UpdateStrokePoint(new AnnotationPoint(4, 0));
+
+        var stroke = session.Document.InProgressStroke;
+        Assert.NotNull(stroke);
+        Assert.Equal(new[] { new AnnotationPoint(1, 0), new AnnotationPoint(3, 0) }, stroke!.Points);
+    }
+
+    [Fact]
+    public void Shape_SnapshotsSharedColorAndStrokeWidthAtBegin()
+    {
+        var session = new AnnotationSession(SolidFrame(8, 6, new AnnotationColor(20, 30, 40)));
+
+        session.SetPenColor(new AnnotationColor(0, 255, 0));
+        session.SetStrokeWidth(7);
+        session.SetTool(AnnotationTool.Ellipse);
+        session.BeginStroke(new AnnotationPoint(1, 1));
+        session.UpdateStrokePoint(new AnnotationPoint(6, 5));
+        session.SetPenColor(new AnnotationColor(255, 0, 0));
+        session.SetStrokeWidth(2);
+        session.CommitStroke();
+
+        var stroke = Assert.Single(session.Document.Strokes);
+        Assert.Equal(AnnotationTool.Ellipse, stroke.Tool);
+        Assert.Equal(new AnnotationColor(0, 255, 0), stroke.Color);
+        Assert.Equal(7, stroke.StrokeWidth);
+    }
+
+    [Fact]
+    public void Shape_FillStyleSnapshotsWithTheShapeAndUndoRestoresIt()
+    {
+        var source = SolidFrame(8, 6, new AnnotationColor(20, 30, 40));
+        var session = new AnnotationSession(source, new AnnotationToolState(
+            AnnotationTool.Rectangle,
+            new AnnotationColor(255, 0, 0),
+            1));
+
+        session.SetFill(AnnotationFillStyle.Solid);
+        session.BeginStroke(new AnnotationPoint(1, 1));
+        session.UpdateStrokePoint(new AnnotationPoint(5, 4));
+        session.CommitStroke();
+
+        var stroke = Assert.Single(session.Document.Strokes);
+        Assert.Equal(AnnotationFillStyle.Solid, stroke.Fill);
+
+        Assert.True(session.Undo());
+        Assert.Empty(session.Document.Strokes);
+        Assert.True(session.Redo());
+        var restored = Assert.Single(session.Document.Strokes);
+        Assert.Equal(AnnotationFillStyle.Solid, restored.Fill);
+        Assert.Equal(AnnotationTool.Rectangle, restored.Tool);
+    }
+
+    [Fact]
+    public void Shape_CommitAfterUndoClearsRedoAndCommittedPixelsAreReversible()
+    {
+        var source = SolidFrame(8, 6, new AnnotationColor(20, 30, 40));
+        var session = new AnnotationSession(source, new AnnotationToolState(
+            AnnotationTool.Rectangle,
+            new AnnotationColor(255, 0, 0),
+            1,
+            AnnotationFillStyle.Solid));
+
+        session.BeginStroke(new AnnotationPoint(1, 1));
+        session.UpdateStrokePoint(new AnnotationPoint(5, 4));
+        session.CommitStroke();
+        Assert.NotEqual(source.Pixels, session.Render().Pixels);
+
+        Assert.True(session.Undo());
+        Assert.Equal(source.Pixels, session.Render().Pixels);
+
+        session.BeginStroke(new AnnotationPoint(2, 2));
+        session.UpdateStrokePoint(new AnnotationPoint(4, 3));
+        session.CommitStroke();
+        Assert.False(session.CanRedo);
+    }
+
+    [Theory]
+    [InlineData(AnnotationTool.Pen)]
+    [InlineData(AnnotationTool.Line)]
+    [InlineData(AnnotationTool.Arrow)]
+    public void NonFillTools_NeverSnapshotALingeringFillSelection(AnnotationTool tool)
+    {
+        var session = new AnnotationSession(SolidFrame(8, 6, new AnnotationColor(20, 30, 40)), new AnnotationToolState(
+            tool,
+            new AnnotationColor(255, 0, 0),
+            1));
+
+        // Fill set while a fill-capable tool was active, then the tool changed.
+        session.SetFill(AnnotationFillStyle.Solid);
+        session.SetTool(tool);
+        session.BeginStroke(new AnnotationPoint(1, 1));
+        session.UpdateStrokePoint(new AnnotationPoint(5, 4));
+        session.CommitStroke();
+
+        var stroke = Assert.Single(session.Document.Strokes);
+        Assert.Equal(AnnotationFillStyle.None, stroke.Fill);
+    }
+
     private static ContiguousBitmap SolidFrame(int width, int height, AnnotationColor color)
     {
         var pixels = new byte[width * height * 4];

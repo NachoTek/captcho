@@ -300,6 +300,159 @@ public class AnnotationGateTests
         Assert.Equal(source.Pixels, result.Frame!.Pixels);
     }
 
+    // spec #39: shape tools and shared style controls
+
+    [Theory]
+    [InlineData(AnnotationTool.Rectangle)]
+    [InlineData(AnnotationTool.Line)]
+    [InlineData(AnnotationTool.Arrow)]
+    public async Task Workflow_ConfirmedShapeFrameCarriesTheComposedPixels(AnnotationTool tool)
+    {
+        // 6x1 black frame; a shape from (0,0) to (5,0) crosses pixel (2,0).
+        var source = Frame6x1();
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            script.SetTool(tool);
+            script.BeginStroke(new AnnotationPoint(0, 0));
+            script.UpdateStrokePoint(new AnnotationPoint(5, 0));
+            script.CommitStroke();
+        });
+        var session = Session(
+            SuccessfulCapture(source),
+            new FakePreviewAdapter(),
+            annotation,
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Pen, new AnnotationColor(255, 0, 0), 1));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        Assert.Equal(255, result.Frame!.Pixels[2 * 4 + 2]);
+        Assert.Equal(255, result.Frame.Pixels[2 * 4 + 3]);
+    }
+
+    [Fact]
+    public async Task Workflow_ConfirmedEllipseFrameCarriesTheComposedPixels()
+    {
+        // 6x3 black frame; an ellipse from (0,1) to (5,1) passes through its center row.
+        var source = BitmapBufferConverter.StripPadding(new byte[6 * 3 * 4], 6, 3, 24);
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            script.SetTool(AnnotationTool.Ellipse);
+            script.BeginStroke(new AnnotationPoint(0, 1));
+            script.UpdateStrokePoint(new AnnotationPoint(5, 1));
+            script.CommitStroke();
+        });
+        var session = Session(
+            SuccessfulCapture(source),
+            new FakePreviewAdapter(),
+            annotation,
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Pen, new AnnotationColor(255, 0, 0), 1));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        Assert.Equal(255, result.Frame!.Pixels[(1 * 6 + 2) * 4 + 2]);
+        Assert.Equal(255, result.Frame.Pixels[(1 * 6 + 2) * 4 + 3]);
+    }
+
+    [Fact]
+    public async Task Workflow_ConfirmedFilledRectangleFrameCarriesFillPixels()
+    {
+        var source = Frame6x1();
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            script.SetTool(AnnotationTool.Rectangle);
+            script.SetFill(AnnotationFillStyle.Solid);
+            script.BeginStroke(new AnnotationPoint(0, 0));
+            script.UpdateStrokePoint(new AnnotationPoint(5, 0));
+            script.CommitStroke();
+        });
+        var session = Session(
+            SuccessfulCapture(source),
+            new FakePreviewAdapter(),
+            annotation,
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Pen, new AnnotationColor(255, 0, 0), 1));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        // Every pixel of the single row is covered by the filled rectangle.
+        for (int x = 0; x < 6; x++)
+        {
+            Assert.Equal(255, result.Frame!.Pixels[x * 4 + 2]);
+            Assert.Equal(255, result.Frame.Pixels[x * 4 + 3]);
+        }
+    }
+
+    [Fact]
+    public async Task Workflow_SharedStyleControlsApplyToPenAndShapes()
+    {
+        var source = Frame6x1();
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            // One shared color/width set once, then used by both tools.
+            script.SetPenColor(new AnnotationColor(0, 255, 0));
+            script.SetStrokeWidth(2);
+            script.SetTool(AnnotationTool.Line);
+            script.BeginStroke(new AnnotationPoint(0, 0));
+            script.UpdateStrokePoint(new AnnotationPoint(2, 0));
+            script.CommitStroke();
+            script.SetTool(AnnotationTool.Pen);
+            script.BeginStroke(new AnnotationPoint(4, 0));
+            script.CommitStroke();
+        });
+        var session = Session(
+            SuccessfulCapture(source),
+            new FakePreviewAdapter(),
+            annotation,
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Pen, new AnnotationColor(255, 0, 0), 1));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        // Both strokes are green (R 0, G 255, B 0): the shared controls applied to each tool.
+        Assert.Equal(255, result.Frame!.Pixels[1 * 4 + 1]);     // G at (1,0)
+        Assert.Equal(0, result.Frame.Pixels[1 * 4 + 2]);        // R at (1,0)
+        Assert.Equal(255, result.Frame.Pixels[4 * 4 + 1]);      // G at (4,0)
+        Assert.Equal(0, result.Frame.Pixels[4 * 4 + 2]);        // R at (4,0)
+    }
+
+    [Fact]
+    public async Task Workflow_ShapeUndoRedoRoundTrip_ComposesExpectedPixels()
+    {
+        var source = Frame6x1();
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            script.SetTool(AnnotationTool.Line);
+            script.BeginStroke(new AnnotationPoint(0, 0));
+            script.UpdateStrokePoint(new AnnotationPoint(5, 0));
+            script.CommitStroke();
+            script.Undo();
+            script.Redo();
+        });
+        var session = Session(
+            SuccessfulCapture(source),
+            new FakePreviewAdapter(),
+            annotation,
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Pen, new AnnotationColor(255, 0, 0), 1));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        Assert.Equal(255, result.Frame!.Pixels[2 * 4 + 2]);
+        Assert.Equal(255, result.Frame.Pixels[2 * 4 + 3]);
+    }
+
     private static ContiguousBitmap Frame6x1() =>
         BitmapBufferConverter.StripPadding(
             new byte[6 * 4],

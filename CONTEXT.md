@@ -37,7 +37,7 @@ An optional interactive step where the user picks what to capture. Skipped for F
 _Avoid_: Target picking, source selection
 
 **Annotation**:
-Post-capture markup on a full-screen overlay that displays the captured Frame. The user draws, marks, or annotates the frozen Frame before Export. V1 keeps one global Annotation tool state and one source-plus-strokes composite; the pen renders both in-progress and committed strokes without mutating the source Frame. Committed annotations form a document history: Undo removes the latest committed annotation, Redo restores the most recently undone one, and committing a new annotation after Undo clears the redo branch. Available when enabled in Settings; if disabled, the existing preview workflow is retained.
+Post-capture markup on a full-screen overlay that displays the captured Frame. The user draws, marks, or annotates the frozen Frame before Export. V1 keeps one global Annotation tool state and one source-plus-strokes composite; the pen and the shape tools (rectangle, ellipse, line, arrow) render both in-progress and committed strokes without mutating the source Frame, sharing one color and stroke width, with fill available to the closed shapes. Committed annotations form a document history: Undo removes the latest committed annotation, Redo restores the most recently undone one, and committing a new annotation after Undo clears the redo branch. Available when enabled in Settings; if disabled, the existing preview workflow is retained.
 _Avoid_: Markup, drawing, annotation overlay
 
 **Capture**:

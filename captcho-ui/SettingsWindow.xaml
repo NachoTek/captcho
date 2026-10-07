@@ -172,6 +172,10 @@ Layout:
                                   MinWidth="240"
                                   SelectionChanged="AnnotationToolCombo_SelectionChanged">
                             <ComboBoxItem Content="Pen"/>
+                            <ComboBoxItem Content="Rectangle"/>
+                            <ComboBoxItem Content="Ellipse"/>
+                            <ComboBoxItem Content="Line"/>
+                            <ComboBoxItem Content="Arrow"/>
                         </ComboBox>
                         <ComboBox x:Name="AnnotationPenColorCombo"
                                   Header="Pen color"
