@@ -460,16 +460,6 @@ struct WindowScreenRect {
     height: u32,
 }
 
-impl WindowScreenRect {
-    fn right(&self) -> i32 {
-        self.left + self.width as i32
-    }
-
-    fn bottom(&self) -> i32 {
-        self.top + self.height as i32
-    }
-}
-
 /// The window's physical window rect (including chrome), via GetWindowRect.
 fn get_window_screen_rect(
     hwnd: windows::Win32::Foundation::HWND,
@@ -570,7 +560,7 @@ fn crop_window_frame_to_client(
     }
 
     let copy_bytes = crop_w as usize * 4;
-    if frame.stride as usize < offset_x as usize * 4 + copy_bytes {
+    if (frame.stride as usize) < offset_x as usize * 4 + copy_bytes {
         return Err(CaptureResult::error(
             CaptureStatus::InvalidBuffer,
             format!(
