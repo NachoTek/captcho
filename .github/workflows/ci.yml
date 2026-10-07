@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/24-spectacle-parity]
   pull_request:
-    branches: [main]
+    branches: [main, feat/24-spectacle-parity]
   schedule:
     - cron: '0 6 * * *'  # 06:00 UTC daily
 
