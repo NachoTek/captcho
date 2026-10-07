@@ -1,0 +1,37 @@
+name: Review Gate
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches-ignore: ["main"]
+
+jobs:
+  request-review:
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Request reviewer on green CI
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prs = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              head: `${context.repo.owner}:${context.payload.workflow_run.head_branch}`
+            });
+            for (const pr of prs.data) {
+              const have = pr.requested_reviewers.map(r => r.login);
+              if (!have.includes('TerminalSausage')) {
+                await github.rest.pulls.requestReviewers({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: pr.number,
+                  reviewers: ['TerminalSausage']
+                });
+                core.info(`Review requested on #${pr.number}`);
+              }
+            }
