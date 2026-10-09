@@ -270,6 +270,27 @@ public sealed class SettingsSession
         return ClearTransientStatus();
     }
 
+    /// <summary>
+    /// Sets the working launch action (Do nothing, Last Capture Mode, or
+    /// Configured Capture Mode) and returns the refreshed view. Switching
+    /// away from Configured clears the configured Capture Mode selection.
+    /// </summary>
+    public SettingsView EditLaunchAction(LaunchAction value)
+    {
+        _behavior.EditLaunchAction(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>
+    /// Sets the working configured Capture Mode for the Configured Capture
+    /// Mode launch action and returns the refreshed view.
+    /// </summary>
+    public SettingsView EditLaunchConfiguredMode(CaptureMode mode)
+    {
+        _behavior.EditLaunchConfiguredMode(mode);
+        return ClearTransientStatus();
+    }
+
     // ── Session verbs ───────────────────────────────────────────────────
 
     /// <summary>
@@ -430,7 +451,9 @@ public sealed class SettingsSession
             Behavior: new BehaviorTabContent(
                 AutoSave: _behavior.AutoSave,
                 AutoCopyFrame: _behavior.AutoCopyFrame,
-                AutoCopyPath: _behavior.AutoCopyPath),
+                AutoCopyPath: _behavior.AutoCopyPath,
+                LaunchAction: _behavior.LaunchAction,
+                LaunchConfiguredMode: _behavior.LaunchConfiguredMode),
 
             Export: new ExportTabContent(
                 Format: _export.Format,

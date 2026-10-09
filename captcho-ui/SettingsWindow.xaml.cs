@@ -116,7 +116,7 @@ public sealed partial class SettingsWindow : Window
         {
             contentRoot.AddHandler(
                 UIElement.KeyDownEvent,
-                ContentRoot_PreviewKeyDown,
+                new Microsoft.UI.Xaml.Input.KeyEventHandler(ContentRoot_PreviewKeyDown),
                 true);
         }
 
@@ -433,6 +433,34 @@ public sealed partial class SettingsWindow : Window
         ApplyView(edit());
     }
 
+    /// <summary>
+    /// Routes a launch action selection change into the session and rebinds.
+    /// Suppressed while <see cref="ApplyView"/> is programmatically setting
+    /// combo state.
+    /// </summary>
+    private void LaunchActionCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_applyingView || LaunchActionCombo.SelectedIndex < 0)
+            return;
+
+        var action = (LaunchAction)LaunchActionCombo.SelectedIndex;
+        ApplyView(_session.EditLaunchAction(action));
+    }
+
+    /// <summary>
+    /// Routes a configured Capture Mode selection change into the session
+    /// and rebinds. Suppressed while <see cref="ApplyView"/> is
+    /// programmatically setting combo state.
+    /// </summary>
+    private void LaunchModeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_applyingView || LaunchModeCombo.SelectedIndex < 0)
+            return;
+
+        var mode = (CaptureMode)LaunchModeCombo.SelectedIndex;
+        ApplyView(_session.EditLaunchConfiguredMode(mode));
+    }
+
     // ── Command buttons ─────────────────────────────────────────────────
 
     /// <summary>
@@ -549,6 +577,14 @@ public sealed partial class SettingsWindow : Window
             AutoSaveToggle.IsOn = view.Behavior.AutoSave;
             AutoCopyFrameToggle.IsOn = view.Behavior.AutoCopyFrame;
             AutoCopyPathToggle.IsOn = view.Behavior.AutoCopyPath;
+            LaunchActionCombo.SelectedIndex = (int)view.Behavior.LaunchAction;
+            // The configured mode combo is enabled only for the Configured
+            // Capture Mode action; a null selection (no mode chosen yet)
+            // clears the combo so the inline error explains the gate.
+            LaunchModeCombo.IsEnabled = view.Behavior.LaunchAction == LaunchAction.ConfiguredCaptureMode;
+            LaunchModeCombo.SelectedIndex = view.Behavior.LaunchConfiguredMode is { } launchMode
+                ? (int)launchMode
+                : -1;
         }
         finally
         {
@@ -584,12 +620,32 @@ public sealed partial class SettingsWindow : Window
             ? Visibility.Collapsed
             : Visibility.Visible;
 
+        // Behavior-tab launch error (a configured launch must select a
+        // Capture Mode) is surfaced as inline status on this tab, mirroring
+        // the per-tab inline errors above.
+        string? launchError = ComposeLaunchBehaviorError(view);
+        LaunchBehaviorErrorText.Text = launchError ?? string.Empty;
+        LaunchBehaviorErrorText.Visibility = string.IsNullOrEmpty(launchError)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+
         string? exportQualityError = view.Export.JpegQualityError;
         ExportJpegQualityErrorText.Text = exportQualityError ?? string.Empty;
         ExportJpegQualityErrorText.Visibility = string.IsNullOrEmpty(exportQualityError)
             ? Visibility.Collapsed
             : Visibility.Visible;
     }
+
+    /// <summary>
+    /// The Behavior tab's inline status: the launch behavior validation
+    /// error when the working slice is invalid, or a hint when the
+    /// Configured Capture Mode action has no mode selected yet.
+    /// </summary>
+    private static string? ComposeLaunchBehaviorError(SettingsView view) =>
+        view.Behavior.LaunchAction == LaunchAction.ConfiguredCaptureMode
+        && view.Behavior.LaunchConfiguredMode is null
+            ? "Choose a Capture Mode to launch, or select a different launch action."
+            : null;
 
     private static AnnotationColor AnnotationColorForIndex(int index) => index switch
     {

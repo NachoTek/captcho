@@ -296,6 +296,38 @@ public sealed class ConfigurationRememberedSelectionPersistence : IRememberedSel
 }
 
 /// <summary>
+/// Atomically writes the recorded last Capture Mode to Configuration. Only
+/// the <see cref="AppSettings.LastCaptureMode"/> slice moves: the candidate is
+/// a normalized copy of the live runtime settings, so every other field —
+/// including the launch behavior itself — persists exactly as it stands. The
+/// runtime settings object advances only on a successful save.
+/// </summary>
+public sealed class ConfigurationLaunchBehaviorPersistence : ILaunchBehaviorPersistence
+{
+    private readonly AppSettings _settings;
+    private readonly ConfigurationService _configuration;
+
+    public ConfigurationLaunchBehaviorPersistence(
+        AppSettings settings,
+        ConfigurationService configuration)
+    {
+        _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+    }
+
+    public bool Save(CaptureMode? mode)
+    {
+        var candidate = _settings.Normalized();
+        candidate.LastCaptureMode = mode;
+        if (!_configuration.Save(candidate).Success)
+            return false;
+
+        _settings.LastCaptureMode = candidate.LastCaptureMode;
+        return true;
+    }
+}
+
+/// <summary>
 /// Production <see cref="IMonitorPickerOverlayAdapter"/>. Wraps the Win32
 /// layered <see cref="MonitorPickerOverlayWindow"/>: shows the scrimmed picker
 /// over the live desktop, highlights the hovered monitor and its label, and
