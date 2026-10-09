@@ -566,15 +566,44 @@ public static class AnnotationRenderer
 
         var anchor = stroke.Points[0];
         float emSize = TextEmSize(stroke.StrokeWidth);
+        // The anchor is the top-left of the text; content grows right and down
+        // from the point where the user clicked.
+        DrawGlyphs(
+            width,
+            height,
+            stride,
+            pixels,
+            stroke.Text,
+            emSize,
+            new PointF(anchor.X, anchor.Y),
+            _ => new PointF(anchor.X, anchor.Y),
+            stroke.Color);
+    }
+
+    /// <summary>
+    /// Shared GDI+ glyph path for text and marker numerals: rasterizes
+    /// <paramref name="content"/> onto a scratch ARGB surface and blends the
+    /// glyph alpha in <paramref name="color"/> into the Frame buffer, so
+    /// anti-aliased edges composite over whatever is already drawn.
+    /// </summary>
+    private static void DrawGlyphs(
+        int width,
+        int height,
+        int stride,
+        byte[] pixels,
+        string content,
+        float emSize,
+        PointF anchor,
+        Func<SizeF, PointF> locate,
+        AnnotationColor color)
+    {
         using var font = new Font(FontFamily.GenericSansSerif, emSize, FontStyle.Bold, GraphicsUnit.Pixel);
         using var scratch = new Bitmap(width, height, PixelFormat.Format32bppArgb);
         var bounds = new Rectangle(0, 0, width, height);
         using (var graphics = Graphics.FromImage(scratch))
         {
             graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            // The anchor is the top-left of the text; content grows right and down
-            // from the point where the user clicked.
-            graphics.DrawString(stroke.Text, font, Brushes.White, new PointF(anchor.X, anchor.Y));
+            graphics.DrawString(content, font, Brushes.White, locate(graphics.MeasureString(content, font)));
         }
 
         var data = scratch.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
@@ -595,10 +624,10 @@ public static class AnnotationRenderer
                         pixels,
                         pixelRow + x * 4,
                         new AnnotationColor(
-                            stroke.Color.Red,
-                            stroke.Color.Green,
-                            stroke.Color.Blue,
-                            (byte)Math.Clamp((int)Math.Round(stroke.Color.Alpha * alpha / 255.0), 0, 255)));
+                            color.Red,
+                            color.Green,
+                            color.Blue,
+                            (byte)Math.Clamp((int)Math.Round(color.Alpha * alpha / 255.0), 0, 255)));
                 }
             }
         }
@@ -646,9 +675,8 @@ public static class AnnotationRenderer
     }
 
     /// <summary>
-    /// Rasterizes the marker numeral with GDI+ onto a scratch ARGB surface and
-    /// blends the glyph alpha in white over the disc, so anti-aliased edges
-    /// composite readably regardless of the annotation color.
+    /// Blends the marker numeral in white at the disc center, so it reads
+    /// regardless of the annotation color.
     /// </summary>
     private static void DrawMarkerNumeral(
         int width,
@@ -659,62 +687,23 @@ public static class AnnotationRenderer
         double radius,
         AnnotationStroke stroke)
     {
-        float emSize = (float)(radius * 1.1);
-        using var font = new Font(FontFamily.GenericSansSerif, emSize, FontStyle.Bold, GraphicsUnit.Pixel);
         string numeral = stroke.MarkerNumber?.ToString() ?? string.Empty;
         if (numeral.Length == 0)
             return;
 
-        using var scratch = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-        var bounds = new Rectangle(0, 0, width, height);
-        using (var graphics = Graphics.FromImage(scratch))
-        {
-            graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            var numeralSize = graphics.MeasureString(numeral, font);
-            // The numeral is centered inside the disc.
-            graphics.DrawString(
-                numeral,
-                font,
-                Brushes.White,
-                new PointF(
-                    (float)(anchor.X - numeralSize.Width / 2),
-                    (float)(anchor.Y - numeralSize.Height / 2)));
-        }
-
-        var data = scratch.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-        try
-        {
-            var scan = new byte[Math.Abs(data.Stride) * height];
-            Marshal.Copy(data.Scan0, scan, 0, scan.Length);
-            for (int y = minY(anchor, radius); y <= maxY(anchor, radius, height); y++)
-            {
-                int scanRow = y * data.Stride;
-                int pixelRow = y * stride;
-                for (int x = minX(anchor, radius); x <= maxX(anchor, radius, width); x++)
-                {
-                    int alpha = scan[scanRow + x * 4 + 3];
-                    if (alpha == 0)
-                        continue;
-                    BlendPixel(
-                        pixels,
-                        pixelRow + x * 4,
-                        new AnnotationColor(255, 255, 255, (byte)Math.Clamp(alpha, 0, 255)));
-                }
-            }
-        }
-        finally
-        {
-            scratch.UnlockBits(data);
-        }
-
-        static int minX(AnnotationPoint anchor, double radius) =>
-            Math.Max(0, (int)Math.Floor(anchor.X - radius));
-        static int maxX(AnnotationPoint anchor, double radius, int width) =>
-            Math.Min(width - 1, (int)Math.Ceiling(anchor.X + radius));
-        static int minY(AnnotationPoint anchor, double radius) =>
-            Math.Max(0, (int)Math.Floor(anchor.Y - radius));
-        static int maxY(AnnotationPoint anchor, double radius, int height) =>
-            Math.Min(height - 1, (int)Math.Ceiling(anchor.Y + radius));
+        // The numeral is sized to the disc and centered inside it.
+        DrawGlyphs(
+            width,
+            height,
+            stride,
+            pixels,
+            numeral,
+            (float)(radius * 1.1),
+            new PointF(anchor.X, anchor.Y),
+            measured => new PointF(
+                anchor.X - measured.Width / 2,
+                anchor.Y - measured.Height / 2),
+            new AnnotationColor(255, 255, 255));
     }
 
     private static void FillBoundsIfFilled(
