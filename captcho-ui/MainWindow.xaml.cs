@@ -231,7 +231,9 @@ public sealed partial class MainWindow : Window
             () => _settings.EffectiveAutomaticExport,
             launchState,
             new WindowsDeliveryAdapter(
-                () => _hwnd != IntPtr.Zero ? _hwnd : WinRT.Interop.WindowNative.GetWindowHandle(this)));
+                () => _hwnd != IntPtr.Zero ? _hwnd : WinRT.Interop.WindowNative.GetWindowHandle(this)),
+            OnWorkflowExitRequested,
+            () => _settings.ExitAfterDelivery);
 
         // Initialize Global Hotkeys after the window has an HWND.
         // In WinUI 3, the HWND is available immediately after construction.
@@ -262,6 +264,45 @@ public sealed partial class MainWindow : Window
 
         // Ensure cleanup on window close
         this.Closed += OnWindowClosed;
+    }
+
+    // ── Exit after confirmed delivery (issue #54) ───────────────────────
+
+    /// <summary>
+    /// Guards the automatic-exit request so the window closes (and the app
+    /// exits through App's Closed handler) exactly once even if a second
+    /// request races the shutdown.
+    /// </summary>
+    private bool _exitRequested;
+
+    /// <summary>
+    /// Workflow exit request receiver (issue #54): the session raised it
+    /// after the Annotation overlay was dismissed and every configured
+    /// delivery action finished successfully. The WinUI layer stays a thin
+    /// adapter — it schedules the shutdown on the UI thread; the exit
+    /// decision itself is workflow-owned. Failures never crash: an exit
+    /// request that cannot be scheduled is ignored (the user can still close
+    /// manually).
+    /// </summary>
+    private void OnWorkflowExitRequested(WorkflowExitReason reason)
+    {
+        if (_exitRequested)
+            return;
+        _exitRequested = true;
+
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_isOperationRunning)
+            {
+                // The request observed finished delivery state, but a new
+                // operation is in flight on the UI thread — defer to the
+                // user rather than yanking the window mid-operation.
+                _exitRequested = false;
+                return;
+            }
+
+            Close();
+        });
     }
 
     // ── Global Hotkey initialization and cleanup ─────────────────────────────

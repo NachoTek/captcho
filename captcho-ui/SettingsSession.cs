@@ -271,6 +271,16 @@ public sealed class SettingsSession
     }
 
     /// <summary>
+    /// Sets the working exit-after-delivery toggle (issue #54) and returns
+    /// the refreshed view.
+    /// </summary>
+    public SettingsView EditExitAfterDelivery(bool value)
+    {
+        _behavior.EditExitAfterDelivery(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>
     /// Sets the working launch action (Do nothing, Last Capture Mode, or
     /// Configured Capture Mode) and returns the refreshed view. Switching
     /// away from Configured clears the configured Capture Mode selection.
@@ -452,6 +462,7 @@ public sealed class SettingsSession
                 AutoSave: _behavior.AutoSave,
                 AutoCopyFrame: _behavior.AutoCopyFrame,
                 AutoCopyPath: _behavior.AutoCopyPath,
+                ExitAfterDelivery: _behavior.ExitAfterDelivery,
                 LaunchAction: _behavior.LaunchAction,
                 LaunchConfiguredMode: _behavior.LaunchConfiguredMode),
 

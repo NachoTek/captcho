@@ -204,6 +204,18 @@ public sealed class AppSettings
     public LaunchBehaviorSettings LaunchBehavior { get; set; } = LaunchBehaviorSettings.WithDefaults();
 
     /// <summary>
+    /// Whether captcho exits automatically after a confirmed Capture's
+    /// delivery completes (issue #54). The exit fires only after the
+    /// Annotation overlay is dismissed and every configured delivery
+    /// action — manual or automatic — finished successfully; cancellation,
+    /// failure, and unfinished actions keep the application running.
+    /// Older Configuration files omit this property and therefore retain
+    /// the never-exit default.
+    /// </summary>
+    [JsonPropertyName("exitAfterDelivery")]
+    public bool ExitAfterDelivery { get; set; }
+
+    /// <summary>
     /// The last Capture Mode used, recorded at runtime so the
     /// <see cref="LaunchAction.LastCaptureMode"/> launch behavior can restore
     /// it on the next run. Recording is owned by the workflow session's
@@ -234,6 +246,7 @@ public sealed class AppSettings
         AutomaticExport = AutomaticExportSettings.WithDefaults(),
         OcrLanguageTag = null,
         LaunchBehavior = LaunchBehaviorSettings.WithDefaults(),
+        ExitAfterDelivery = false,
         LastCaptureMode = null,
     };
 
@@ -486,6 +499,7 @@ public sealed class AppSettings
         AutomaticExport = EffectiveAutomaticExport,
         OcrLanguageTag = string.IsNullOrWhiteSpace(OcrLanguageTag) ? null : OcrLanguageTag.Trim(),
         LaunchBehavior = EffectiveLaunchBehavior,
+        ExitAfterDelivery = ExitAfterDelivery,
         LastCaptureMode = EffectiveLastCaptureMode,
     };
 }
