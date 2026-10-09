@@ -743,6 +743,86 @@ public class AnnotationGateTests
         Assert.Equal(source.Pixels, result.Frame!.Pixels);
     }
 
+    // spec #43: annotation shadows. The marker's solid disc (radius >= 12) fully
+    // occludes a 1px-offset shadow, so pixel evidence lives in the stroke-spanning
+    // tools; marker shadow retention is covered by the document-layer tests.
+
+    [Theory]
+    [InlineData(AnnotationTool.Pen)]
+    [InlineData(AnnotationTool.Line)]
+    public async Task Workflow_ConfirmedShadowedFrameCarriesTheShadowPixels(AnnotationTool tool)
+    {
+        // 9x7 white Frame; a red stroke from (2,2) to (6,2) with a drop shadow
+        // paints (4,3) with the observable shadow blend.
+        var source = SolidWhiteFrame(9, 7);
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            script.SetShadow(AnnotationShadowStyle.Drop);
+            script.SetTool(tool);
+            script.BeginStroke(new AnnotationPoint(2, 2));
+            if (tool == AnnotationTool.Pen)
+                script.AppendStrokePoint(new AnnotationPoint(6, 2));
+            else
+                script.UpdateStrokePoint(new AnnotationPoint(6, 2));
+            script.CommitStroke();
+            Assert.Equal(AnnotationShadowStyle.Drop, Assert.Single(script.Document.Strokes).Shadow);
+        });
+        var session = Session(
+            SuccessfulCapture(source),
+            new FakePreviewAdapter(),
+            annotation,
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Pen, new AnnotationColor(255, 0, 0), 1));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        Assert.Equal(159, result.Frame!.Pixels[(3 * 9 + 4) * 4 + 1]);
+        Assert.Equal(255, result.Frame.Pixels[(2 * 9 + 4) * 4 + 2]);
+    }
+
+    [Fact]
+    public async Task Workflow_ShadowUndo_ComposesTheUnshadowedPixels()
+    {
+        var source = SolidWhiteFrame(9, 7);
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            script.SetShadow(AnnotationShadowStyle.Drop);
+            script.BeginStroke(new AnnotationPoint(2, 2));
+            script.AppendStrokePoint(new AnnotationPoint(6, 2));
+            script.CommitStroke();
+            script.Undo();
+            Assert.Empty(script.Document.Strokes);
+        });
+        var session = Session(
+            SuccessfulCapture(source),
+            new FakePreviewAdapter(),
+            annotation,
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Pen, new AnnotationColor(255, 0, 0), 1));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        Assert.Equal(source.Pixels, result.Frame!.Pixels);
+    }
+
+    private static ContiguousBitmap SolidWhiteFrame(int width, int height)
+    {
+        var pixels = new byte[width * height * 4];
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            pixels[i] = 255;
+            pixels[i + 1] = 255;
+            pixels[i + 2] = 255;
+            pixels[i + 3] = 255;
+        }
+
+        return BitmapBufferConverter.StripPadding(pixels, width, height, width * 4);
+    }
+
     private static ContiguousBitmap CheckerboardFrame(int width, int height)
     {
         var pixels = new byte[width * height * 4];
