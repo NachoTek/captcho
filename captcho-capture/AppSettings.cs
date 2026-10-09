@@ -181,6 +181,16 @@ public sealed class AppSettings
     [JsonPropertyName("ocrLanguageTag")]
     public string? OcrLanguageTag { get; set; }
 
+    /// <summary>
+    /// Persisted defaults for the configured automatic delivery actions that
+    /// run after Annotation confirmation (issue #47): automatic save, Copy
+    /// Frame, and Copy Path, each independently toggled. Older Configuration
+    /// files omit this object and retain the disabled (manual-only) defaults
+    /// through the property initializer and <see cref="EffectiveAutomaticExport"/>.
+    /// </summary>
+    [JsonPropertyName("automaticExport")]
+    public AutomaticExportSettings AutomaticExport { get; set; } = AutomaticExportSettings.WithDefaults();
+
     // Future properties can be added here. System.Text.Json will ignore
     // unknown properties on read and only serialize declared ones.
 
@@ -198,6 +208,7 @@ public sealed class AppSettings
         RememberSelection = RememberSelectionLifetime.Never,
         RememberedSelection = null,
         AnnotationEnabled = true,
+        AutomaticExport = AutomaticExportSettings.WithDefaults(),
         OcrLanguageTag = null,
     };
 
@@ -248,6 +259,16 @@ public sealed class AppSettings
     [JsonIgnore]
     public ExportSettings EffectiveExportSettings =>
         (ExportSettings ?? ExportSettings.WithDefaults()).Normalized();
+
+    /// <summary>
+    /// Resolves the automatic Export settings for runtime use, falling back to
+    /// the disabled defaults when the backing field is null (defensive — it is
+    /// initialized non-null, but a hand-edited settings file could leave it
+    /// null on read).
+    /// </summary>
+    [JsonIgnore]
+    public AutomaticExportSettings EffectiveAutomaticExport =>
+        AutomaticExport ?? AutomaticExportSettings.WithDefaults();
 
     /// <summary>Returns a valid remembered-Selection lifetime for runtime use.</summary>
     [JsonIgnore]
@@ -405,6 +426,7 @@ public sealed class AppSettings
             ? RememberedSelection?.Normalized()
             : null,
         AnnotationEnabled = AnnotationEnabled,
+        AutomaticExport = EffectiveAutomaticExport,
         OcrLanguageTag = string.IsNullOrWhiteSpace(OcrLanguageTag) ? null : OcrLanguageTag.Trim(),
     };
 }

@@ -207,7 +207,8 @@ public sealed partial class MainWindow : Window
             new WorkflowExportAdapter(_settings, new WindowsClipboardAdapter()),
             new FileSavePickerDialogAdapter(
                 () => _hwnd != IntPtr.Zero ? _hwnd : WinRT.Interop.WindowNative.GetWindowHandle(this),
-                () => _settings));
+                () => _settings),
+            () => _settings.EffectiveAutomaticExport);
 
         // Initialize Global Hotkeys after the window has an HWND.
         // In WinUI 3, the HWND is available immediately after construction.
@@ -769,7 +770,7 @@ public sealed partial class MainWindow : Window
                 {
                     PreviewImage.Source = result.PreviewImage;
                 }
-                StatusText.Text = $"{result.Mode} — {result.Dimensions}";
+                StatusText.Text = FormatDeliveredStatus(result);
                 _hasCapture = true;
                 RecognizeTextButton.IsEnabled = true;
                 CopyPathButton.IsEnabled = _workflowSession.HasSavedFile;
@@ -805,6 +806,30 @@ public sealed partial class MainWindow : Window
         }
 
         TimingText.Text = FormatWorkflowTiming(result);
+    }
+
+    /// <summary>
+    /// Formats the status for a succeeded workflow result, appending the
+    /// configured automatic delivery outcomes (issue #47). Successful
+    /// automatic actions append their per-action status; failed ones append
+    /// their retryable error so the user can retry manually — the composed
+    /// Frame and any valid saved-file identity are preserved by the session.
+    /// </summary>
+    private static string FormatDeliveredStatus(WorkflowResult<WriteableBitmap> result)
+    {
+        var status = $"{result.Mode} — {result.Dimensions}";
+        var report = result.AutomaticExport;
+        if (report is null)
+            return status;
+
+        var parts = new List<string>();
+        if (report.Save is not null)
+            parts.Add(ExportStatusFormatter.FormatStatus(report.Save));
+        if (report.CopyFrame is not null)
+            parts.Add(ExportStatusFormatter.FormatStatus(report.CopyFrame));
+        if (report.CopyPath is not null)
+            parts.Add(ExportStatusFormatter.FormatStatus(report.CopyPath));
+        return parts.Count > 0 ? $"{status} │ {string.Join(" │ ", parts)}" : status;
     }
 
     /// <summary>

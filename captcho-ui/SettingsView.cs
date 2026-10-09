@@ -60,6 +60,16 @@ public sealed record AnnotationTabContent(
     string? Error);
 
 /// <summary>
+/// Editable content for the Behavior tab, sourced from
+/// <see cref="BehaviorTabSettings"/>. Carries the three independent automatic
+/// delivery toggles that run after Annotation confirmation (issue #47).
+/// </summary>
+public sealed record BehaviorTabContent(
+    bool AutoSave,
+    bool AutoCopyFrame,
+    bool AutoCopyPath);
+
+/// <summary>
 /// Immutable snapshot of everything the Settings window code-behind binds. Produced
 /// by <see cref="SettingsSession"/> on open and after every edit or session verb.
 /// Failures surface as <see cref="StatusMessage"/> + <see cref="StatusIsError"/>
@@ -81,6 +91,9 @@ public sealed record SettingsView(
 
     // ── Annotation tab (editable) ──
     AnnotationTabContent Annotation,
+
+    // ── Behavior tab (editable) ──
+    BehaviorTabContent Behavior,
 
     // ── Export tab (editable) ──
     ExportTabContent Export,
