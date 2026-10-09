@@ -2,6 +2,7 @@
 // sequence behavior, unknown placeholder preservation, and negative cases.
 
 using System;
+using System.IO;
 using Xunit;
 
 namespace captcho.Capture.Tests;
@@ -233,6 +234,74 @@ public class FilenameTemplateTests
         var ts = DateTime.Now;
         string path = ExportFilenameTemplate.GetDefaultExportPath(ts);
         Assert.EndsWith(".png", path, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ── Format-derived extension (issue #45) ─────────────────────────────
+
+    [Fact]
+    public void GetExportPath_PngFormat_AppendsDotPng()
+    {
+        var settings = new AppSettings
+        {
+            ExportSettings = new ExportSettings(ExportImageFormat.Png, 90),
+        };
+
+        string path = ExportFilenameTemplate.GetExportPath(settings, new DateTime(2025, 6, 15));
+
+        Assert.EndsWith(".png", path, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GetExportPath_JpegFormat_AppendsDotJpg()
+    {
+        var settings = new AppSettings
+        {
+            ExportSettings = new ExportSettings(ExportImageFormat.Jpeg, 90),
+        };
+
+        string path = ExportFilenameTemplate.GetExportPath(settings, new DateTime(2025, 6, 15));
+
+        Assert.EndsWith(".jpg", path, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GetExportPath_TemplateWithoutExtensionPlaceholders_StaysFormatAgnostic()
+    {
+        // The Filename Template carries no format knowledge: the same
+        // template produces the same stem under either format; only the
+        // derived extension differs.
+        var ts = new DateTime(2025, 6, 15, 14, 30, 45);
+        var png = ExportFilenameTemplate.GetExportPath(new AppSettings
+        {
+            FilenameTemplate = "shot_<yyyy>",
+            ExportSettings = new ExportSettings(ExportImageFormat.Png, 90),
+        }, ts);
+        var jpg = ExportFilenameTemplate.GetExportPath(new AppSettings
+        {
+            FilenameTemplate = "shot_<yyyy>",
+            ExportSettings = new ExportSettings(ExportImageFormat.Jpeg, 90),
+        }, ts);
+
+        Assert.Equal(
+            Path.GetFileNameWithoutExtension(png),
+            Path.GetFileNameWithoutExtension(jpg));
+    }
+
+    [Fact]
+    public void GetExportPath_TemplateEndingInPng_SwitchesExtensionToJpgForJpegFormat()
+    {
+        // A legacy template that hardcodes ".png" must not produce a JPEG
+        // written into a .png-named file: the derived extension wins.
+        var settings = new AppSettings
+        {
+            FilenameTemplate = "shot_<yyyy>.png",
+            ExportSettings = new ExportSettings(ExportImageFormat.Jpeg, 90),
+        };
+
+        string path = ExportFilenameTemplate.GetExportPath(settings, new DateTime(2025, 6, 15));
+
+        Assert.EndsWith(".jpg", path, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(".png.jpg", path, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

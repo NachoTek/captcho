@@ -52,6 +52,24 @@ internal static class ExportTestHelpers
         Assert.NotNull(field);
         field.SetValue(service, bitmap);
     }
+
+    /// <summary>
+    /// Creates a synthetic fully transparent ContiguousBitmap (alpha 0) via
+    /// the internal constructor, for exercising format alpha handling.
+    /// </summary>
+    public static ContiguousBitmap CreateTransparentBitmap(int width, int height)
+    {
+        var pixels = new byte[width * height * 4];
+
+        var constructor = typeof(ContiguousBitmap).GetConstructor(
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            null,
+            new[] { typeof(int), typeof(int), typeof(int), typeof(byte[]) },
+            null);
+
+        Assert.NotNull(constructor);
+        return (ContiguousBitmap)constructor.Invoke(new object[] { width, height, width * 4, pixels });
+    }
 }
 
 /// <summary>

@@ -118,9 +118,12 @@ public static class ExportFilenameTemplate
     /// <summary>
     /// Generates the full export path using the provided settings for directory and template.
     /// Falls back to <see cref="ExportDefaults"/> when settings properties are null/empty.
+    /// The extension is derived from the configured export format (issue #45) —
+    /// never from the Filename Template, which stays format-agnostic; any
+    /// extension-like suffix the template carries is replaced.
     /// Creates the target directory if it doesn't exist.
     /// </summary>
-    /// <param name="settings">Application settings providing save location and filename template.</param>
+    /// <param name="settings">Application settings providing save location, filename template, and export format.</param>
     /// <param name="timestamp">Timestamp for date/time placeholders.</param>
     /// <param name="title">Optional capture title.</param>
     /// <param name="sequenceNumber">Optional sequence number.</param>
@@ -131,8 +134,9 @@ public static class ExportFilenameTemplate
         string template = settings.EffectiveFilenameTemplate;
         string filename = Expand(template, timestamp, title, sequenceNumber);
         string sanitized = SanitizeForFileName(filename);
-        if (!sanitized.EndsWith($".{ExportDefaults.DefaultExtension}", StringComparison.OrdinalIgnoreCase))
-            sanitized += $".{ExportDefaults.DefaultExtension}";
+        string extension = settings.EffectiveExportSettings.Format.Extension();
+        if (!sanitized.EndsWith($".{extension}", StringComparison.OrdinalIgnoreCase))
+            sanitized = Path.ChangeExtension(sanitized, extension) ?? sanitized + "." + extension;
 
         string directory = settings.EffectiveSaveLocation;
         Directory.CreateDirectory(directory);
