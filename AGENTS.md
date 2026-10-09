@@ -1,5 +1,7 @@
 ## Agent skills
 
+Skills are provided by the VM's canonical `NachoTek/skills` checkout through global OpenCode junctions. Do not vendor `.agents/skills` or maintain a project `skills-lock.json`; project copies override the canonical skill and drift silently.
+
 ### Issue tracker
 
 GitHub Issues via the `gh` CLI. See `docs/agents/issue-tracker.md`.
