@@ -165,6 +165,13 @@ public sealed class WorkflowResult<TImage>
     /// </summary>
     public AutomaticExportReport? AutomaticExport { get; init; }
 
+    /// <summary>
+    /// The Capture Mode this Trigger actually captured, set when the capture
+    /// succeeded (after any Target Selection mode switch). Drives the
+    /// last-Capture-Mode recording for the launch behavior (issue #53).
+    /// </summary>
+    public CaptureMode? TriggeredCaptureMode { get; init; }
+
     /// <summary>True only when the workflow reached the Succeeded status.</summary>
     public bool IsSuccess => Status == WorkflowStatus.Succeeded;
 }
@@ -655,6 +662,12 @@ public sealed class CaptureWorkflowSession<TImage>
     private readonly ISaveAsDialogAdapter _saveAsDialog;
     private readonly Func<AutomaticExportSettings> _automaticExport;
 
+    // Last-Capture-Mode recording for the launch behavior (issue #53). When
+    // wired, every successful Capture records the mode that actually ran
+    // (after any Target Selection mode switch); the state itself decides —
+    // per capture — whether the configured launch behavior needs the value.
+    private readonly ILaunchBehaviorRecorder? _launchRecorder;
+
     // Workflow-side Capture-options override holder. Composed committed defaults
     // with per-Capture-Mode session overrides to produce the effective options
     // each route forwards to the capture adapter (spec #34/#35). Held as a
@@ -887,7 +900,10 @@ public sealed class CaptureWorkflowSession<TImage>
     /// source all wired — the constructor production uses. The automatic
     /// Export settings are read through <paramref name="automaticExport"/>
     /// when each Capture completes, so committed Settings changes take effect
-    /// on the next Capture without reconstructing the session.
+    /// on the next Capture without reconstructing the session. The optional
+    /// <paramref name="launchRecorder"/> wires last-Capture-Mode recording
+    /// for the launch behavior (issue #53); when omitted, captures are not
+    /// recorded.
     /// </summary>
     public CaptureWorkflowSession(
         IWorkflowCaptureAdapter capture,
@@ -904,7 +920,8 @@ public sealed class CaptureWorkflowSession<TImage>
         Func<string?> ocrLanguageTag,
         IWorkflowExportAdapter export,
         ISaveAsDialogAdapter saveAsDialog,
-        Func<AutomaticExportSettings> automaticExport)
+        Func<AutomaticExportSettings> automaticExport,
+        ILaunchBehaviorRecorder? launchRecorder = null)
     {
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
         _preview = preview ?? throw new ArgumentNullException(nameof(preview));
@@ -921,6 +938,7 @@ public sealed class CaptureWorkflowSession<TImage>
         _export = export ?? throw new ArgumentNullException(nameof(export));
         _saveAsDialog = saveAsDialog ?? throw new ArgumentNullException(nameof(saveAsDialog));
         _automaticExport = automaticExport ?? throw new ArgumentNullException(nameof(automaticExport));
+        _launchRecorder = launchRecorder;
     }
 
     /// <summary>
@@ -1190,13 +1208,15 @@ public sealed class CaptureWorkflowSession<TImage>
             var composedFrame = annotationResult.Frame!;
             OwnFrame(composedFrame);
             var automaticReport = await RunAutomaticExportAsync();
+            RecordTriggeredMode(mode);
             return WorkflowResultFor(label, WorkflowStatus.Succeeded,
                 frame: composedFrame,
                 dimensions: $"{composedFrame.Width}×{composedFrame.Height}",
                 captureMs: captureResult.ElapsedMs,
                 displayMs: annotationResult.ElapsedMs,
                 totalMs: totalSw.Elapsed.TotalMilliseconds,
-                automaticExport: automaticReport);
+                automaticExport: automaticReport,
+                triggeredCaptureMode: mode);
         }
 
         OwnFrame(frame);
@@ -1213,6 +1233,7 @@ public sealed class CaptureWorkflowSession<TImage>
         }
 
         var previewAutomaticReport = await RunAutomaticExportAsync();
+        RecordTriggeredMode(mode);
         return WorkflowResultFor(label, WorkflowStatus.Succeeded,
             frame: frame,
             dimensions: captureResult.Dimensions,
@@ -1220,7 +1241,30 @@ public sealed class CaptureWorkflowSession<TImage>
             captureMs: captureResult.ElapsedMs,
             displayMs: previewResult.ElapsedMs,
             totalMs: totalSw.Elapsed.TotalMilliseconds,
-            automaticExport: previewAutomaticReport);
+            automaticExport: previewAutomaticReport,
+            triggeredCaptureMode: mode);
+    }
+
+    /// <summary>
+    /// Records the Capture Mode a successful Trigger actually ran (after any
+    /// Target Selection mode switch) as the last Capture Mode, when the
+    /// launch behavior recording is wired and needs it (issue #53). Failures
+    /// never propagate: a recording that cannot be written must not fail the
+    /// capture that produced it.
+    /// </summary>
+    private void RecordTriggeredMode(CaptureMode mode)
+    {
+        if (_launchRecorder is null)
+            return;
+
+        try
+        {
+            _launchRecorder.Record(mode);
+        }
+        catch
+        {
+            // Recording is best-effort state; never fail a successful capture.
+        }
     }
 
     // ── Configured automatic delivery (issue #47) ────────────────────
@@ -1674,7 +1718,8 @@ public sealed class CaptureWorkflowSession<TImage>
         double captureMs = 0,
         double displayMs = 0,
         double totalMs = 0,
-        AutomaticExportReport? automaticExport = null) =>
+        AutomaticExportReport? automaticExport = null,
+        CaptureMode? triggeredCaptureMode = null) =>
         new()
         {
             Status = status,
@@ -1687,5 +1732,6 @@ public sealed class CaptureWorkflowSession<TImage>
             DisplayMs = displayMs,
             TotalMs = totalMs,
             AutomaticExport = automaticExport,
+            TriggeredCaptureMode = triggeredCaptureMode,
         };
 }

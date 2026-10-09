@@ -248,6 +248,37 @@ Layout:
                                    TextWrapping="Wrap"
                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                    Text="Copy Path requires a saved file: enable Save automatically or save manually first."/>
+                        <TextBlock Text="Launch Behavior"
+                                   FontSize="16" FontWeight="SemiBold"
+                                   Margin="0,12,0,0"
+                                   AutomationProperties.HeadingLevel="Level1"/>
+                        <TextBlock TextWrapping="Wrap"
+                                   FontSize="13"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   Text="Choose what captcho does when it starts. Do nothing is the safe default; Last Capture Mode triggers the mode you used last (nothing happens the first time); Configured Capture Mode triggers the mode you pick below."/>
+                        <ComboBox x:Name="LaunchActionCombo"
+                                  Header="On launch"
+                                  MinWidth="280"
+                                  SelectionChanged="LaunchActionCombo_SelectionChanged">
+                            <ComboBoxItem Content="Do nothing"/>
+                            <ComboBoxItem Content="Last Capture Mode"/>
+                            <ComboBoxItem Content="Configured Capture Mode"/>
+                        </ComboBox>
+                        <ComboBox x:Name="LaunchModeCombo"
+                                  Header="Configured Capture Mode"
+                                  MinWidth="280"
+                                  SelectionChanged="LaunchModeCombo_SelectionChanged">
+                            <ComboBoxItem Content="Full Desktop"/>
+                            <ComboBoxItem Content="Active Window"/>
+                            <ComboBoxItem Content="Selected Window"/>
+                            <ComboBoxItem Content="Selected Monitor"/>
+                            <ComboBoxItem Content="Selection"/>
+                        </ComboBox>
+                        <TextBlock x:Name="LaunchBehaviorErrorText"
+                                   Foreground="{ThemeResource TextFillColorCriticalBrush}"
+                                   FontSize="12"
+                                   TextWrapping="Wrap"
+                                   Visibility="Collapsed"/>
                     </StackPanel>
                 </ScrollViewer>
             </TabViewItem>

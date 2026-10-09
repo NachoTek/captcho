@@ -70,6 +70,14 @@ public sealed partial class MainWindow : Window
     private SettingsWindowCoordinator? _settingsCoordinator;
 
     /// <summary>
+    /// Routes the configured launch behavior at startup: resolves the
+    /// chosen action through the settings and dispatches the resolved
+    /// Capture Mode to the same five production workflow routes the buttons
+    /// and Global Hotkeys use (issue #53). Never bespoke capture code.
+    /// </summary>
+    private readonly LaunchTriggerRouter _launchRouter;
+
+    /// <summary>
     /// Tracks whether a capture has succeeded and the cached bitmap is available for export.
     /// Export buttons are only enabled when this is true and no operation is running.
     /// </summary>
@@ -183,7 +191,15 @@ public sealed partial class MainWindow : Window
         // here. The SessionCaptureOptions is bound to the live runtime
         // AppSettings so committed-default changes (applied through Settings)
         // are observable, and so per-Capture-Mode session overrides flow into
-        // the effective options each route forwards (spec #34).
+        // the effective options each route forwards (spec #34). The
+        // LaunchBehaviorState records the last Capture Mode of every
+        // successful capture — persisting it only while the launch behavior
+        // needs it (issue #53).
+        var launchState = new LaunchBehaviorState(
+            _settings,
+            _configurationService is null
+                ? null
+                : new ConfigurationLaunchBehaviorPersistence(_settings, _configurationService));
         _workflowSession = new CaptureWorkflowSession<WriteableBitmap>(
             new WindowsCaptureAdapter(),
             new WriteableBitmapPreviewAdapter(),
@@ -208,11 +224,25 @@ public sealed partial class MainWindow : Window
             new FileSavePickerDialogAdapter(
                 () => _hwnd != IntPtr.Zero ? _hwnd : WinRT.Interop.WindowNative.GetWindowHandle(this),
                 () => _settings),
-            () => _settings.EffectiveAutomaticExport);
+            () => _settings.EffectiveAutomaticExport,
+            launchState);
 
         // Initialize Global Hotkeys after the window has an HWND.
         // In WinUI 3, the HWND is available immediately after construction.
         InitializeGlobalHotkeys();
+
+        // Apply the configured launch behavior (issue #53): dispatch the
+        // resolved Capture Mode through the same production workflow routes
+        // the buttons and Global Hotkeys use. Runs asynchronously after the
+        // window is shown (see OnActivated first-run) so the interactive
+        // overlays appear over a fully activated window.
+        _launchRouter = new LaunchTriggerRouter(new ProductionWorkflowRoutes(
+            RunFullDesktopWorkflowAsync,
+            RunActiveWindowWorkflowAsync,
+            RunSelectionWorkflowAsync,
+            RunSelectedMonitorWorkflowAsync,
+            RunSelectedWindowWorkflowAsync));
+        Activated += OnFirstActivatedApplyLaunchBehavior;
 
         // Initialize settings coordinator with production delegates
         if (_configurationService != null)
@@ -229,6 +259,47 @@ public sealed partial class MainWindow : Window
     }
 
     // ── Global Hotkey initialization and cleanup ─────────────────────────────
+
+    /// <summary>
+    /// Whether the configured launch behavior has been applied. The Trigger
+    /// runs once, on the first Activated event, so the interactive overlays
+    /// and the preview window appear over a fully activated window.
+    /// </summary>
+    private bool _hasAppliedLaunchBehavior;
+
+    /// <summary>
+    /// Applies the configured launch behavior on the first activation.
+    /// Failures never crash startup: an unroutable launch behavior leaves the
+    /// window idle with a status message, matching how hotkey registration
+    /// failures surface.
+    /// </summary>
+    private void OnFirstActivatedApplyLaunchBehavior(object sender, WindowActivatedEventArgs args)
+    {
+        if (_hasAppliedLaunchBehavior)
+            return;
+
+        _hasAppliedLaunchBehavior = true;
+        Activated -= OnFirstActivatedApplyLaunchBehavior;
+        _ = RunLaunchBehaviorAsync();
+    }
+
+    /// <summary>
+    /// Runs the configured launch behavior through the production workflow
+    /// routes. Startup stays idle (no dispatch, no status change) for Do
+    /// nothing, a missing last Capture Mode, or invalid persisted values —
+    /// the safe fallbacks resolved in AppSettings.ResolveStartupMode.
+    /// </summary>
+    private async Task RunLaunchBehaviorAsync()
+    {
+        try
+        {
+            await _launchRouter.RunStartupAsync(_settings);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Launch behavior failed: {SanitizeException(ex)}";
+        }
+    }
 
     /// <summary>
     /// Registers all four global hotkeys and installs a WndProc subclass for WM_HOTKEY.
