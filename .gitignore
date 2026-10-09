@@ -16,6 +16,15 @@ rust-dll/target/
 # ── Misc scripts (root level only) ──
 /*.ps1
 
+# ── One-off agent/session artifacts (root level only) ──
+/draft-*.json
+/test.json
+/extract-gsd.js
+/*-extract.json
+/s0*-plan*.json
+/s0*-research*.json
+/milestone-plan-extract.json
+
 # ── Skill working state (ephemeral; ticket briefs live on the issue tracker) ──
 .scratch/
 
