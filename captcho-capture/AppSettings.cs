@@ -22,6 +22,8 @@ public enum SettingsField
     FilenameTemplate,
     /// <summary>The <see cref="AppSettings.GlobalHotkeyEnabledStates"/> field.</summary>
     GlobalHotkeyEnabledStates,
+    /// <summary>The <see cref="AppSettings.GlobalHotkeyBindings"/> field.</summary>
+    GlobalHotkeyBindings,
     /// <summary>The <see cref="AppSettings.CaptureOptions"/> field.</summary>
     CaptureOptions,
     /// <summary>The <see cref="AppSettings.AnnotationSettings"/> field.</summary>
@@ -80,6 +82,33 @@ public sealed class AppSettings
     public Dictionary<GlobalHotkeyRoute, bool>? GlobalHotkeyEnabledStates { get; set; }
 
     /// <summary>
+    /// Per-Global-Hotkey key bindings, keyed by the capture route each Global
+    /// Hotkey triggers (<see cref="GlobalHotkeyRoute"/>). Null (or an absent
+    /// route) means the route's default combination from
+    /// <see cref="GlobalHotkeyBindingDefaults"/> — the legacy hardcoded binding,
+    /// which is how settings written before remapping migrated: nothing moves,
+    /// behavior is preserved. When non-null, a recorded combination overrides
+    /// the default for that route.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Keying by <see cref="GlobalHotkeyRoute"/> keeps this model free of UI and
+    /// Win32-id dependencies, mirroring <see cref="GlobalHotkeyEnabledStates"/>.
+    /// The UI layer resolves route bindings into Win32 specs at registration
+    /// time; this layer never needs the UI map to interpret persisted state.
+    /// </para>
+    /// <para>
+    /// The JSON property name is pinned to <c>hotkeyBindings</c>; on-disk keys
+    /// are the route names (e.g. <c>fullDesktop</c>) with nested
+    /// <c>modifiers</c>/<c>virtualKey</c> objects, matching the enabled-states
+    /// scheme so settings.json stays uniform.
+    /// </para>
+    /// </remarks>
+    [JsonPropertyName("hotkeyBindings")]
+    [JsonConverter(typeof(GlobalHotkeyBindingsConverter))]
+    public Dictionary<GlobalHotkeyRoute, HotkeyBinding>? GlobalHotkeyBindings { get; set; }
+
+    /// <summary>
     /// Persistent Capture-option defaults (mouse pointer, window decorations, window
     /// shadow) carried through the workflow into the managed/native Capture contract
     /// (spec user stories 27–30). The decoration/shadow dependency is enforced on
@@ -136,6 +165,22 @@ public sealed class AppSettings
     /// </summary>
     public bool AnnotationEnabled { get; set; } = true;
 
+    /// <summary>
+    /// BCP-47 tag of the language Windows OCR recognizes with (e.g.,
+    /// "en-US"), or null/empty to use the user's default OCR language. The
+    /// tag is a selection, not a guarantee: at recognition time it is matched
+    /// against the installed OCR language packs, and a tag whose pack was
+    /// removed resolves to a retryable unsupported-language outcome rather
+    /// than a silent fallback (spec #49).
+    /// </summary>
+    /// <remarks>
+    /// The JSON property name is pinned to <c>ocrLanguageTag</c>; older
+    /// settings files written before OCR shipped load with the null default
+    /// (engine default language), matching the pre-OCR behavior.
+    /// </remarks>
+    [JsonPropertyName("ocrLanguageTag")]
+    public string? OcrLanguageTag { get; set; }
+
     // Future properties can be added here. System.Text.Json will ignore
     // unknown properties on read and only serialize declared ones.
 
@@ -153,6 +198,7 @@ public sealed class AppSettings
         RememberSelection = RememberSelectionLifetime.Never,
         RememberedSelection = null,
         AnnotationEnabled = true,
+        OcrLanguageTag = null,
     };
 
     /// <summary>
@@ -222,6 +268,19 @@ public sealed class AppSettings
         || enabled;
 
     /// <summary>
+    /// Resolves the effective key combination for the Global Hotkey of the given
+    /// capture route. A null bindings map (settings written before remapping) or
+    /// a missing entry resolves to the route's legacy default combination from
+    /// <see cref="GlobalHotkeyBindingDefaults"/> — the pre-remap hardcoded
+    /// binding — so existing Configuration migrates without losing behavior.
+    /// </summary>
+    public HotkeyBinding EffectiveGlobalHotkeyBinding(GlobalHotkeyRoute route) =>
+        GlobalHotkeyBindings is not null
+        && GlobalHotkeyBindings.TryGetValue(route, out var binding)
+            ? binding
+            : GlobalHotkeyBindingDefaults.For(route);
+
+    /// <summary>
     /// Validates the settings, returning a list of field-attributed issues found.
     /// An empty list means the settings are valid. This is the single source of truth
     /// for persisted-setting validity: every editable tab and the composed settings
@@ -275,6 +334,26 @@ public sealed class AppSettings
             }
         }
 
+        // GlobalHotkeyBindings: remapped combinations. A binding with no virtual
+        // key cannot be registered or pressed — reject it at the persistence
+        // boundary so Apply/OK gate on a real combination. The typed API and the
+        // recorder cannot produce this through normal use (defensive rule).
+        if (GlobalHotkeyBindings is not null)
+        {
+            foreach (var (route, binding) in GlobalHotkeyBindings)
+            {
+                if (!Enum.IsDefined(typeof(GlobalHotkeyRoute), route)
+                    || binding.VirtualKey <= 0
+                    || binding.Modifiers < 0)
+                {
+                    issues.Add(new SettingsIssue(
+                        SettingsField.GlobalHotkeyBindings,
+                        "Global Hotkey bindings must use a known route and a real key combination."));
+                    break;
+                }
+            }
+        }
+
         if (AnnotationSettings is null
             || !Enum.IsDefined(AnnotationSettings.DefaultTool)
             || AnnotationSettings.StrokeWidth < AnnotationSettings.MinimumStrokeWidth
@@ -315,6 +394,9 @@ public sealed class AppSettings
         GlobalHotkeyEnabledStates = GlobalHotkeyEnabledStates is null
             ? null
             : new Dictionary<GlobalHotkeyRoute, bool>(GlobalHotkeyEnabledStates),
+        GlobalHotkeyBindings = GlobalHotkeyBindings is null
+            ? null
+            : new Dictionary<GlobalHotkeyRoute, HotkeyBinding>(GlobalHotkeyBindings),
         CaptureOptions = EffectiveCaptureOptions,
         AnnotationSettings = EffectiveAnnotationSettings,
         ExportSettings = EffectiveExportSettings,
@@ -323,5 +405,6 @@ public sealed class AppSettings
             ? RememberedSelection?.Normalized()
             : null,
         AnnotationEnabled = AnnotationEnabled,
+        OcrLanguageTag = string.IsNullOrWhiteSpace(OcrLanguageTag) ? null : OcrLanguageTag.Trim(),
     };
 }

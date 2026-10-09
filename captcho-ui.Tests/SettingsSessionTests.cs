@@ -868,9 +868,11 @@ public class SettingsSessionTests
     }
 
     /// <summary>
-    /// Fake Global Hotkey adapter that records ApplyEnabledStates calls and serves
-    /// configurable registration results, so display and reconcile behavior can be
-    /// verified without a Win32 Global Hotkey manager.
+    /// Fake Global Hotkey adapter that records ApplySettings calls and serves
+    /// configurable registration results, so display and reconcile behavior can
+    /// be verified without a Win32 Global Hotkey manager. Reconciles against the
+    /// settings' effective bindings (like the production manager) so remapped
+    /// combinations flow through Apply.
     /// </summary>
     private sealed class RecordingGlobalHotkeyAdapter : IGlobalHotkeyAdapter
     {
@@ -879,6 +881,7 @@ public class SettingsSessionTests
 
         public int ApplyCallsCount { get; private set; }
         public IReadOnlySet<int>? LastAppliedEnabledIds { get; private set; }
+        public AppSettings? LastAppliedSettings { get; private set; }
 
         public IReadOnlyList<GlobalHotkeyRegistrationResult> RegistrationResults => _results;
 
@@ -889,15 +892,17 @@ public class SettingsSessionTests
                 _applyFailingIds.Add(id);
         }
 
-        public IReadOnlyList<GlobalHotkeyRegistrationResult> ApplyEnabledStates(IReadOnlySet<int> enabledIds)
+        public IReadOnlyList<GlobalHotkeyRegistrationResult> ApplySettings(AppSettings settings)
         {
             ApplyCallsCount++;
-            LastAppliedEnabledIds = enabledIds;
+            LastAppliedSettings = settings;
+            LastAppliedEnabledIds = GlobalHotkeyRouteMap.EnabledGlobalHotkeyIds(settings);
             _results.Clear();
-            foreach (var id in enabledIds)
+            foreach (var spec in GlobalHotkeyRouteMap.SpecsFor(settings))
             {
-                var spec = GlobalHotkeyRouteMap.AllSpecs.Single(s => s.Id == id);
-                _results.Add(_applyFailingIds.Contains(id)
+                if (!settings.IsGlobalHotkeyEnabled(spec.Route))
+                    continue;
+                _results.Add(_applyFailingIds.Contains(spec.Id)
                     ? GlobalHotkeyRegistrationResult.Fail(spec, "RegisterHotKey", "Win32 error 1409")
                     : GlobalHotkeyRegistrationResult.Success(spec));
             }

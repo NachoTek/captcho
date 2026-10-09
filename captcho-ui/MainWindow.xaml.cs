@@ -15,6 +15,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Foundation;
 using captcho.Capture;
@@ -175,14 +176,14 @@ public sealed partial class MainWindow : Window
         // Construct the runtime workflow session with all production
         // adapters: native pixel acquisition, the Selection overlay, the
         // Selected Monitor picker overlay, the Selected Window picker overlay,
-        // the preview transition, and the Export actions (Save, Save As,
-        // Copy Frame, Copy Path). The session owns Capture Mode routing and
-        // the post-capture workflow — including the one default saved-file
-        // identity per Capture — from here. The SessionCaptureOptions is
-        // bound to the live runtime AppSettings so committed-default changes
-        // (applied through Settings) are observable, and so per-Capture-Mode
-        // session overrides flow into the effective options each route
-        // forwards (spec #34).
+        // the preview transition, the Export actions (Save, Save As,
+        // Copy Frame, Copy Path), and Windows OCR for Recognize Text. The
+        // session owns Capture Mode routing and the post-capture workflow —
+        // including the one default saved-file identity per Capture — from
+        // here. The SessionCaptureOptions is bound to the live runtime
+        // AppSettings so committed-default changes (applied through Settings)
+        // are observable, and so per-Capture-Mode session overrides flow into
+        // the effective options each route forwards (spec #34).
         _workflowSession = new CaptureWorkflowSession<WriteableBitmap>(
             new WindowsCaptureAdapter(),
             new WriteableBitmapPreviewAdapter(),
@@ -201,6 +202,8 @@ public sealed partial class MainWindow : Window
             new AnnotationOverlayAdapter(),
             () => _settings.AnnotationEnabled,
             () => _settings.EffectiveAnnotationSettings.ToToolState(),
+            new WindowsOcrEngine(),
+            () => _settings.OcrLanguageTag,
             new WorkflowExportAdapter(_settings, new WindowsClipboardAdapter()),
             new FileSavePickerDialogAdapter(
                 () => _hwnd != IntPtr.Zero ? _hwnd : WinRT.Interop.WindowNative.GetWindowHandle(this),
@@ -248,10 +251,11 @@ public sealed partial class MainWindow : Window
             }
 
             _globalHotkeyManager = new GlobalHotkeyManager(new WindowsGlobalHotkeyRegistrar());
-            // Register only the Global Hotkeys the user has enabled, so disabled
-            // Global Hotkeys are not active on launch. Global Hotkeys disabled in settings are
-            // skipped; the rest register just like RegisterAll would.
-            var results = _globalHotkeyManager.Reconcile(_hwnd, GlobalHotkeyRouteMap.EnabledGlobalHotkeyIds(_settings));
+            // Register only the Global Hotkeys the user has enabled, each with its
+            // effective binding from Configuration (recorded combination or legacy
+            // default), so disabled Global Hotkeys are not active on launch and a
+            // remapped combination registers without waiting for Settings.
+            var results = _globalHotkeyManager.Reconcile(_hwnd, _settings);
 
             // Install WndProc subclass to intercept WM_HOTKEY messages.
             // Keep the delegate alive to prevent GC collection while subclassed.
@@ -767,6 +771,7 @@ public sealed partial class MainWindow : Window
                 }
                 StatusText.Text = $"{result.Mode} — {result.Dimensions}";
                 _hasCapture = true;
+                RecognizeTextButton.IsEnabled = true;
                 CopyPathButton.IsEnabled = _workflowSession.HasSavedFile;
                 break;
 
@@ -961,6 +966,7 @@ public sealed partial class MainWindow : Window
         RegionCaptureButton.IsEnabled = enabled;
         SelectedMonitorButton.IsEnabled = enabled;
         SelectedWindowButton.IsEnabled = enabled;
+        RecognizeTextButton.IsEnabled = enabled && _hasCapture;
     }
 
     /// <summary>
@@ -990,6 +996,7 @@ public sealed partial class MainWindow : Window
             PreviewImage.Source = result.ImageSource;
             StatusText.Text = $"{result.Mode} — {result.Dimensions}";
             _hasCapture = true;
+            RecognizeTextButton.IsEnabled = true;
 
             var frame = _captureService.LastCapturedBitmap;
             if (frame is not null)
@@ -1080,6 +1087,124 @@ public sealed partial class MainWindow : Window
     private void About_Click(object sender, RoutedEventArgs e)
     {
         StatusText.Text = "captcho — Screen Capture Tool v1.0";
+    }
+
+    // ── Recognize Text (OCR) ─────────────────────────────────────────
+
+    /// <summary>
+    /// Handles "Recognize Text" click — routes the Recognize Text Trigger
+    /// through the production workflow session. The session resolves the
+    /// persisted language selection against the installed OCR language packs
+    /// and recognizes text on the in-memory Frame it already owns; no file is
+    /// written and every retryable outcome preserves the Frame. The WinUI
+    /// layer stays a thin event/presentation adapter: it disables controls
+    /// during recognition, then presents the distinct outcomes (recognized
+    /// text in a selectable dialog, no-text as status, retryable errors as
+    /// status).
+    /// </summary>
+    private async void RecognizeText_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isOperationRunning)
+        {
+            StatusText.Text = "A capture is already in progress.";
+            return;
+        }
+
+        if (!_hasCapture)
+        {
+            StatusText.Text = OcrStatusFormatter.FormatNoFrame();
+            return;
+        }
+
+        EnterExportState();
+        StatusText.Text = "Recognizing text…";
+
+        try
+        {
+            var result = await _workflowSession.RecognizeTextAsync();
+            ApplyOcrResult(result);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Text recognition failed: {SanitizeException(ex)}";
+        }
+        finally
+        {
+            ExitExportState();
+        }
+    }
+
+    /// <summary>
+    /// Presents a distinct OCR outcome: Recognized-text opens a selectable
+    /// text dialog (and stages the text on the clipboard-adjacent preview
+    /// path), no-text is a user-visible status, and every retryable condition
+    /// surfaces its error without clearing the captured Frame.
+    /// </summary>
+    private void ApplyOcrResult(OcrResult result)
+    {
+        switch (result.Outcome)
+        {
+            case OcrOutcome.RecognizedText:
+                StatusText.Text = OcrStatusFormatter.FormatRecognized(result);
+                ShowRecognizedTextDialog(result.Text, result.LanguageTag);
+                break;
+
+            case OcrOutcome.NoText:
+                StatusText.Text = OcrStatusFormatter.FormatNoText(result);
+                break;
+
+            case OcrOutcome.NoFrame:
+                // The session owns no Frame (e.g., the only capture so far
+                // ran through a legacy route). Status-only: the legacy
+                // capture cache and its export buttons stay untouched.
+                StatusText.Text = result.Error ?? OcrStatusFormatter.FormatNoFrame();
+                break;
+
+            case OcrOutcome.UnsupportedLanguage:
+            case OcrOutcome.Failed:
+            case OcrOutcome.OperationInProgress:
+            default:
+                StatusText.Text = result.Error ?? "Text recognition failed. Try again.";
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Shows the recognized text in a small selectable dialog so the user can
+    /// read and copy it. Presentation-only — the workflow owns the outcome.
+    /// </summary>
+    private void ShowRecognizedTextDialog(string text, string languageTag)
+    {
+        try
+        {
+            var dialog = new ContentDialog
+            {
+                Title = string.IsNullOrEmpty(languageTag)
+                    ? "Recognized Text"
+                    : $"Recognized Text ({languageTag})",
+                Content = new ScrollViewer
+                {
+                    Content = new TextBlock
+                    {
+                        Text = text,
+                        IsTextSelectionEnabled = true,
+                        TextWrapping = TextWrapping.Wrap,
+                        MaxWidth = 560,
+                        MaxHeight = 360,
+                    },
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                },
+                CloseButtonText = "Close",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = Content.XamlRoot,
+            };
+            _ = dialog.ShowAsync();
+        }
+        catch
+        {
+            // Dialog presentation failure is non-fatal; the status bar still
+            // carries the recognition summary.
+        }
     }
 
     // ── Settings window coordinator delegates ─────────────────────────

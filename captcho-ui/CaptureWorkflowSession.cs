@@ -640,6 +640,8 @@ public sealed class CaptureWorkflowSession<TImage>
     private readonly IAnnotationOverlayAdapter _annotationOverlay;
     private readonly Func<bool> _annotationEnabled;
     private readonly Func<AnnotationToolState> _annotationToolState;
+    private readonly IOcrEngine _ocrEngine;
+    private readonly Func<string?> _ocrLanguageTag;
     private readonly IWorkflowExportAdapter _export;
     private readonly ISaveAsDialogAdapter _saveAsDialog;
 
@@ -786,7 +788,12 @@ public sealed class CaptureWorkflowSession<TImage>
     {
     }
 
-    /// <summary>Creates a workflow with Annotation and committed toolbar defaults.</summary>
+    /// <summary>
+    /// Creates a workflow with Annotation and committed toolbar defaults.
+    /// OCR defaults to the engine-less null engine and the Export actions
+    /// default to unconfigured adapters; production wires both through the
+    /// thirteen-argument constructor.
+    /// </summary>
     public CaptureWorkflowSession(
         IWorkflowCaptureAdapter capture,
         IPreviewAdapter<TImage> preview,
@@ -800,7 +807,35 @@ public sealed class CaptureWorkflowSession<TImage>
         Func<AnnotationToolState> annotationToolState)
         : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
                captureOptions, rememberedSelection, annotationOverlay, annotationEnabled,
-               annotationToolState,
+               annotationToolState, NullOcrEngine.Instance, static () => null,
+               UnconfiguredWorkflowExportAdapter.Instance,
+               UnavailableSaveAsDialogAdapter.Instance)
+    {
+    }
+
+    /// <summary>
+    /// Creates a workflow with the OCR engine and the persisted OCR language
+    /// selection the Recognize Text Trigger resolves against the installed
+    /// language packs. The delegates are read per-recognition so committed
+    /// Settings changes apply without rebuilding the session. Export actions
+    /// default to unconfigured adapters.
+    /// </summary>
+    public CaptureWorkflowSession(
+        IWorkflowCaptureAdapter capture,
+        IPreviewAdapter<TImage> preview,
+        ISelectionOverlayAdapter selectionOverlay,
+        IMonitorPickerOverlayAdapter monitorPickerOverlay,
+        IWindowPickerOverlayAdapter windowPickerOverlay,
+        SessionCaptureOptions captureOptions,
+        RememberedSelectionState rememberedSelection,
+        IAnnotationOverlayAdapter annotationOverlay,
+        Func<bool> annotationEnabled,
+        Func<AnnotationToolState> annotationToolState,
+        IOcrEngine ocrEngine,
+        Func<string?> ocrLanguageTag)
+        : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
+               captureOptions, rememberedSelection, annotationOverlay, annotationEnabled,
+               annotationToolState, ocrEngine, ocrLanguageTag,
                UnconfiguredWorkflowExportAdapter.Instance,
                UnavailableSaveAsDialogAdapter.Instance)
     {
@@ -811,7 +846,7 @@ public sealed class CaptureWorkflowSession<TImage>
     /// session owns the default saved-file identity, Copy Path availability,
     /// and the operation guard across Save, Save As, Copy Frame, and Copy
     /// Path; the adapters supply only PNG writing, clipboard placement, and
-    /// the Save As dialog.
+    /// the Save As dialog. OCR defaults to the engine-less null engine.
     /// </summary>
     public CaptureWorkflowSession(
         IWorkflowCaptureAdapter capture,
@@ -826,6 +861,33 @@ public sealed class CaptureWorkflowSession<TImage>
         Func<AnnotationToolState> annotationToolState,
         IWorkflowExportAdapter export,
         ISaveAsDialogAdapter saveAsDialog)
+        : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
+               captureOptions, rememberedSelection, annotationOverlay, annotationEnabled,
+               annotationToolState, NullOcrEngine.Instance, static () => null,
+               export, saveAsDialog)
+    {
+    }
+
+    /// <summary>
+    /// Creates a workflow with the OCR engine, the persisted OCR language
+    /// selection, and the Export actions all wired — the constructor
+    /// production uses.
+    /// </summary>
+    public CaptureWorkflowSession(
+        IWorkflowCaptureAdapter capture,
+        IPreviewAdapter<TImage> preview,
+        ISelectionOverlayAdapter selectionOverlay,
+        IMonitorPickerOverlayAdapter monitorPickerOverlay,
+        IWindowPickerOverlayAdapter windowPickerOverlay,
+        SessionCaptureOptions captureOptions,
+        RememberedSelectionState rememberedSelection,
+        IAnnotationOverlayAdapter annotationOverlay,
+        Func<bool> annotationEnabled,
+        Func<AnnotationToolState> annotationToolState,
+        IOcrEngine ocrEngine,
+        Func<string?> ocrLanguageTag,
+        IWorkflowExportAdapter export,
+        ISaveAsDialogAdapter saveAsDialog)
     {
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
         _preview = preview ?? throw new ArgumentNullException(nameof(preview));
@@ -837,6 +899,8 @@ public sealed class CaptureWorkflowSession<TImage>
         _annotationOverlay = annotationOverlay ?? throw new ArgumentNullException(nameof(annotationOverlay));
         _annotationEnabled = annotationEnabled ?? throw new ArgumentNullException(nameof(annotationEnabled));
         _annotationToolState = annotationToolState ?? throw new ArgumentNullException(nameof(annotationToolState));
+        _ocrEngine = ocrEngine ?? throw new ArgumentNullException(nameof(ocrEngine));
+        _ocrLanguageTag = ocrLanguageTag ?? throw new ArgumentNullException(nameof(ocrLanguageTag));
         _export = export ?? throw new ArgumentNullException(nameof(export));
         _saveAsDialog = saveAsDialog ?? throw new ArgumentNullException(nameof(saveAsDialog));
     }
@@ -898,17 +962,63 @@ public sealed class CaptureWorkflowSession<TImage>
     /// <summary>
     /// Routes a Selected Window Trigger through the production workflow. The
     /// interactive window picker overlay is shown first; on confirmation the
-    /// workflow owns Capture of the returned target, the resulting Frame, and
-    /// the preview transition. The picker's three outcomes map as follows:
+    /// workflow owns Capture of the returned target, the resulting Frame,
+    /// and the preview transition. The picker's three outcomes map as follows:
     /// cancellation (Escape or overlay dismissal) ends the workflow with
     /// <see cref="WorkflowStatus.Cancelled"/>; a confirmed window is captured by
     /// handle; an empty-desktop click is routed to a Full Desktop capture
     /// (including the taskbar). Mixed-DPI, cross-monitor, and negative-
-    /// coordinate window bounds are preserved. Never throws for expected
-    /// failures.
+    /// coordinate window bounds are preserved. Never throws for expected failures.
     /// </summary>
     public Task<WorkflowResult<TImage>> CaptureSelectedWindowAsync() =>
         CaptureModeAsync(CaptureMode.SelectedWindow);
+
+    /// <summary>
+    /// Routes a Recognize Text Trigger through the production workflow. OCR
+    /// is a post-capture workflow feature (not an Export): it operates on the
+    /// in-memory Frame the session already owns — no file is written — and
+    /// surfaces distinct Recognized-text, no-text, no-Frame,
+    /// unsupported-language, engine-failure, and operation-in-progress
+    /// outcomes through <see cref="OcrResult"/> (spec #49). The persisted
+    /// language selection is resolved against the installed OCR language
+    /// packs before the engine runs, so a removed pack produces a retryable
+    /// unsupported-language error instead of a silent fallback. Every
+    /// retryable outcome preserves the Frame: a retry re-recognizes the same
+    /// pixels without another Capture. Runs under the same operation guard as
+    /// Capture so a Trigger that arrives mid-recognition is rejected rather
+    /// than queued. Never throws for expected failures.
+    /// </summary>
+    public async Task<OcrResult> RecognizeTextAsync()
+    {
+        if (!TryBeginOperation())
+            return OcrResult.Busy();
+
+        try
+        {
+            var frame = _lastFrame;
+            if (frame is null)
+                return OcrResult.NoFrame();
+
+            var installed = _ocrEngine.GetAvailableLanguages();
+            var selectedTag = _ocrLanguageTag();
+            var effectiveTag = OcrLanguageResolver.EffectiveTag(selectedTag, installed);
+            if (!string.IsNullOrWhiteSpace(selectedTag) && effectiveTag is null)
+                return OcrResult.Unsupported(selectedTag);
+
+            return await _ocrEngine.RecognizeAsync(frame, effectiveTag);
+        }
+        catch (Exception ex)
+        {
+            // The engine contract says never-throw, but a defensive catch
+            // keeps an unexpected adapter failure retryable instead of
+            // crashing the workflow caller.
+            return OcrResult.Fail($"Text recognition failed: {ex.Message}");
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
 
     /// <summary>
     /// Shared Capture Mode routing for an immediate-capture Trigger (no Target
@@ -1398,6 +1508,22 @@ public sealed class CaptureWorkflowSession<TImage>
 
         public Task<AnnotationPresentResult> ShowAsync(ContiguousBitmap sourceFrame) =>
             Task.FromResult(AnnotationPresentResult.Fail("Annotation is disabled."));
+    }
+
+    /// <summary>
+    /// Stand-in engine for sessions constructed without OCR wiring. Recognize
+    /// Text is a post-capture workflow feature delivered by the OCR adapter —
+    /// without one there is nothing to recognize with, which is a retryable
+    /// configuration gap, not a crash.
+    /// </summary>
+    private sealed class NullOcrEngine : IOcrEngine
+    {
+        public static NullOcrEngine Instance { get; } = new();
+
+        public IReadOnlyList<OcrLanguage> GetAvailableLanguages() => Array.Empty<OcrLanguage>();
+
+        public Task<OcrResult> RecognizeAsync(ContiguousBitmap frame, string? languageTag) =>
+            Task.FromResult(OcrResult.Fail("Text recognition is not available."));
     }
 
     private static WorkflowResult<TImage> WorkflowResultFor(
