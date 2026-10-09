@@ -155,8 +155,8 @@ public class AutomaticDeliverySettingsSessionIntegrationTests
         public System.Collections.Generic.IReadOnlyList<GlobalHotkeyRegistrationResult> RegistrationResults =>
             Array.Empty<GlobalHotkeyRegistrationResult>();
 
-        public System.Collections.Generic.IReadOnlyList<GlobalHotkeyRegistrationResult> ApplyEnabledStates(
-            System.Collections.Generic.IReadOnlySet<int> enabledIds) =>
+        public System.Collections.Generic.IReadOnlyList<GlobalHotkeyRegistrationResult> ApplySettings(
+            captcho.Capture.AppSettings settings) =>
             Array.Empty<GlobalHotkeyRegistrationResult>();
     }
 }

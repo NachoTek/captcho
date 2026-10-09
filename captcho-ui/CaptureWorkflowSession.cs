@@ -1,4 +1,4 @@
-// CaptureWorkflowSession.cs Ã¢â‚¬â€ WinUI-free runtime workflow session.
+// CaptureWorkflowSession.cs — WinUI-free runtime workflow session.
 //
 // The agreed high-level behavioral seam for capture and post-capture behavior.
 // Owns Capture Mode routing for the Full Desktop, Active Window, Selection,
@@ -6,23 +6,23 @@
 // guard); the captured Frame; and the preview transition. For the interactive
 // modes, the overlay is supplied as a narrow adapter that returns confirmed
 // target geometry/outcome or cancellation, after which the workflow owns
-// Capture, the Frame, and the preview transition Ã¢â‚¬â€ the overlay itself never
+// Capture, the Frame, and the preview transition — the overlay itself never
 // performs Capture or owns post-capture state. Exposes operation-in-progress,
 // cancellation, and failure outcomes consistently so the WinUI layer can
-// present a retryable, user-visible state. Platform-specific work Ã¢â‚¬â€ native
+// present a retryable, user-visible state. Platform-specific work — native
 // pixel acquisition, the interactive overlays, and presenting the Frame to a
-// XAML Image Ã¢â‚¬â€ is supplied through narrow adapters, mirroring the
+// XAML Image — is supplied through narrow adapters, mirroring the
 // CliCaptureService shape at the GUI's higher Capture-through-completion
 // boundary.
 //
 // The session is generic over the preview's display token (TImage) so it stays
 // free of WinUI types while production still gets a strongly-typed
-// WriteableBitmap back. Adapters must not throw for expected failures Ã¢â‚¬â€ they
+// WriteableBitmap back. Adapters must not throw for expected failures — they
 // surface them through PreviewPresentResult.Fail so the Frame stays retryable.
 //
 // Threading contract: capture runs on the thread pool (the adapter is allowed
 // to block on native pixel acquisition); the preview adapter is invoked on the
-// caller's thread, which in production is the UI thread Ã¢â‚¬â€ required for
+// caller's thread, which in production is the UI thread — required for
 // WriteableBitmap construction. The session itself does not marshal calls.
 
 using System;
@@ -86,7 +86,7 @@ public enum WorkflowStatus
 /// negative Virtual Desktop origins (e.g., a monitor to the left of and
 /// above the primary) survive intact; Width/Height are unsigned because
 /// the Capture engine requires positive dimensions. This is the contract
-/// type that crosses the WinUI-free workflow seam Ã¢â‚¬â€ it deliberately
+/// type that crosses the WinUI-free workflow seam — it deliberately
 /// mirrors the native parameter shape of
 /// <c>SafeCaptureResult.CaptureRegion</c> without dragging in
 /// <c>Windows.Foundation.Rect</c> or any UI type.
@@ -123,7 +123,7 @@ public sealed class WorkflowResult<TImage>
     public string Mode { get; init; } = "";
 
     /// <summary>
-    /// Frame dimensions string (e.g., "1920Ãƒâ€”1080") from the Capture adapter.
+    /// Frame dimensions string (e.g., "1920×1080") from the Capture adapter.
     /// Empty until a Capture succeeds.
     /// </summary>
     public string Dimensions { get; init; } = "";
@@ -160,7 +160,7 @@ public sealed class WorkflowResult<TImage>
     /// Report of the configured automatic delivery actions that ran after
     /// Annotation confirmation (issue #47). Null when no automatic action was
     /// enabled, when Annotation (or Target Selection) was cancelled, or when
-    /// the workflow failed before the delivery point Ã¢â‚¬â€ cancellation and
+    /// the workflow failed before the delivery point — cancellation and
     /// failure create no delivery side effects.
     /// </summary>
     public AutomaticExportReport? AutomaticExport { get; init; }
@@ -170,7 +170,7 @@ public sealed class WorkflowResult<TImage>
 }
 
 /// <summary>
-/// Result of a Capture adapter call. Carries the Frame in domain terms Ã¢â‚¬â€ the
+/// Result of a Capture adapter call. Carries the Frame in domain terms — the
 /// session owns the resulting Frame on success.
 /// </summary>
 public sealed class CaptureFrameResult
@@ -259,7 +259,7 @@ public interface IWorkflowCaptureAdapter
     /// CaptureOptions for the Full Desktop mode are composed by the workflow
     /// session from committed defaults and session overrides, then forwarded;
     /// only the mouse-pointer flag is applicable to a Full Desktop Frame (spec
-    /// #34). Implementations must not throw for expected failures Ã¢â‚¬â€ surface
+    /// #34). Implementations must not throw for expected failures — surface
     /// them through CaptureFrameResult.Fail instead.
     /// </summary>
     CaptureFrameResult CaptureFullDesktop(CaptureOptions options);
@@ -270,7 +270,7 @@ public interface IWorkflowCaptureAdapter
     /// the workflow session from committed defaults and session overrides, then
     /// forwarded; pointer, decorations, and shadow are each applicable to a
     /// window Capture (spec #34). Implementations must not throw for expected
-    /// failures Ã¢â‚¬â€ surface them through CaptureFrameResult.Fail instead
+    /// failures — surface them through CaptureFrameResult.Fail instead
     /// (including the "no eligible active window" case, so the workflow can
     /// report it as CaptureFailed without retaining stale Frame or operation
     /// state).
@@ -283,7 +283,7 @@ public interface IWorkflowCaptureAdapter
     /// its signed X/Y preserves negative Virtual Desktop origins so
     /// cross-monitor and mixed-coordinate layouts stay aligned. Width/Height
     /// are always positive. Implementations must not throw for expected
-    /// failures Ã¢â‚¬â€ surface them through CaptureFrameResult.Fail instead.
+    /// failures — surface them through CaptureFrameResult.Fail instead.
     /// </summary>
     CaptureFrameResult CaptureSelection(SelectionGeometry geometry);
 
@@ -292,7 +292,7 @@ public interface IWorkflowCaptureAdapter
     /// monitor's Virtual Desktop bounds (signed X/Y so negative-coordinate and
     /// mixed-DPI layouts stay aligned) and a display label; capture is performed
     /// over those bounds, which uniquely identify one monitor's pixel region.
-    /// Implementations must not throw for expected failures Ã¢â‚¬â€ surface them
+    /// Implementations must not throw for expected failures — surface them
     /// through CaptureFrameResult.Fail instead.
     /// </summary>
     CaptureFrameResult CaptureMonitor(MonitorTarget target);
@@ -307,7 +307,7 @@ public interface IWorkflowCaptureAdapter
     /// options from committed defaults and session overrides and forwards them
     /// here. Capture is performed by handle so the frozen Frame matches the
     /// window the user clicked even if later window movement would have moved
-    /// its bounds. Implementations must not throw for expected failures Ã¢â‚¬â€
+    /// its bounds. Implementations must not throw for expected failures —
     /// surface them through CaptureFrameResult.Fail instead (including the
     /// "window vanished before capture" case, so the workflow can report it as
     /// CaptureFailed without retaining stale state).
@@ -342,7 +342,7 @@ public sealed class TargetSelectionResult<TTarget>
 /// Narrow adapter over the interactive Selection overlay. Production shows a
 /// transparent Win32 layered window over the live desktop; tests supply fakes
 /// that return canned geometry or cancellation. The overlay adapter's only
-/// job is to return confirmed geometry (or cancellation) Ã¢â‚¬â€ it must NOT
+/// job is to return confirmed geometry (or cancellation) — it must NOT
 /// perform Capture or own any post-capture state, because the runtime
 /// workflow owns Capture, the Frame, and the preview transition. Invoked on
 /// the workflow caller's thread (the UI thread in production), since the
@@ -354,14 +354,14 @@ public interface ISelectionOverlayAdapter
     /// Shows the Selection overlay and returns the confirmed geometry, or
     /// null if the user cancelled (Escape or overlay dismissal). Returning
     /// null must not produce a Frame or any delivery side effect.
-    /// Implementations must not throw Ã¢â‚¬â€ surface unexpected failures as a
+    /// Implementations must not throw — surface unexpected failures as a
     /// null result so the workflow reports cancellation rather than crashing.
     /// </summary>
     Task<TargetSelectionResult<SelectionGeometry>?> ShowAsync(SelectionGeometry? initialGeometry);
 }
 
 /// <summary>
-/// Immutable Selected Monitor target in Virtual Desktop coordinates Ã¢â‚¬â€ the
+/// Immutable Selected Monitor target in Virtual Desktop coordinates — the
 /// contract type that crosses the WinUI-free workflow seam from the monitor
 /// picker overlay. The signed X/Y origin preserves negative Virtual Desktop
 /// origins (e.g., a secondary monitor to the left of and/or above the
@@ -375,7 +375,7 @@ public sealed record MonitorTarget
 {
     /// <summary>
     /// Pointer-adjacent label the picker displayed for this monitor (e.g.,
-    /// "Monitor 1 (1920Ãƒâ€”1080)"). Carried for diagnostics and contract tests;
+    /// "Monitor 1 (1920×1080)"). Carried for diagnostics and contract tests;
     /// the workflow does not interpret it.
     /// </summary>
     public string Label { get; init; } = "";
@@ -398,7 +398,7 @@ public sealed record MonitorTarget
 /// Production shows a scrimmed Win32 layered window that highlights the
 /// hovered monitor and its label; tests supply fakes that return a canned
 /// monitor target or cancellation. The overlay adapter's only job is to
-/// return the confirmed monitor target (or cancellation) Ã¢â‚¬â€ it must NOT
+/// return the confirmed monitor target (or cancellation) — it must NOT
 /// perform Capture or own any post-capture state, because the runtime
 /// workflow owns Capture, the Frame, and the preview transition. Clicks in
 /// monitor-layout gaps must keep the overlay open (the adapter handles gap
@@ -412,7 +412,7 @@ public interface IMonitorPickerOverlayAdapter
     /// Shows the Selected Monitor picker overlay and returns the confirmed
     /// monitor target, or null if the user cancelled (Escape or overlay
     /// dismissal). Returning null must not produce a Frame or any delivery
-    /// side effect. Implementations must not throw Ã¢â‚¬â€ surface unexpected
+    /// side effect. Implementations must not throw — surface unexpected
     /// failures as a null result so the workflow reports cancellation
     /// rather than crashing.
     /// </summary>
@@ -420,7 +420,7 @@ public interface IMonitorPickerOverlayAdapter
 }
 
 /// <summary>
-/// Immutable Selected Window target in Virtual Desktop coordinates Ã¢â‚¬â€ the
+/// Immutable Selected Window target in Virtual Desktop coordinates — the
 /// contract type that crosses the WinUI-free workflow seam from the window
 /// picker overlay. <see cref="Handle"/> is the stable HWND identity the picker
 /// confirmed (and re-validates against a fresh snapshot at click time so a
@@ -510,7 +510,7 @@ public sealed record WindowPickerResult
 /// Production shows a scrimmed Win32 layered window that highlights the hovered
 /// window's full bounds and title; tests supply fakes that return a canned
 /// window confirmation, an empty-desktop fallback, or cancellation. The overlay
-/// adapter's only job is to return the confirming outcome (or cancellation) Ã¢â‚¬â€
+/// adapter's only job is to return the confirming outcome (or cancellation) —
 /// it must NOT perform Capture or own any post-capture state, because the
 /// runtime workflow owns Capture, the Frame, and the preview transition. A
 /// click on an eligible window yields
@@ -526,7 +526,7 @@ public interface IWindowPickerOverlayAdapter
     /// Shows the Selected Window picker overlay and returns the confirming
     /// outcome, or null if the user cancelled (Escape or overlay dismissal).
     /// Returning null must not produce a Frame or any delivery side effect.
-    /// Implementations must not throw Ã¢â‚¬â€ surface unexpected failures as a null
+    /// Implementations must not throw — surface unexpected failures as a null
     /// result so the workflow reports cancellation rather than crashing.
     /// </summary>
     Task<TargetSelectionResult<WindowPickerResult>?> ShowAsync();
@@ -538,14 +538,14 @@ public interface IWindowPickerOverlayAdapter
 /// the session itself stays WinUI-free by talking to this interface.
 /// </summary>
 /// <typeparam name="TImage">
-/// The display token the adapter produces Ã¢â‚¬â€ WriteableBitmap in production, an
+/// The display token the adapter produces — WriteableBitmap in production, an
 /// arbitrary stand-in for tests.
 /// </typeparam>
 public interface IPreviewAdapter<TImage>
 {
     /// <summary>
     /// Presents the supplied Frame to the preview path. Implementations must
-    /// not throw for expected failures Ã¢â‚¬â€ surface them through
+    /// not throw for expected failures — surface them through
     /// PreviewPresentResult.Fail so the Frame stays retryable.
     /// </summary>
     PreviewPresentResult<TImage> Present(ContiguousBitmap frame);
@@ -649,6 +649,8 @@ public sealed class CaptureWorkflowSession<TImage>
     private readonly IAnnotationOverlayAdapter _annotationOverlay;
     private readonly Func<bool> _annotationEnabled;
     private readonly Func<AnnotationToolState> _annotationToolState;
+    private readonly IOcrEngine _ocrEngine;
+    private readonly Func<string?> _ocrLanguageTag;
     private readonly IWorkflowExportAdapter _export;
     private readonly ISaveAsDialogAdapter _saveAsDialog;
     private readonly Func<AutomaticExportSettings> _automaticExport;
@@ -671,7 +673,7 @@ public sealed class CaptureWorkflowSession<TImage>
 
     // The Frame owned by the session after the most recent successful Capture.
     // Stays null until the first successful Capture; replaced on each success.
-    // Export actions read from this field Ã¢â‚¬â€ the session is the canonical Frame
+    // Export actions read from this field — the session is the canonical Frame
     // owner for Save, Save As, Copy Frame, and Copy Path (issue #44).
     private ContiguousBitmap? _lastFrame;
 
@@ -702,7 +704,7 @@ public sealed class CaptureWorkflowSession<TImage>
     public SessionCaptureOptions SessionOptions => _captureOptions;
 
     /// <summary>
-    /// The one default saved-file identity for the current Capture Ã¢â‚¬â€ the path
+    /// The one default saved-file identity for the current Capture — the path
     /// the first successful Save wrote. Null until Save succeeds, after a new
     /// Capture, or after <see cref="AdoptFrame"/>. Repeating Save refers to
     /// this file; Save As never replaces it.
@@ -710,7 +712,7 @@ public sealed class CaptureWorkflowSession<TImage>
     public string? DefaultSavedFilePath => _defaultSavedFilePath;
 
     /// <summary>
-    /// The most recently saved file for the current Capture Ã¢â‚¬â€ the default
+    /// The most recently saved file for the current Capture — the default
     /// identity or the latest Save As choice. Null until some save succeeds
     /// for this Capture. Copy Path copies this once it is valid.
     /// </summary>
@@ -726,7 +728,7 @@ public sealed class CaptureWorkflowSession<TImage>
     /// Creates a workflow session bound to the supplied platform adapters and a
     /// fresh Capture-options holder over <see cref="AppSettings.WithDefaults"/>.
     /// Equivalent to the six-argument constructor with
-    /// <c>new SessionCaptureOptions(AppSettings.WithDefaults())</c> Ã¢â‚¬â€ kept for
+    /// <c>new SessionCaptureOptions(AppSettings.WithDefaults())</c> — kept for
     /// callers and tests that do not supply a committed AppSettings. Production
     /// wires the real committed AppSettings through the six-argument constructor.
     /// </summary>
@@ -796,7 +798,12 @@ public sealed class CaptureWorkflowSession<TImage>
     {
     }
 
-    /// <summary>Creates a workflow with Annotation and committed toolbar defaults.</summary>
+    /// <summary>
+    /// Creates a workflow with Annotation and committed toolbar defaults.
+    /// OCR defaults to the engine-less null engine and the Export actions
+    /// default to unconfigured adapters; production wires both through the
+    /// thirteen-argument constructor.
+    /// </summary>
     public CaptureWorkflowSession(
         IWorkflowCaptureAdapter capture,
         IPreviewAdapter<TImage> preview,
@@ -810,9 +817,39 @@ public sealed class CaptureWorkflowSession<TImage>
         Func<AnnotationToolState> annotationToolState)
         : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
                captureOptions, rememberedSelection, annotationOverlay, annotationEnabled,
-               annotationToolState,
+               annotationToolState, NullOcrEngine.Instance, static () => null,
                UnconfiguredWorkflowExportAdapter.Instance,
-               UnavailableSaveAsDialogAdapter.Instance)
+               UnavailableSaveAsDialogAdapter.Instance,
+               static () => AutomaticExportSettings.WithDefaults())
+    {
+    }
+
+    /// <summary>
+    /// Creates a workflow with the OCR engine and the persisted OCR language
+    /// selection the Recognize Text Trigger resolves against the installed
+    /// language packs. The delegates are read per-recognition so committed
+    /// Settings changes apply without rebuilding the session. Export actions
+    /// default to unconfigured adapters.
+    /// </summary>
+    public CaptureWorkflowSession(
+        IWorkflowCaptureAdapter capture,
+        IPreviewAdapter<TImage> preview,
+        ISelectionOverlayAdapter selectionOverlay,
+        IMonitorPickerOverlayAdapter monitorPickerOverlay,
+        IWindowPickerOverlayAdapter windowPickerOverlay,
+        SessionCaptureOptions captureOptions,
+        RememberedSelectionState rememberedSelection,
+        IAnnotationOverlayAdapter annotationOverlay,
+        Func<bool> annotationEnabled,
+        Func<AnnotationToolState> annotationToolState,
+        IOcrEngine ocrEngine,
+        Func<string?> ocrLanguageTag)
+        : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
+               captureOptions, rememberedSelection, annotationOverlay, annotationEnabled,
+               annotationToolState, ocrEngine, ocrLanguageTag,
+               UnconfiguredWorkflowExportAdapter.Instance,
+               UnavailableSaveAsDialogAdapter.Instance,
+               static () => AutomaticExportSettings.WithDefaults())
     {
     }
 
@@ -821,7 +858,7 @@ public sealed class CaptureWorkflowSession<TImage>
     /// session owns the default saved-file identity, Copy Path availability,
     /// and the operation guard across Save, Save As, Copy Frame, and Copy
     /// Path; the adapters supply only PNG writing, clipboard placement, and
-    /// the Save As dialog.
+    /// the Save As dialog. OCR defaults to the engine-less null engine.
     /// </summary>
     public CaptureWorkflowSession(
         IWorkflowCaptureAdapter capture,
@@ -838,17 +875,19 @@ public sealed class CaptureWorkflowSession<TImage>
         ISaveAsDialogAdapter saveAsDialog)
         : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
                captureOptions, rememberedSelection, annotationOverlay, annotationEnabled,
-               annotationToolState, export, saveAsDialog,
+               annotationToolState, NullOcrEngine.Instance, static () => null,
+               export, saveAsDialog,
                static () => AutomaticExportSettings.WithDefaults())
     {
     }
 
     /// <summary>
-    /// Creates a workflow with the Export actions and the configured automatic
-    /// delivery source wired (issue #47). The automatic Export settings are
-    /// read through <paramref name="automaticExport"/> when each Capture
-    /// completes, so committed Settings changes take effect on the next
-    /// Capture without reconstructing the session.
+    /// Creates a workflow with the OCR engine, the persisted OCR language
+    /// selection, the Export actions, and the configured automatic Export
+    /// source all wired — the constructor production uses. The automatic
+    /// Export settings are read through <paramref name="automaticExport"/>
+    /// when each Capture completes, so committed Settings changes take effect
+    /// on the next Capture without reconstructing the session.
     /// </summary>
     public CaptureWorkflowSession(
         IWorkflowCaptureAdapter capture,
@@ -861,6 +900,8 @@ public sealed class CaptureWorkflowSession<TImage>
         IAnnotationOverlayAdapter annotationOverlay,
         Func<bool> annotationEnabled,
         Func<AnnotationToolState> annotationToolState,
+        IOcrEngine ocrEngine,
+        Func<string?> ocrLanguageTag,
         IWorkflowExportAdapter export,
         ISaveAsDialogAdapter saveAsDialog,
         Func<AutomaticExportSettings> automaticExport)
@@ -875,6 +916,8 @@ public sealed class CaptureWorkflowSession<TImage>
         _annotationOverlay = annotationOverlay ?? throw new ArgumentNullException(nameof(annotationOverlay));
         _annotationEnabled = annotationEnabled ?? throw new ArgumentNullException(nameof(annotationEnabled));
         _annotationToolState = annotationToolState ?? throw new ArgumentNullException(nameof(annotationToolState));
+        _ocrEngine = ocrEngine ?? throw new ArgumentNullException(nameof(ocrEngine));
+        _ocrLanguageTag = ocrLanguageTag ?? throw new ArgumentNullException(nameof(ocrLanguageTag));
         _export = export ?? throw new ArgumentNullException(nameof(export));
         _saveAsDialog = saveAsDialog ?? throw new ArgumentNullException(nameof(saveAsDialog));
         _automaticExport = automaticExport ?? throw new ArgumentNullException(nameof(automaticExport));
@@ -895,7 +938,7 @@ public sealed class CaptureWorkflowSession<TImage>
     /// <summary>
     /// Routes an Active Window Trigger through the same production workflow as
     /// Full Desktop: composes the effective CaptureOptions (committed defaults
-    /// overlaid with any session override for Active Window Ã¢â‚¬â€ pointer,
+    /// overlaid with any session override for Active Window — pointer,
     /// decorations, and shadow are each applicable), captures the current
     /// eligible active window, owns the resulting Frame, drives the preview
     /// transition, and exposes operation-in-progress and failure outcomes
@@ -912,7 +955,7 @@ public sealed class CaptureWorkflowSession<TImage>
     /// workflow owns Capture of the returned geometry, the resulting Frame,
     /// and the preview transition. On cancellation (Escape or overlay
     /// dismissal) the workflow ends with <see cref="WorkflowStatus.Cancelled"/>
-    /// Ã¢â‚¬â€ no Capture is performed, no Frame is produced, and no delivery side
+    /// — no Capture is performed, no Frame is produced, and no delivery side
     /// effects occur. Cross-monitor and negative-coordinate selections are
     /// preserved: the geometry's signed X/Y is forwarded to the capture
     /// adapter untouched. Never throws for expected failures.
@@ -926,7 +969,7 @@ public sealed class CaptureWorkflowSession<TImage>
     /// workflow owns Capture of the returned monitor bounds, the resulting
     /// Frame, and the preview transition. On cancellation (Escape or overlay
     /// dismissal) the workflow ends with <see cref="WorkflowStatus.Cancelled"/>
-    /// Ã¢â‚¬â€ no Capture is performed, no Frame is produced, and no delivery side
+    /// — no Capture is performed, no Frame is produced, and no delivery side
     /// effects occur. Mixed-DPI and negative-coordinate monitor layouts are
     /// preserved: the target's signed X/Y is forwarded to the capture adapter
     /// untouched. Never throws for expected failures.
@@ -937,24 +980,70 @@ public sealed class CaptureWorkflowSession<TImage>
     /// <summary>
     /// Routes a Selected Window Trigger through the production workflow. The
     /// interactive window picker overlay is shown first; on confirmation the
-    /// workflow owns Capture of the returned target, the resulting Frame, and
-    /// the preview transition. The picker's three outcomes map as follows:
+    /// workflow owns Capture of the returned target, the resulting Frame,
+    /// and the preview transition. The picker's three outcomes map as follows:
     /// cancellation (Escape or overlay dismissal) ends the workflow with
     /// <see cref="WorkflowStatus.Cancelled"/>; a confirmed window is captured by
     /// handle; an empty-desktop click is routed to a Full Desktop capture
     /// (including the taskbar). Mixed-DPI, cross-monitor, and negative-
-    /// coordinate window bounds are preserved. Never throws for expected
-    /// failures.
+    /// coordinate window bounds are preserved. Never throws for expected failures.
     /// </summary>
     public Task<WorkflowResult<TImage>> CaptureSelectedWindowAsync() =>
         CaptureModeAsync(CaptureMode.SelectedWindow);
 
     /// <summary>
+    /// Routes a Recognize Text Trigger through the production workflow. OCR
+    /// is a post-capture workflow feature (not an Export): it operates on the
+    /// in-memory Frame the session already owns — no file is written — and
+    /// surfaces distinct Recognized-text, no-text, no-Frame,
+    /// unsupported-language, engine-failure, and operation-in-progress
+    /// outcomes through <see cref="OcrResult"/> (spec #49). The persisted
+    /// language selection is resolved against the installed OCR language
+    /// packs before the engine runs, so a removed pack produces a retryable
+    /// unsupported-language error instead of a silent fallback. Every
+    /// retryable outcome preserves the Frame: a retry re-recognizes the same
+    /// pixels without another Capture. Runs under the same operation guard as
+    /// Capture so a Trigger that arrives mid-recognition is rejected rather
+    /// than queued. Never throws for expected failures.
+    /// </summary>
+    public async Task<OcrResult> RecognizeTextAsync()
+    {
+        if (!TryBeginOperation())
+            return OcrResult.Busy();
+
+        try
+        {
+            var frame = _lastFrame;
+            if (frame is null)
+                return OcrResult.NoFrame();
+
+            var installed = _ocrEngine.GetAvailableLanguages();
+            var selectedTag = _ocrLanguageTag();
+            var effectiveTag = OcrLanguageResolver.EffectiveTag(selectedTag, installed);
+            if (!string.IsNullOrWhiteSpace(selectedTag) && effectiveTag is null)
+                return OcrResult.Unsupported(selectedTag);
+
+            return await _ocrEngine.RecognizeAsync(frame, effectiveTag);
+        }
+        catch (Exception ex)
+        {
+            // The engine contract says never-throw, but a defensive catch
+            // keeps an unexpected adapter failure retryable instead of
+            // crashing the workflow caller.
+            return OcrResult.Fail($"Text recognition failed: {ex.Message}");
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    /// <summary>
     /// Shared Capture Mode routing for an immediate-capture Trigger (no Target
     /// Selection). Owns the operation guard, effective-CaptureOptions
     /// composition, Capture, Frame ownership, and the preview transition. Both
-    /// Full Desktop and Active Window route through this so their behavior Ã¢â‚¬â€
-    /// and their test coverage Ã¢â‚¬â€ stays symmetric at the seam.
+    /// Full Desktop and Active Window route through this so their behavior —
+    /// and their test coverage — stays symmetric at the seam.
     /// </summary>
     private async Task<WorkflowResult<TImage>> CaptureModeAsync(CaptureMode initialMode)
     {
@@ -1103,7 +1192,7 @@ public sealed class CaptureWorkflowSession<TImage>
             var automaticReport = await RunAutomaticExportAsync();
             return WorkflowResultFor(label, WorkflowStatus.Succeeded,
                 frame: composedFrame,
-                dimensions: $"{composedFrame.Width}Ãƒâ€”{composedFrame.Height}",
+                dimensions: $"{composedFrame.Width}×{composedFrame.Height}",
                 captureMs: captureResult.ElapsedMs,
                 displayMs: annotationResult.ElapsedMs,
                 totalMs: totalSw.Elapsed.TotalMilliseconds,
@@ -1134,18 +1223,18 @@ public sealed class CaptureWorkflowSession<TImage>
             automaticExport: previewAutomaticReport);
     }
 
-    // Ã¢â€â‚¬Ã¢â€â‚¬ Configured automatic delivery (issue #47) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+    // ── Configured automatic delivery (issue #47) ────────────────────
 
     /// <summary>
     /// Runs the configured automatic delivery actions for the just-confirmed
     /// Frame, in dependency order: save, Copy Frame, then Copy Path. Save runs
     /// first so it can establish the saved-file identity Copy Path consumes
-    /// later in the same sequence; Copy Path is skipped Ã¢â‚¬â€ not failed Ã¢â‚¬â€ when no
+    /// later in the same sequence; Copy Path is skipped — not failed — when no
     /// valid saved file exists by the time it would run. Each action composes
     /// the same primitives the manual Export actions use, so state (identity,
     /// clipboard) stays shared and retryable. Runs inside the already-held
     /// operation guard of the completing Capture. Failures never throw and
-    /// never consume the Frame or a valid saved-file identity Ã¢â‚¬â€ they surface
+    /// never consume the Frame or a valid saved-file identity — they surface
     /// on the returned report for manual retry. Returns null when no automatic
     /// action is enabled.
     /// </summary>
@@ -1182,11 +1271,11 @@ public sealed class CaptureWorkflowSession<TImage>
         };
     }
 
-    // Ã¢â€â‚¬Ã¢â€â‚¬ Export workflow actions (issue #44) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+    // ── Export workflow actions (issue #44) ──────────────────────────
 
     /// <summary>
     /// Takes ownership of a Frame as the session's current exportable Frame,
-    /// resetting the saved-file identity Ã¢â‚¬â€ one default saved-file identity
+    /// resetting the saved-file identity — one default saved-file identity
     /// per Capture. Called on Capture success (preview and Annotation routes
     /// both land here) and by <see cref="AdoptFrame(ContiguousBitmap)"/> for
     /// legacy routes that still capture outside the session.
@@ -1213,8 +1302,8 @@ public sealed class CaptureWorkflowSession<TImage>
     /// <summary>
     /// Save: writes the session-owned Frame as a PNG using the configured
     /// destination and Filename Template, and records that file as the
-    /// Capture's default saved-file identity. A repeated Save Ã¢â‚¬â€ including
-    /// after an automatic save routed through this action Ã¢â‚¬â€ writes the same
+    /// Capture's default saved-file identity. A repeated Save — including
+    /// after an automatic save routed through this action — writes the same
     /// recorded file instead of expanding the template again, so one Capture
     /// never accumulates accidental duplicate files. Failures and
     /// cancellations are retryable: a failed attempt records no identity.
@@ -1288,7 +1377,7 @@ public sealed class CaptureWorkflowSession<TImage>
     /// Save As: shows the Save As dialog, then writes the session-owned Frame
     /// to the explicitly chosen path. The created file becomes the last
     /// saved file (so Copy Path refers to it) but does not replace the
-    /// default saved-file identity Ã¢â‚¬â€ a later Save still refers to (or
+    /// default saved-file identity — a later Save still refers to (or
     /// creates) the Capture's default file. Cancelling the dialog ends the
     /// action with <see cref="WorkflowExportStatus.Cancelled"/> and no side
     /// effects. Never throws for expected failures.
@@ -1336,7 +1425,7 @@ public sealed class CaptureWorkflowSession<TImage>
 
     /// <summary>
     /// Copy Frame: encodes the session-owned Frame as PNG image content and
-    /// places it on the Windows clipboard without creating a file Ã¢â‚¬â€ the
+    /// places it on the Windows clipboard without creating a file — the
     /// clipboard-only workflow requires no saved file. Never throws for
     /// expected failures.
     /// </summary>
@@ -1380,8 +1469,8 @@ public sealed class CaptureWorkflowSession<TImage>
 
     /// <summary>
     /// Copy Path: places the current saved file's path on the clipboard.
-    /// Unavailable Ã¢â‚¬â€ <see cref="WorkflowExportStatus.Failed"/> with a
-    /// user-visible error Ã¢â‚¬â€ until a valid saved file exists as workflow
+    /// Unavailable — <see cref="WorkflowExportStatus.Failed"/> with a
+    /// user-visible error — until a valid saved file exists as workflow
     /// state for the current Capture (a successful Save or Save As). Never
     /// throws for expected failures.
     /// </summary>
@@ -1557,6 +1646,22 @@ public sealed class CaptureWorkflowSession<TImage>
 
         public Task<AnnotationPresentResult> ShowAsync(ContiguousBitmap sourceFrame) =>
             Task.FromResult(AnnotationPresentResult.Fail("Annotation is disabled."));
+    }
+
+    /// <summary>
+    /// Stand-in engine for sessions constructed without OCR wiring. Recognize
+    /// Text is a post-capture workflow feature delivered by the OCR adapter —
+    /// without one there is nothing to recognize with, which is a retryable
+    /// configuration gap, not a crash.
+    /// </summary>
+    private sealed class NullOcrEngine : IOcrEngine
+    {
+        public static NullOcrEngine Instance { get; } = new();
+
+        public IReadOnlyList<OcrLanguage> GetAvailableLanguages() => Array.Empty<OcrLanguage>();
+
+        public Task<OcrResult> RecognizeAsync(ContiguousBitmap frame, string? languageTag) =>
+            Task.FromResult(OcrResult.Fail("Text recognition is not available."));
     }
 
     private static WorkflowResult<TImage> WorkflowResultFor(

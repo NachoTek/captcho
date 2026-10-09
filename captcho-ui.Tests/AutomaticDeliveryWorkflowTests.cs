@@ -103,6 +103,8 @@ internal static class AutomaticDeliveryHarness
             annotation,
             static () => true,
             static () => AnnotationToolState.WithDefaults(),
+            new FakeOcrEngine(),
+            static () => null,
             export,
             new FakeSaveAsDialogAdapter(),
             () => automatic);
@@ -284,6 +286,8 @@ public class AutomaticDeliveryCancellationTests
             annotation,
             static () => true,
             static () => AnnotationToolState.WithDefaults(),
+            new FakeOcrEngine(),
+            static () => null,
             export,
             new FakeSaveAsDialogAdapter(),
             () => automatic);
@@ -522,6 +526,8 @@ public class AutomaticDeliveryConfigurationTests
             new FakeAnnotationOverlayAdapter(),
             static () => false,
             static () => AnnotationToolState.WithDefaults(),
+            new FakeOcrEngine(),
+            static () => null,
             export,
             new FakeSaveAsDialogAdapter(),
             () => automatic);
@@ -559,6 +565,8 @@ public class AutomaticDeliveryConfigurationTests
             new FakeAnnotationOverlayAdapter(),
             static () => false,
             static () => AnnotationToolState.WithDefaults(),
+            new FakeOcrEngine(),
+            static () => null,
             export,
             new FakeSaveAsDialogAdapter(),
             () => automatic);

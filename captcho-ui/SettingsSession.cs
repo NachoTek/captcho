@@ -129,6 +129,18 @@ public sealed class SettingsSession
         return ClearTransientStatus();
     }
 
+    /// <summary>
+    /// Records a key combination for one Global Hotkey from inline recorder input and
+    /// returns the refreshed view. Suspected conflicts (the combination already being
+    /// another enabled row's working combination) are surfaced on the row as a warning
+    /// without rejecting the value. Never persists or reconciles runtime registration.
+    /// </summary>
+    public SettingsView RecordGlobalHotkeyBinding(int globalHotkeyId, HotkeyBinding binding)
+    {
+        _globalHotkeyTab.RecordBinding(globalHotkeyId, binding);
+        return ClearTransientStatus();
+    }
+
     // ── Editable Capture-tab edits ──────────────────────────────────────
 
     /// <summary>
@@ -173,6 +185,18 @@ public sealed class SettingsSession
     public SettingsView EditAnnotationEnabled(bool value)
     {
         _capture.EditAnnotationEnabled(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>
+    /// Sets the working OCR language selection (BCP-47 tag, or null/empty for
+    /// the user's default OCR language). The tag is a selection, not a
+    /// guarantee — it is resolved against the installed OCR language packs at
+    /// recognition time, so this edit never blocks on pack availability.
+    /// </summary>
+    public SettingsView EditOcrLanguageTag(string? tag)
+    {
+        _capture.EditOcrLanguageTag(tag);
         return ClearTransientStatus();
     }
 
@@ -303,12 +327,13 @@ public sealed class SettingsSession
         foreach (var tab in _editableTabs)
             tab.Commit();
 
-        // Reconcile runtime registration to match the persisted enabled states. The
-        // adapter never throws for expected conflicts; failures surface as Failed rows
-        // (read live from the adapter) and are summarized in the status so a failed
+        // Reconcile runtime registration to match the persisted settings (enabled
+        // states and recorded key combinations — the merged settings just saved,
+        // which equal what was written into the runtime above). The adapter never
+        // throws for expected conflicts; failures surface as Failed rows (read
+        // live from the adapter) and are summarized in the status so a failed
         // binding is visible, not overclaimed as active.
-        var registrationResults = _globalHotkeys.ApplyEnabledStates(
-            GlobalHotkeyRouteMap.EnabledGlobalHotkeyIds(merged));
+        var registrationResults = _globalHotkeys.ApplySettings(merged);
         int failedRegistrations = registrationResults.Count(r => !r.Succeeded);
 
         _statusMessage = failedRegistrations > 0
@@ -369,7 +394,8 @@ public sealed class SettingsSession
                 IncludeDecorations: _capture.IncludeDecorations,
                 IncludeShadow: _capture.IncludeShadow,
                 RememberSelection: _capture.RememberSelection,
-                AnnotationEnabled: _capture.AnnotationEnabled),
+                AnnotationEnabled: _capture.AnnotationEnabled,
+                OcrLanguageTag: _capture.OcrLanguageTag),
 
             Annotation: new AnnotationTabContent(
                 DefaultTool: _annotation.DefaultTool,
