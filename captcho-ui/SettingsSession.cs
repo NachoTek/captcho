@@ -41,6 +41,7 @@ public sealed class SettingsSession
     private readonly GlobalHotkeyTabSettings _globalHotkeyTab;
     private readonly CaptureTabSettings _capture;
     private readonly AnnotationTabSettings _annotation;
+    private readonly BehaviorTabSettings _behavior;
     private readonly ExportTabSettings _export;
     private readonly InterfaceTabSettings _interface;
 
@@ -75,10 +76,11 @@ public sealed class SettingsSession
         _globalHotkeyTab = new GlobalHotkeyTabSettings(runtime, globalHotkeys);
         _capture = new CaptureTabSettings(runtime);
         _annotation = new AnnotationTabSettings(runtime);
+        _behavior = new BehaviorTabSettings(runtime);
         _export = new ExportTabSettings();
         _interface = new InterfaceTabSettings();
 
-        _editableTabs = new EditableTabSession[] { _general, _globalHotkeyTab, _capture, _annotation };
+        _editableTabs = new EditableTabSession[] { _general, _globalHotkeyTab, _capture, _annotation, _behavior };
     }
 
     // ── View ────────────────────────────────────────────────────────────
@@ -218,6 +220,29 @@ public sealed class SettingsSession
     public SettingsView EditAnnotationStrokeWidth(int value)
     {
         _annotation.EditStrokeWidth(value);
+        return ClearTransientStatus();
+    }
+
+    // ── Editable Behavior-tab edits ─────────────────────────────────────
+
+    /// <summary>Sets the working automatic save toggle and returns the refreshed view.</summary>
+    public SettingsView EditAutomaticSave(bool value)
+    {
+        _behavior.EditAutoSave(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>Sets the working automatic Copy Frame toggle and returns the refreshed view.</summary>
+    public SettingsView EditAutomaticCopyFrame(bool value)
+    {
+        _behavior.EditAutoCopyFrame(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>Sets the working automatic Copy Path toggle and returns the refreshed view.</summary>
+    public SettingsView EditAutomaticCopyPath(bool value)
+    {
+        _behavior.EditAutoCopyPath(value);
         return ClearTransientStatus();
     }
 
@@ -377,6 +402,11 @@ public sealed class SettingsSession
                 PenColor: _annotation.PenColor,
                 StrokeWidth: _annotation.StrokeWidth,
                 Error: _annotation.FirstError),
+
+            Behavior: new BehaviorTabContent(
+                AutoSave: _behavior.AutoSave,
+                AutoCopyFrame: _behavior.AutoCopyFrame,
+                AutoCopyPath: _behavior.AutoCopyPath),
 
             Export: new ExportTabContent(
                 Heading: _export.Heading,

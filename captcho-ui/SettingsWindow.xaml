@@ -3,7 +3,8 @@
 Layout:
   ┌─────────────────────────────────────────┐
   │  TabView: General, Global Hotkeys, Capture,  │
-  │            Annotation, Export, Interface     │
+  │            Annotation, Behavior, Export,     │
+  │            Interface                         │
   ├─────────────────────────────────────────┤
   │ [Reset to Defaults] [OK] [Cancel] [Apply]   [Save status] │
   └─────────────────────────────────────────┘
@@ -211,6 +212,42 @@ Layout:
                                    FontSize="12"
                                    TextWrapping="Wrap"
                                    Visibility="Collapsed"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabViewItem>
+
+            <TabViewItem Header="Behavior">
+                <ScrollViewer Padding="20" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="Automatic Actions"
+                                   FontSize="16" FontWeight="SemiBold"
+                                   AutomationProperties.HeadingLevel="Level1"/>
+                        <TextBlock TextWrapping="Wrap"
+                                   FontSize="13"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   Text="Choose which Export actions run automatically after you confirm Annotation. Actions run in order: save, Copy Frame, then Copy Path — the saved file's path is available to Copy Path in the same sequence. Cancelling Annotation runs no automatic actions. A failed action is reported so you can retry it manually."/>
+                        <ToggleSwitch x:Name="AutoSaveToggle"
+                                      Header="Save automatically"
+                                      OnContent="On"
+                                      OffContent="Off"
+                                      Toggled="AutoSaveToggle_Toggled"
+                                      MinWidth="200"/>
+                        <ToggleSwitch x:Name="AutoCopyFrameToggle"
+                                      Header="Copy Frame automatically"
+                                      OnContent="On"
+                                      OffContent="Off"
+                                      Toggled="AutoCopyFrameToggle_Toggled"
+                                      MinWidth="200"/>
+                        <ToggleSwitch x:Name="AutoCopyPathToggle"
+                                      Header="Copy Path automatically"
+                                      OnContent="On"
+                                      OffContent="Off"
+                                      Toggled="AutoCopyPathToggle_Toggled"
+                                      MinWidth="200"/>
+                        <TextBlock FontSize="12"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   Text="Copy Path requires a saved file: enable Save automatically or save manually first."/>
                     </StackPanel>
                 </ScrollViewer>
             </TabViewItem>

@@ -371,6 +371,45 @@ public sealed partial class SettingsWindow : Window
         ApplyView(_session.EditAnnotationStrokeWidth(value));
     }
 
+    // ── Behavior tab event routing ─────────────────────────────────────────
+
+    /// <summary>
+    /// Routes an automatic-save toggle change into the session and rebinds.
+    /// Suppressed while <see cref="ApplyView"/> is programmatically setting
+    /// toggle state.
+    /// </summary>
+    private void AutoSaveToggle_Toggled(object sender, RoutedEventArgs e) =>
+        EditBehavior(() => _session.EditAutomaticSave(AutoSaveToggle.IsOn));
+
+    /// <summary>
+    /// Routes an automatic Copy Frame toggle change into the session and
+    /// rebinds. Suppressed while <see cref="ApplyView"/> is programmatically
+    /// setting toggle state.
+    /// </summary>
+    private void AutoCopyFrameToggle_Toggled(object sender, RoutedEventArgs e) =>
+        EditBehavior(() => _session.EditAutomaticCopyFrame(AutoCopyFrameToggle.IsOn));
+
+    /// <summary>
+    /// Routes an automatic Copy Path toggle change into the session and
+    /// rebinds. Suppressed while <see cref="ApplyView"/> is programmatically
+    /// setting toggle state.
+    /// </summary>
+    private void AutoCopyPathToggle_Toggled(object sender, RoutedEventArgs e) =>
+        EditBehavior(() => _session.EditAutomaticCopyPath(AutoCopyPathToggle.IsOn));
+
+    /// <summary>
+    /// Shared shape for a Behavior-tab toggle edit: suppressed while
+    /// <see cref="ApplyView"/> is programmatically setting toggle state,
+    /// routes the edit through the session, and rebinds from the returned
+    /// view.
+    /// </summary>
+    private void EditBehavior(Func<SettingsView> edit)
+    {
+        if (_applyingView)
+            return;
+        ApplyView(edit());
+    }
+
     // ── Command buttons ─────────────────────────────────────────────────
 
     /// <summary>
@@ -469,6 +508,12 @@ public sealed partial class SettingsWindow : Window
             AnnotationToolCombo.SelectedIndex = (int)view.Annotation.DefaultTool;
             AnnotationPenColorCombo.SelectedIndex = AnnotationColorIndex(view.Annotation.PenColor);
             AnnotationStrokeWidthInput.Value = view.Annotation.StrokeWidth;
+
+            // Behavior-tab toggles are driven from the view so Reset/Cancel
+            // rebind through this single site, under the _applyingView guard.
+            AutoSaveToggle.IsOn = view.Behavior.AutoSave;
+            AutoCopyFrameToggle.IsOn = view.Behavior.AutoCopyFrame;
+            AutoCopyPathToggle.IsOn = view.Behavior.AutoCopyPath;
         }
         finally
         {
