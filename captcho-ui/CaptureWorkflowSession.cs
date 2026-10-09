@@ -661,6 +661,7 @@ public sealed class CaptureWorkflowSession<TImage>
     private readonly IQrScanner _qrScanner;
     private readonly IWorkflowExportAdapter _export;
     private readonly ISaveAsDialogAdapter _saveAsDialog;
+    private readonly IWorkflowDeliveryAdapter _delivery;
     private readonly Func<AutomaticExportSettings> _automaticExport;
 
     // Last-Capture-Mode recording for the launch behavior (issue #53). When
@@ -868,11 +869,46 @@ public sealed class CaptureWorkflowSession<TImage>
     }
 
     /// <summary>
+    /// Creates a workflow with the Export and delivery actions wired
+    /// (issues #44/#46). The session owns the default saved-file identity,
+    /// Copy Path/Open With/Share availability, and the operation guard
+    /// across all Export actions; the adapters supply only PNG writing,
+    /// clipboard placement, the Save As dialog, and Windows delivery. OCR
+    /// defaults to the engine-less null engine, QR to the scanner-less null
+    /// scanner, and the automatic Export source to defaults.
+    /// </summary>
+    public CaptureWorkflowSession(
+        IWorkflowCaptureAdapter capture,
+        IPreviewAdapter<TImage> preview,
+        ISelectionOverlayAdapter selectionOverlay,
+        IMonitorPickerOverlayAdapter monitorPickerOverlay,
+        IWindowPickerOverlayAdapter windowPickerOverlay,
+        SessionCaptureOptions captureOptions,
+        RememberedSelectionState rememberedSelection,
+        IAnnotationOverlayAdapter annotationOverlay,
+        Func<bool> annotationEnabled,
+        Func<AnnotationToolState> annotationToolState,
+        IWorkflowExportAdapter export,
+        ISaveAsDialogAdapter saveAsDialog,
+        IWorkflowDeliveryAdapter delivery)
+        : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
+               captureOptions, rememberedSelection, annotationOverlay, annotationEnabled,
+               annotationToolState, NullOcrEngine.Instance, static () => null, NullQrScanner.Instance,
+               export, saveAsDialog,
+               static () => AutomaticExportSettings.WithDefaults(),
+               launchRecorder: null,
+               delivery)
+    {
+    }
+
+    /// <summary>
     /// Creates a workflow with the Export actions wired (issue #44). The
     /// session owns the default saved-file identity, Copy Path availability,
     /// and the operation guard across Save, Save As, Copy Frame, and Copy
     /// Path; the adapters supply only PNG writing, clipboard placement, and
     /// the Save As dialog. OCR defaults to the engine-less null engine.
+    /// Delivery actions (issue #46) stay unwired — they fail cleanly through
+    /// the null-object delivery adapter.
     /// </summary>
     public CaptureWorkflowSession(
         IWorkflowCaptureAdapter capture,
@@ -923,11 +959,12 @@ public sealed class CaptureWorkflowSession<TImage>
         IWorkflowExportAdapter export,
         ISaveAsDialogAdapter saveAsDialog,
         Func<AutomaticExportSettings> automaticExport,
-        ILaunchBehaviorRecorder? launchRecorder = null)
+        ILaunchBehaviorRecorder? launchRecorder = null,
+        IWorkflowDeliveryAdapter? delivery = null)
         : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
                captureOptions, rememberedSelection, annotationOverlay, annotationEnabled,
                annotationToolState, ocrEngine, ocrLanguageTag, NullQrScanner.Instance,
-               export, saveAsDialog, automaticExport, launchRecorder)
+               export, saveAsDialog, automaticExport, launchRecorder, delivery)
     {
     }
 
@@ -941,7 +978,9 @@ public sealed class CaptureWorkflowSession<TImage>
     /// reconstructing the session. The optional
     /// <paramref name="launchRecorder"/> wires last-Capture-Mode recording
     /// for the launch behavior (issue #53); when omitted, captures are not
-    /// recorded.
+    /// recorded. The optional <paramref name="delivery"/> wires the Open
+    /// With/Share delivery actions (issue #46); when omitted, they fail
+    /// cleanly through the null-object delivery adapter.
     /// </summary>
     public CaptureWorkflowSession(
         IWorkflowCaptureAdapter capture,
@@ -960,7 +999,8 @@ public sealed class CaptureWorkflowSession<TImage>
         IWorkflowExportAdapter export,
         ISaveAsDialogAdapter saveAsDialog,
         Func<AutomaticExportSettings> automaticExport,
-        ILaunchBehaviorRecorder? launchRecorder = null)
+        ILaunchBehaviorRecorder? launchRecorder = null,
+        IWorkflowDeliveryAdapter? delivery = null)
     {
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
         _preview = preview ?? throw new ArgumentNullException(nameof(preview));
@@ -979,6 +1019,7 @@ public sealed class CaptureWorkflowSession<TImage>
         _saveAsDialog = saveAsDialog ?? throw new ArgumentNullException(nameof(saveAsDialog));
         _automaticExport = automaticExport ?? throw new ArgumentNullException(nameof(automaticExport));
         _launchRecorder = launchRecorder;
+        _delivery = delivery ?? UnconfiguredWorkflowDeliveryAdapter.Instance;
     }
 
     /// <summary>
@@ -1618,6 +1659,107 @@ public sealed class CaptureWorkflowSession<TImage>
         {
             EndOperation();
         }
+    }
+
+    /// <summary>
+    /// Open With: hands the saved Capture file to Windows application
+    /// association — discovery of the applications Windows registers for the
+    /// file's type, then launch (Windows shows its application picker when no
+    /// single default is registered). Unavailable — <see cref="WorkflowExportStatus.Failed"/>
+    /// with a user-visible error — until a valid saved file exists as workflow
+    /// state for the current Capture, mirroring Copy Path. Cancellation and
+    /// platform failures preserve the composed Frame, Annotation state, and
+    /// saved-file identity for retry. Never throws for expected failures.
+    /// </summary>
+    public async Task<WorkflowExportResult> OpenWithAsync(CancellationToken cancellationToken = default)
+    {
+        if (!TryBeginOperation())
+        {
+            return ExportInProgress(WorkflowExportAction.OpenWith);
+        }
+
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var path = _lastSavedFilePath;
+            if (string.IsNullOrEmpty(path))
+            {
+                return ExportResultFor(WorkflowExportAction.OpenWith, WorkflowExportStatus.Failed,
+                    error: "No saved file to open.");
+            }
+
+            var delivery = await _delivery.OpenWithAsync(path!, cancellationToken);
+            return MapDeliveryResult(WorkflowExportAction.OpenWith, path!, delivery, sw);
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    /// <summary>
+    /// Share: invokes the Windows share interface with the delivered Capture
+    /// file in a supported state. Unavailable — <see cref="WorkflowExportStatus.Failed"/>
+    /// with a user-visible error — until a valid saved file exists as workflow
+    /// state for the current Capture, mirroring Copy Path. Cancellation and
+    /// platform failures preserve the composed Frame, Annotation state, and
+    /// saved-file identity for retry. Never throws for expected failures.
+    /// </summary>
+    public async Task<WorkflowExportResult> ShareAsync(CancellationToken cancellationToken = default)
+    {
+        if (!TryBeginOperation())
+        {
+            return ExportInProgress(WorkflowExportAction.Share);
+        }
+
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var path = _lastSavedFilePath;
+            if (string.IsNullOrEmpty(path))
+            {
+                return ExportResultFor(WorkflowExportAction.Share, WorkflowExportStatus.Failed,
+                    error: "No saved file to share.");
+            }
+
+            var delivery = await _delivery.ShareAsync(path!, cancellationToken);
+            return MapDeliveryResult(WorkflowExportAction.Share, path!, delivery, sw);
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    /// <summary>
+    /// Maps a platform delivery result onto the Export action surface,
+    /// carrying the delivered path so status text can name the file.
+    /// </summary>
+    private static WorkflowExportResult MapDeliveryResult(
+        WorkflowExportAction action,
+        string path,
+        DeliveryResult delivery,
+        Stopwatch sw)
+    {
+        if (delivery.Status == DeliveryStatus.Succeeded)
+        {
+            return new WorkflowExportResult
+            {
+                Action = action,
+                Status = WorkflowExportStatus.Succeeded,
+                FilePath = path,
+                ElapsedMs = sw.Elapsed.TotalMilliseconds,
+            };
+        }
+
+        if (delivery.Status == DeliveryStatus.Cancelled)
+        {
+            return ExportResultFor(action, WorkflowExportStatus.Cancelled,
+                error: delivery.Error ?? $"{action} cancelled.");
+        }
+
+        return ExportResultFor(action, WorkflowExportStatus.Failed,
+            error: delivery.Error ?? $"{action} failed.");
     }
 
     /// <summary>

@@ -48,6 +48,8 @@ Layout:
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
             <Button x:Name="FullDesktopButton"
@@ -211,15 +213,35 @@ Layout:
                     Grid.Column="15"
                     Content="Copy Path"
                     MinWidth="90" MinHeight="40"
-                    Margin="0,0,8,0"
+                    Margin="0,0,6,0"
                     IsEnabled="False"
                     Click="CopyPath_Click"
                     CornerRadius="6"
                     ToolTipService.ToolTip="Copy the saved file's path (available after a save)"/>
 
+            <Button x:Name="OpenWithButton"
+                    Grid.Column="16"
+                    Content="Open With…"
+                    MinWidth="95" MinHeight="40"
+                    Margin="0,0,6,0"
+                    IsEnabled="False"
+                    Click="OpenWith_Click"
+                    CornerRadius="6"
+                    ToolTipService.ToolTip="Open the saved capture with a Windows-registered application (available after a save)"/>
+
+            <Button x:Name="ShareButton"
+                    Grid.Column="17"
+                    Content="Share…"
+                    MinWidth="85" MinHeight="40"
+                    Margin="0,0,8,0"
+                    IsEnabled="False"
+                    Click="Share_Click"
+                    CornerRadius="6"
+                    ToolTipService.ToolTip="Share the saved capture through Windows (available after a save)"/>
+
             <!-- Delay input: compact NumberBox for 0–60 second countdown -->
             <NumberBox x:Name="DelaySecondsInput"
-                       Grid.Column="16"
+                       Grid.Column="18"
                        Header="Delay (s)"
                        Minimum="0" Maximum="60"
                        SmallChange="1" LargeChange="5"
@@ -232,7 +254,7 @@ Layout:
 
             <!-- Countdown progress: determinate bar hidden when idle -->
             <ProgressBar x:Name="CountdownProgress"
-                         Grid.Column="17"
+                         Grid.Column="19"
                          Width="120" MinHeight="6"
                          Margin="8,0,4,0"
                          VerticalAlignment="Center"
@@ -242,7 +264,7 @@ Layout:
 
             <!-- Cancel countdown button: hidden when idle -->
             <Button x:Name="CancelDelayButton"
-                    Grid.Column="18"
+                    Grid.Column="20"
                     Content="Cancel"
                     MinWidth="70" MinHeight="40"
                     Margin="4,0,0,0"
@@ -251,7 +273,7 @@ Layout:
                     CornerRadius="6"/>
 
             <ProgressRing x:Name="CaptureProgress"
-                          Grid.Column="19"
+                          Grid.Column="21"
                           Width="28" Height="28"
                           Margin="4,0,0,0"
                           Visibility="Collapsed"

@@ -6,6 +6,8 @@
 // updating the preview image, status, and timing text.
 // Export buttons (Save, Save As…, Copy) are wired to the export service methods
 // and disabled until a capture succeeds and while export/capture/countdown is running.
+// Saved-file-gated actions (Copy Path, Open With, Share) additionally require a
+// valid saved file to exist as workflow state for the current Capture.
 // Global hotkeys (Print Screen, Win+Print, Shift+Print, Win+Shift+Print) are registered
 // on startup via RegisterHotKey and routed through WM_HOTKEY to the same capture workflows.
 
@@ -226,7 +228,9 @@ public sealed partial class MainWindow : Window
                 () => _hwnd != IntPtr.Zero ? _hwnd : WinRT.Interop.WindowNative.GetWindowHandle(this),
                 () => _settings),
             () => _settings.EffectiveAutomaticExport,
-            launchState);
+            launchState,
+            new WindowsDeliveryAdapter(
+                () => _hwnd != IntPtr.Zero ? _hwnd : WinRT.Interop.WindowNative.GetWindowHandle(this)));
 
         // Initialize Global Hotkeys after the window has an HWND.
         // In WinUI 3, the HWND is available immediately after construction.
@@ -373,7 +377,7 @@ public sealed partial class MainWindow : Window
                 if (!_isSettingsAcceleratorPressed)
                 {
                     _isSettingsAcceleratorPressed = true;
-                    DispatcherQueue.TryEnqueue(() => Settings_Click(null, null!));
+                    DispatcherQueue.TryEnqueue(OpenSettings);
                 }
                 return IntPtr.Zero;
             }
@@ -706,14 +710,93 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Handles "Open With" click — routes the Open With Export action
+    /// through the workflow session, which hands the saved file to Windows
+    /// application association (discovery plus launch). Unavailable until a
+    /// valid saved file exists.
+    /// </summary>
+    private async void OpenWith_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isOperationRunning || !_hasCapture)
+        {
+            StatusText.Text = ExportStatusFormatter.FormatNoCapture();
+            return;
+        }
+
+        EnterExportState();
+        StatusText.Text = "Opening with Windows…";
+
+        try
+        {
+            var result = await _workflowSession.OpenWithAsync();
+            ApplyWorkflowExportResult(result);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Open With failed: {SanitizeException(ex)}";
+            TimingText.Text = "";
+        }
+        finally
+        {
+            ExitExportState();
+        }
+    }
+
+    /// <summary>
+    /// Handles "Share" click — routes the Share Export action through the
+    /// workflow session, which invokes the Windows share interface with the
+    /// delivered Capture file. Unavailable until a valid saved file exists.
+    /// </summary>
+    private async void Share_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isOperationRunning || !_hasCapture)
+        {
+            StatusText.Text = ExportStatusFormatter.FormatNoCapture();
+            return;
+        }
+
+        EnterExportState();
+        StatusText.Text = "Sharing…";
+
+        try
+        {
+            var result = await _workflowSession.ShareAsync();
+            ApplyWorkflowExportResult(result);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Share failed: {SanitizeException(ex)}";
+            TimingText.Text = "";
+        }
+        finally
+        {
+            ExitExportState();
+        }
+    }
+
+    /// <summary>
     /// Applies a WorkflowExportResult to the status and timing text and
-    /// refreshes Copy Path availability from the session's saved-file state.
+    /// refreshes saved-file-gated action availability (Copy Path, Open With,
+    /// Share) from the session's saved-file state.
     /// </summary>
     private void ApplyWorkflowExportResult(WorkflowExportResult result)
     {
         StatusText.Text = ExportStatusFormatter.FormatStatus(result);
         TimingText.Text = ExportStatusFormatter.FormatTiming(result);
-        CopyPathButton.IsEnabled = _workflowSession.HasSavedFile;
+        RefreshSavedFileActions();
+    }
+
+    /// <summary>
+    /// Refreshes the saved-file-gated toolbar actions — Copy Path, Open
+    /// With, and Share — from the session's current saved-file state, so
+    /// they are visibly disabled until a valid saved Capture exists.
+    /// </summary>
+    private void RefreshSavedFileActions()
+    {
+        var enabled = _workflowSession.HasSavedFile;
+        CopyPathButton.IsEnabled = enabled;
+        OpenWithButton.IsEnabled = enabled;
+        ShareButton.IsEnabled = enabled;
     }
 
     // ── Delayed capture orchestration ────────────────────────────────
@@ -846,7 +929,7 @@ public sealed partial class MainWindow : Window
                 _hasCapture = true;
                 RecognizeTextButton.IsEnabled = true;
                 ScanQrButton.IsEnabled = true;
-                CopyPathButton.IsEnabled = _workflowSession.HasSavedFile;
+                RefreshSavedFileActions();
                 break;
 
             case WorkflowStatus.OperationInProgress:
@@ -1070,15 +1153,19 @@ public sealed partial class MainWindow : Window
 
     /// <summary>
     /// Enables or disables the export buttons (Save, Save As…, Copy, Copy
-    /// Path). Copy Path additionally requires a saved file to exist as
-    /// workflow state for the current Capture.
+    /// Path, Open With, Share). Copy Path, Open With, and Share additionally
+    /// require a saved file to exist as workflow state for the current
+    /// Capture.
     /// </summary>
     private void SetExportButtonsEnabled(bool enabled)
     {
         SaveButton.IsEnabled = enabled;
         SaveAsButton.IsEnabled = enabled;
         CopyToClipboardButton.IsEnabled = enabled;
-        CopyPathButton.IsEnabled = enabled && _workflowSession.HasSavedFile;
+        var savedFileActions = enabled && _workflowSession.HasSavedFile;
+        CopyPathButton.IsEnabled = savedFileActions;
+        OpenWithButton.IsEnabled = savedFileActions;
+        ShareButton.IsEnabled = savedFileActions;
     }
 
     /// <summary>
@@ -1103,7 +1190,7 @@ public sealed partial class MainWindow : Window
             {
                 _workflowSession.AdoptFrame(frame);
             }
-            CopyPathButton.IsEnabled = _workflowSession.HasSavedFile;
+            RefreshSavedFileActions();
         }
         else
         {
@@ -1162,7 +1249,14 @@ public sealed partial class MainWindow : Window
     /// Handles Settings button click — opens the settings dialog using the coordinator.
     /// Also invoked by F4 or Ctrl+, keyboard accelerators.
     /// </summary>
-    private void Settings_Click(object sender, RoutedEventArgs e)
+    private void Settings_Click(object sender, RoutedEventArgs e) => OpenSettings();
+
+    /// <summary>
+    /// Opens the settings dialog through the coordinator. Shared by the
+    /// Settings button, the F4/Ctrl+, accelerators, and the subclassed
+    /// WndProc route — no event payload is fabricated for programmatic calls.
+    /// </summary>
+    private void OpenSettings()
     {
         if (_settingsCoordinator == null)
         {
