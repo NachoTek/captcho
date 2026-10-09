@@ -18,6 +18,7 @@ public enum AnnotationTool
     Arrow,
     Text,
     Marker,
+    Blur,
 }
 
 /// <summary>
@@ -442,14 +443,14 @@ public static class AnnotationRenderer
 
         var pixels = sourceFrame.Pixels.ToArray();
         foreach (var stroke in committedStrokes)
-            DrawStroke(sourceFrame.Width, sourceFrame.Height, sourceFrame.Stride, pixels, stroke);
+            DrawStroke(sourceFrame, sourceFrame.Width, sourceFrame.Height, sourceFrame.Stride, pixels, stroke);
         if (inProgressStroke is not null)
-            DrawStroke(sourceFrame.Width, sourceFrame.Height, sourceFrame.Stride, pixels, inProgressStroke);
+            DrawStroke(sourceFrame, sourceFrame.Width, sourceFrame.Height, sourceFrame.Stride, pixels, inProgressStroke);
 
         return new ContiguousBitmap(sourceFrame.Width, sourceFrame.Height, sourceFrame.Stride, pixels);
     }
 
-    private static void DrawStroke(int width, int height, int stride, byte[] pixels, AnnotationStroke stroke)
+    private static void DrawStroke(ContiguousBitmap sourceFrame, int width, int height, int stride, byte[] pixels, AnnotationStroke stroke)
     {
         if (stroke.Points.Count == 0)
             return;
@@ -478,6 +479,98 @@ public static class AnnotationRenderer
             case AnnotationTool.Marker:
                 DrawMarkerStroke(width, height, stride, pixels, stroke);
                 break;
+            case AnnotationTool.Blur:
+                DrawBlurStroke(sourceFrame, width, height, stride, pixels, stroke);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Kernel radius of the box blur in Frame pixels. Fixed rather than derived
+    /// from the shared stroke width: the effect targets legible detail, and one
+    /// deterministic radius keeps the composed Frame reproducible in tests.
+    /// </summary>
+    public const int BlurKernelRadius = 4;
+
+    /// <summary>
+    /// Draws one blur region: every pixel inside the committed rectangle is
+    /// replaced by the box-blurred source color of its neighborhood, sampling
+    /// the SOURCE Frame (not the composite) so earlier annotations never feed
+    /// the blur, and clipped to the Frame bounds so edge regions stay inside.
+    /// </summary>
+    private static void DrawBlurStroke(
+        ContiguousBitmap sourceFrame,
+        int width,
+        int height,
+        int stride,
+        byte[] pixels,
+        AnnotationStroke stroke)
+    {
+        var (left, top, right, bottom) = OrderedBounds(stroke.Points[0], stroke.Points[^1]);
+        left = Math.Max(0, left);
+        top = Math.Max(0, top);
+        right = Math.Min(width - 1, right);
+        bottom = Math.Min(height - 1, bottom);
+        if (left > right || top > bottom)
+            return;
+
+        // No pixel inside the region samples outside [x0..x1] x [y0..y1], so the
+        // integral image is built over that window only, not the whole Frame.
+        int x0 = Math.Max(0, left - BlurKernelRadius);
+        int y0 = Math.Max(0, top - BlurKernelRadius);
+        int x1 = Math.Min(width - 1, right + BlurKernelRadius);
+        int y1 = Math.Min(height - 1, bottom + BlurKernelRadius);
+        int windowWidth = x1 - x0 + 1;
+
+        // Integral image over the SOURCE Frame channels (BGRA, straight alpha)
+        // gives an O(region) box sum regardless of the kernel radius.
+        long[] integral = new long[(windowWidth + 1) * (y1 - y0 + 2) * 3];
+        int rowStride = (windowWidth + 1) * 3;
+        byte[] source = sourceFrame.Pixels;
+        for (int y = y0; y <= y1; y++)
+        {
+            int sourceRow = y * sourceFrame.Stride;
+            for (int x = x0; x <= x1; x++)
+            {
+                int sourceOffset = sourceRow + x * 4;
+                int sx = x - x0;
+                int sy = y - y0;
+                int current = (sy + 1) * rowStride + (sx + 1) * 3;
+                int previous = sy * rowStride + (sx + 1) * 3;
+                int leftUp = (sy + 1) * rowStride + sx * 3;
+                int upLeft = sy * rowStride + sx * 3;
+                for (int channel = 0; channel < 3; channel++)
+                    integral[current + channel] =
+                        source[sourceOffset + channel]
+                        + integral[previous + channel]
+                        + integral[leftUp + channel]
+                        - integral[upLeft + channel];
+            }
+        }
+
+        for (int y = top; y <= bottom; y++)
+        {
+            int sampleTop = Math.Max(y0, y - BlurKernelRadius);
+            int sampleBottom = Math.Min(y1, y + BlurKernelRadius);
+            for (int x = left; x <= right; x++)
+            {
+                int sampleLeft = Math.Max(x0, x - BlurKernelRadius);
+                int sampleRight = Math.Min(x1, x + BlurKernelRadius);
+                int window = (sampleBottom - sampleTop + 1) * (sampleRight - sampleLeft + 1);
+                int offset = y * stride + x * 4;
+                for (int channel = 0; channel < 3; channel++)
+                {
+                    // Sum over the sample window from the integral image:
+                    // D - B - C + A with A its top-left, D its bottom-right corner.
+                    int d = (sampleBottom - y0 + 1) * rowStride + (sampleRight - x0 + 1) * 3 + channel;
+                    int b = (sampleTop - y0) * rowStride + (sampleRight - x0 + 1) * 3 + channel;
+                    int c = (sampleBottom - y0 + 1) * rowStride + (sampleLeft - x0) * 3 + channel;
+                    int a = (sampleTop - y0) * rowStride + (sampleLeft - x0) * 3 + channel;
+                    long sum = integral[d] - integral[b] - integral[c] + integral[a];
+                    pixels[offset + channel] = (byte)((sum + window / 2) / window);
+                }
+                pixels[offset + 3] = 255;
+            }
         }
     }
 

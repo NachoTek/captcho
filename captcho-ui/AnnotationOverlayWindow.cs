@@ -452,8 +452,8 @@ public sealed class AnnotationOverlayWindow : IDisposable
         const int widthButton = 38;
         const int widthLabel = 86;
         const int undoWidth = 58;
-        // Pen + four shapes + text + marker + color + fill + width stepper + undo/redo + confirm/cancel.
-        int contentWidth = toolWidth * 7
+        // Pen + four shapes + text + marker + blur + color + fill + width stepper + undo/redo + confirm/cancel.
+        int contentWidth = toolWidth * 8
             + colorWidth
             + fillWidth
             + widthButton * 2 + widthLabel
@@ -464,7 +464,7 @@ public sealed class AnnotationOverlayWindow : IDisposable
         int y = 20;
         int x = startX;
         _toolButtons.Clear();
-        foreach (var tool in new[] { AnnotationTool.Pen, AnnotationTool.Rectangle, AnnotationTool.Ellipse, AnnotationTool.Line, AnnotationTool.Arrow, AnnotationTool.Text, AnnotationTool.Marker })
+        foreach (var tool in new[] { AnnotationTool.Pen, AnnotationTool.Rectangle, AnnotationTool.Ellipse, AnnotationTool.Line, AnnotationTool.Arrow, AnnotationTool.Text, AnnotationTool.Marker, AnnotationTool.Blur })
         {
             _toolButtons.Add((new Rectangle(x, y, toolWidth, height), tool));
             x += toolWidth + gap;
@@ -529,6 +529,7 @@ public sealed class AnnotationOverlayWindow : IDisposable
             [AnnotationTool.Arrow] = "Arrow",
             [AnnotationTool.Text] = "Text",
             [AnnotationTool.Marker] = "Marker",
+            [AnnotationTool.Blur] = "Blur",
         };
         foreach (var (bounds, tool) in _toolButtons)
             DrawCentered(graphics, toolLabels[tool], smallFont, text, bounds);

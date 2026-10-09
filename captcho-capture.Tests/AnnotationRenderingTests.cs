@@ -464,6 +464,144 @@ public class AnnotationRenderingTests
         }
     }
 
+    // spec #42: blur regions
+
+    [Fact]
+    public void Render_Blur_ObscuresHighContrastDetailInsideTheRegion()
+    {
+        // A black-and-white checkerboard is representative sensitive detail: sharp
+        // 1px edges. After blur, no pixel inside the region stays pure black or white.
+        var source = CheckerboardFrame(40, 30);
+        var stroke = new AnnotationStroke(
+            AnnotationTool.Blur,
+            new AnnotationColor(255, 0, 0),
+            4,
+            new[] { new AnnotationPoint(4, 4), new AnnotationPoint(24, 16) });
+
+        var rendered = AnnotationRenderer.Render(source, new[] { stroke });
+
+        int interior = 0;
+        for (int y = 4; y <= 16; y++)
+            for (int x = 4; x <= 24; x++)
+            {
+                var pixel = Pixel(rendered, x, y);
+                Assert.NotEqual(0, pixel.Green);
+                Assert.NotEqual(255, pixel.Green);
+                interior++;
+            }
+        Assert.True(interior > 100, $"Expected obscured interior pixels, found {interior}.");
+    }
+
+    [Fact]
+    public void Render_Blur_ClipsTheEffectToTheRegionAndLeavesOutsideIdentical()
+    {
+        var source = CheckerboardFrame(40, 30);
+        var stroke = new AnnotationStroke(
+            AnnotationTool.Blur,
+            new AnnotationColor(255, 0, 0),
+            4,
+            new[] { new AnnotationPoint(4, 4), new AnnotationPoint(24, 16) });
+
+        var rendered = AnnotationRenderer.Render(source, new[] { stroke });
+
+        // Every pixel outside the region is byte-identical to the source.
+        for (int y = 0; y < 30; y++)
+            for (int x = 0; x < 40; x++)
+            {
+                bool inside = x >= 4 && x <= 24 && y >= 4 && y <= 16;
+                if (!inside)
+                    Assert.Equal(Pixel(source, x, y), Pixel(rendered, x, y));
+            }
+        // The source Frame itself is never mutated.
+        Assert.NotEqual(source.Pixels, rendered.Pixels);
+        Assert.Equal(Pixel(source, 10, 10), Pixel(source, 10, 10));
+    }
+
+    [Fact]
+    public void Render_Blur_OverAUniformRegion_ChangesNothingVisible()
+    {
+        // Blur of a uniform region is the same color: the composed Frame equals
+        // the source everywhere.
+        var source = SolidFrame(30, 20, new AnnotationColor(90, 120, 150));
+        var stroke = new AnnotationStroke(
+            AnnotationTool.Blur,
+            new AnnotationColor(255, 0, 0),
+            4,
+            new[] { new AnnotationPoint(5, 5), new AnnotationPoint(20, 14) });
+
+        var rendered = AnnotationRenderer.Render(source, new[] { stroke });
+
+        Assert.Equal(source.Pixels, rendered.Pixels);
+    }
+
+    [Fact]
+    public void Render_Blur_IgnoresSharedColorAndWidth()
+    {
+        var source = CheckerboardFrame(40, 30);
+        var red = new AnnotationStroke(
+            AnnotationTool.Blur,
+            new AnnotationColor(255, 0, 0),
+            1,
+            new[] { new AnnotationPoint(4, 4), new AnnotationPoint(24, 16) });
+        var blue = new AnnotationStroke(
+            AnnotationTool.Blur,
+            new AnnotationColor(0, 0, 255),
+            32,
+            new[] { new AnnotationPoint(4, 4), new AnnotationPoint(24, 16) });
+
+        var redRendered = AnnotationRenderer.Render(source, new[] { red });
+        var blueRendered = AnnotationRenderer.Render(source, new[] { blue });
+
+        // Neither the shared color nor the stroke width participates in the effect.
+        Assert.Equal(redRendered.Pixels, blueRendered.Pixels);
+        bool changed = false;
+        for (int i = 0; i < redRendered.Pixels.Length; i++)
+            if (redRendered.Pixels[i] != source.Pixels[i])
+                changed = true;
+        Assert.True(changed, "Expected the blur region to change.");
+    }
+
+    [Fact]
+    public void Render_Blur_ClampsToFrameEdgesWithoutThrowing()
+    {
+        // A region dragged past the Frame edges is clamped, not an error.
+        var source = CheckerboardFrame(20, 10);
+        var stroke = new AnnotationStroke(
+            AnnotationTool.Blur,
+            new AnnotationColor(255, 0, 0),
+            4,
+            new[] { new AnnotationPoint(-30, -5), new AnnotationPoint(50, 25) });
+
+        var rendered = AnnotationRenderer.Render(source, new[] { stroke });
+
+        // The whole Frame is inside the clamped region, so every pixel is a blur
+        // of the checkerboard and no longer pure black/white.
+        for (int y = 0; y < 10; y++)
+            for (int x = 0; x < 20; x++)
+            {
+                var pixel = Pixel(rendered, x, y);
+                Assert.NotEqual(0, pixel.Green);
+                Assert.NotEqual(255, pixel.Green);
+            }
+    }
+
+    private static ContiguousBitmap CheckerboardFrame(int width, int height)
+    {
+        var pixels = new byte[width * height * 4];
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+            {
+                byte value = (x + y) % 2 == 0 ? (byte)255 : (byte)0;
+                int offset = (y * width + x) * 4;
+                pixels[offset] = value;
+                pixels[offset + 1] = value;
+                pixels[offset + 2] = value;
+                pixels[offset + 3] = 255;
+            }
+
+        return BitmapBufferConverter.StripPadding(pixels, width, height, width * 4);
+    }
+
     private static ContiguousBitmap SolidFrame(int width, int height, AnnotationColor color)
     {
         var pixels = new byte[width * height * 4];

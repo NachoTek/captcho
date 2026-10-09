@@ -669,6 +669,97 @@ public class AnnotationGateTests
         Assert.Equal(0, result.Frame.Pixels[(24 * 160 + 70) * 4 + 2]);
     }
 
+    // spec #42: blur regions
+
+    [Fact]
+    public async Task Workflow_ConfirmedBlurFrame_ObscuresRegionAndPreservesOutside()
+    {
+        // Checkerboard source: sharp black/white detail inside the blur region,
+        // identical detail outside it.
+        var source = CheckerboardFrame(40, 30);
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            script.SetTool(AnnotationTool.Blur);
+            script.BeginStroke(new AnnotationPoint(4, 4));
+            script.UpdateStrokePoint(new AnnotationPoint(24, 16));
+            script.CommitStroke();
+        });
+        var session = Session(
+            SuccessfulCapture(source),
+            new FakePreviewAdapter(),
+            annotation,
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Blur, new AnnotationColor(255, 0, 0), 4));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        // Inside the region the detail is obscured...
+        for (int y = 4; y <= 16; y++)
+            for (int x = 4; x <= 24; x++)
+            {
+                int offset = (y * 40 + x) * 4;
+                Assert.NotEqual(0, result.Frame!.Pixels[offset + 1]);
+                Assert.NotEqual(255, result.Frame.Pixels[offset + 1]);
+            }
+        // ...outside it the composed Frame matches the source byte for byte.
+        for (int y = 0; y < 30; y++)
+            for (int x = 0; x < 40; x++)
+            {
+                if (x >= 4 && x <= 24 && y >= 4 && y <= 16)
+                    continue;
+                int offset = (y * 40 + x) * 4;
+                Assert.Equal(source.Pixels[offset], result.Frame!.Pixels[offset]);
+            }
+        // The source Frame was never mutated: (10,10) sums even → white, (10,11) odd → black.
+        Assert.Equal(255, source.Pixels[(10 * 40 + 10) * 4]);
+        Assert.Equal(0, source.Pixels[(10 * 40 + 11) * 4]);
+    }
+
+    [Fact]
+    public async Task Workflow_BlurUndo_ComposesTheUnchangedSourceRegion()
+    {
+        var source = CheckerboardFrame(40, 30);
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            script.SetTool(AnnotationTool.Blur);
+            script.BeginStroke(new AnnotationPoint(4, 4));
+            script.UpdateStrokePoint(new AnnotationPoint(24, 16));
+            script.CommitStroke();
+            script.Undo();
+        });
+        var session = Session(
+            SuccessfulCapture(source),
+            new FakePreviewAdapter(),
+            annotation,
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Blur, new AnnotationColor(255, 0, 0), 4));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        Assert.Equal(source.Pixels, result.Frame!.Pixels);
+    }
+
+    private static ContiguousBitmap CheckerboardFrame(int width, int height)
+    {
+        var pixels = new byte[width * height * 4];
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+            {
+                byte value = (x + y) % 2 == 0 ? (byte)255 : (byte)0;
+                int offset = (y * width + x) * 4;
+                pixels[offset] = value;
+                pixels[offset + 1] = value;
+                pixels[offset + 2] = value;
+                pixels[offset + 3] = 255;
+            }
+
+        return BitmapBufferConverter.StripPadding(pixels, width, height, width * 4);
+    }
+
     private static ContiguousBitmap Frame6x1() =>
         BitmapBufferConverter.StripPadding(
             new byte[6 * 4],
