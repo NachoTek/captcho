@@ -18,6 +18,10 @@ namespace captcho.Capture;
 /// </summary>
 public static class GlobalHotkeyBindingDefaults
 {
+    /// <summary>MOD_ALT — Win32 modifier flag.</summary>
+    public const int MOD_ALT = 0x0001;
+    /// <summary>MOD_CONTROL — Win32 modifier flag.</summary>
+    public const int MOD_CONTROL = 0x0002;
     /// <summary>MOD_SHIFT — Win32 modifier flag.</summary>
     public const int MOD_SHIFT = 0x0004;
     /// <summary>MOD_WIN — Win32 modifier flag.</summary>
@@ -28,7 +32,9 @@ public static class GlobalHotkeyBindingDefaults
     /// <summary>
     /// Legacy combinations keyed by capture route. Values mirror the hardcoded
     /// specs the app shipped with (see the UI-layer GlobalHotkeyRouteMap, which
-    /// builds its Win32 specs from the same combinations).
+    /// builds its Win32 specs from the same combinations). Selected Window and
+    /// Selected Monitor gained Global Hotkeys with issue #52; their legacy
+    /// combinations are Alt + Print Screen and Ctrl + Print Screen.
     /// </summary>
     public static readonly IReadOnlyDictionary<GlobalHotkeyRoute, HotkeyBinding> ByRoute =
         new Dictionary<GlobalHotkeyRoute, HotkeyBinding>
@@ -37,6 +43,8 @@ public static class GlobalHotkeyBindingDefaults
             [GlobalHotkeyRoute.ActiveWindow] = new(MOD_WIN, VK_SNAPSHOT),
             [GlobalHotkeyRoute.FullDesktop] = new(MOD_SHIFT, VK_SNAPSHOT),
             [GlobalHotkeyRoute.RectangularRegion] = new(MOD_WIN | MOD_SHIFT, VK_SNAPSHOT),
+            [GlobalHotkeyRoute.SelectedWindow] = new(MOD_ALT, VK_SNAPSHOT),
+            [GlobalHotkeyRoute.SelectedMonitor] = new(MOD_CONTROL, VK_SNAPSHOT),
         };
 
     /// <summary>

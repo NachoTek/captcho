@@ -90,7 +90,7 @@ public sealed partial class MainWindow : Window
     // ── Global Hotkey fields ─────────────────────────────────────────────────
 
     /// <summary>
-    /// Manages registration and cleanup of all four Global Hotkeys.
+    /// Manages registration and cleanup of every Global Hotkey.
     /// Null before initialization or after disposal.
     /// </summary>
     private GlobalHotkeyManager? _globalHotkeyManager;
@@ -232,7 +232,7 @@ public sealed partial class MainWindow : Window
     // ── Global Hotkey initialization and cleanup ─────────────────────────────
 
     /// <summary>
-    /// Registers all four global hotkeys and installs a WndProc subclass for WM_HOTKEY.
+    /// Registers every global hotkey and installs a WndProc subclass for WM_HOTKEY.
     /// Reports partial registration conflicts in status text without throwing.
     /// </summary>
     private void InitializeGlobalHotkeys()
@@ -351,6 +351,12 @@ public sealed partial class MainWindow : Window
                 break;
             case GlobalHotkeyRoute.RectangularRegion:
                 _ = RunSelectionWorkflowAsync();
+                break;
+            case GlobalHotkeyRoute.SelectedWindow:
+                _ = RunSelectedWindowWorkflowAsync();
+                break;
+            case GlobalHotkeyRoute.SelectedMonitor:
+                _ = RunSelectedMonitorWorkflowAsync();
                 break;
         }
     }
