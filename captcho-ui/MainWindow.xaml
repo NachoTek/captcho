@@ -129,6 +129,17 @@ Layout:
                     CornerRadius="6"
                     ToolTipService.ToolTip="Recognize text in the captured Frame with Windows OCR"/>
 
+            <!-- Scan QR: disabled until a capture succeeds -->
+            <Button x:Name="ScanQrButton"
+                    Grid.Column="8"
+                    Content="Scan QR"
+                    MinWidth="90" MinHeight="40"
+                    Margin="8,0,8,0"
+                    IsEnabled="False"
+                    Click="ScanQr_Click"
+                    CornerRadius="6"
+                    ToolTipService.ToolTip="Scan QR codes in the captured Frame"/>
+
             <!-- Menu separator -->
             <Border x:Name="MenuSeparator"
                     Grid.Column="9"
