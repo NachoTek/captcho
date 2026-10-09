@@ -1,10 +1,13 @@
 // ExportUiWiringTests.cs — Tests for export UI wiring.
 //
-// Verifies the export flow through a testable mediator that mirrors
-// MainWindow's export button handling logic without WinUI controls.
-// Covers: enabled-state transitions, result-to-status formatting,
-// picker-cancel/status behavior, no-capture guard, export failures,
-// clipboard failures, concurrent-click protection, and cache interactions.
+// Verifies the export flow through a testable mediator that models the
+// export button orchestration shape (enabled-state gating, status/timing
+// formatting, picker-cancel handling) without WinUI controls. The production
+// Export actions themselves live on CaptureWorkflowSession and are covered
+// by WorkflowExportTests. Covers: enabled-state transitions,
+// result-to-status formatting, picker-cancel/status behavior, no-capture
+// guard, export failures, clipboard failures, concurrent-click protection,
+// and cache interactions.
 
 using System;
 using System.Collections.Generic;

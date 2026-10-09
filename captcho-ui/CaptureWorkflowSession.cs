@@ -1154,7 +1154,7 @@ public sealed class CaptureWorkflowSession<TImage>
                 var first = await RunOffThread(() => _export.SaveDefault(frame, cancellationToken));
                 if (!first.Success)
                 {
-                    return MapFileExportResult(WorkflowExportAction.Save, first, sw);
+                    return MapFileExportResult(WorkflowExportAction.Save, first);
                 }
 
                 _defaultSavedFilePath = first.DestinationPath;
@@ -1166,7 +1166,7 @@ public sealed class CaptureWorkflowSession<TImage>
                 _export.SaveTo(frame, _defaultSavedFilePath, cancellationToken));
             if (!repeat.Success)
             {
-                return MapFileExportResult(WorkflowExportAction.Save, repeat, sw);
+                return MapFileExportResult(WorkflowExportAction.Save, repeat);
             }
 
             _lastSavedFilePath = _defaultSavedFilePath;
@@ -1216,7 +1216,7 @@ public sealed class CaptureWorkflowSession<TImage>
             var save = await RunOffThread(() => _export.SaveTo(frame, chosenPath!, cancellationToken));
             if (!save.Success)
             {
-                return MapFileExportResult(WorkflowExportAction.SaveAs, save, sw);
+                return MapFileExportResult(WorkflowExportAction.SaveAs, save);
             }
 
             _lastSavedFilePath = save.DestinationPath;
@@ -1314,8 +1314,7 @@ public sealed class CaptureWorkflowSession<TImage>
 
     private static WorkflowExportResult MapFileExportResult(
         WorkflowExportAction action,
-        ExportResult save,
-        Stopwatch sw)
+        ExportResult save)
     {
         if (save.Phase == ExportPhase.Cancelled)
         {
