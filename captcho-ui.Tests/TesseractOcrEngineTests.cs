@@ -11,8 +11,7 @@
 // tessdata when the native runtime is present.
 
 using System;
-using System.Collections.Generic;
-using System.Linq;
+using System.IO;
 using System.Threading.Tasks;
 using captcho.Capture;
 using captcho.UI;
@@ -114,6 +113,43 @@ public class TesseractTessdataLocatorTests : IDisposable
         Assert.Equal(
             Path.Combine(_tempDir, "tessdata"),
             TesseractOcrEngine.LocateTessdata(_tempDir));
+    }
+}
+
+// ── Native engine-init failure ──────────────────────────────────────────
+
+public class TesseractNativeLoadFailureTests : IDisposable
+{
+    private readonly string _tempDir;
+
+    public TesseractNativeLoadFailureTests()
+    {
+        _tempDir = Path.Combine(Path.GetTempPath(), $"captchoTessFail_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_tempDir);
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_tempDir, true); } catch { }
+    }
+
+    [Fact]
+    public async Task CorruptLanguageData_FailsAtNativeInitInsteadOfThrowing()
+    {
+        // A tessdata directory with corrupt traineddata models the
+        // native-load failure path: the wrapper's engine construction
+        // throws, which the adapter converts to the retryable Failed
+        // outcome — never an exception, and the Frame stays retryable.
+        var tessdata = Path.Combine(_tempDir, "tessdata");
+        Directory.CreateDirectory(tessdata);
+        File.WriteAllText(Path.Combine(tessdata, "eng.traineddata"), "this is not trained data");
+
+        var engine = new TesseractOcrEngine(tessdata);
+
+        var result = await engine.RecognizeAsync(ExportTestHelpers.CreateTestBitmap(4, 4), "en-US");
+
+        Assert.Equal(OcrOutcome.Failed, result.Outcome);
+        Assert.False(string.IsNullOrWhiteSpace(result.Error));
     }
 }
 

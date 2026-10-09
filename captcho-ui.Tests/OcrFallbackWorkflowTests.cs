@@ -12,7 +12,6 @@ using System.Threading.Tasks;
 using captcho.Capture;
 using captcho.UI;
 using Xunit;
-
 namespace captcho.UI.Tests;
 
 public class OcrFallbackWorkflowTests

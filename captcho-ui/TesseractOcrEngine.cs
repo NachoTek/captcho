@@ -70,10 +70,10 @@ public sealed class TesseractOcrEngine : IOcrEngine
 
     /// <summary>
     /// Creates the engine over the packaged tessdata, located beside the
-    /// entry assembly. Lazily constructs the native engine per
+    /// entry assembly. The native Tesseract engine is constructed per
     /// recognition (mirroring WindowsOcrEngine, which recreates the WinRT
-    /// engine per call) so a changed tessdata directory is picked up
-    /// without restarting the app.
+    /// engine per call); the tessdata directory itself is resolved once,
+    /// here.
     /// </summary>
     public TesseractOcrEngine()
         : this(LocateTessdata(AppContext.BaseDirectory))
@@ -141,32 +141,23 @@ public sealed class TesseractOcrEngine : IOcrEngine
 
         var tag = languageTag.Trim();
 
-        // Exact Tesseract code (eng) matches directly, canonicalized to the
-        // packaged file name's casing.
-        if (TesseractDisplayNames.TryGetValue(tag, out _))
-            return TesseractDisplayNames.Keys.FirstOrDefault(
-                key => string.Equals(key, tag, StringComparison.OrdinalIgnoreCase))!;
-
-        // Advertised BCP-47 tag (en-US) maps to its packaged code.
-        var exact = CodeForBcp47(tag);
-        if (exact is not null)
-            return exact;
+        // Exact Tesseract code (eng) or advertised BCP-47 tag (en-US)
+        // matches directly, canonicalized to the packaged casing.
+        foreach (var (code, bcp47) in TesseractCodeToBcp47)
+        {
+            if (string.Equals(code, tag, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(bcp47, tag, StringComparison.OrdinalIgnoreCase))
+                return code;
+        }
 
         // Primary subtag: "de" → "deu"; "en-GB" → "eng".
         return CodeForPrimary(tag.Split('-')[0]);
     }
 
     /// <summary>
-    /// The packaged Tesseract code whose advertised BCP-47 tag matches, or
-    /// null when the tag is not one of the packaged canonical forms.
-    /// </summary>
-    private static string? CodeForBcp47(string tag) =>
-        TesseractCodeToBcp47.FirstOrDefault(pair => string.Equals(pair.Value, tag, StringComparison.OrdinalIgnoreCase)).Key;
-
-    /// <summary>
     /// The packaged Tesseract code for an ISO 639-1 primary subtag, or
-    /// null when no packaged language matches (ISO 639-2/3 codes like
-    /// "deu" also match their Tesseract code directly here).
+    /// null when no packaged language matches. The result is the packaged
+    /// file's code in its canonical casing.
     /// </summary>
     private static string? CodeForPrimary(string primary)
     {
@@ -177,8 +168,9 @@ public sealed class TesseractOcrEngine : IOcrEngine
         }
 
         // Bare Tesseract code (deu) or 639-2/B variants (ger, fre) map
-        // through the display-name keys.
-        return TesseractDisplayNames.ContainsKey(primary) ? primary : null;
+        // through the display-name keys, canonicalized to the key's casing.
+        return TesseractDisplayNames.Keys.FirstOrDefault(
+            key => string.Equals(key, primary, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
