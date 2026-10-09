@@ -232,12 +232,10 @@ internal sealed class GlobalHotkeyTabSettings : EditableTabSession
     /// </summary>
     internal static string DisplayName(HotkeyBinding binding)
     {
-        const int MOD_ALT = 0x0001;
-        const int MOD_CONTROL = 0x0002;
         var parts = new List<string>();
         if ((binding.Modifiers & GlobalHotkeyBindingDefaults.MOD_WIN) != 0) parts.Add("Win");
-        if ((binding.Modifiers & MOD_CONTROL) != 0) parts.Add("Ctrl");
-        if ((binding.Modifiers & MOD_ALT) != 0) parts.Add("Alt");
+        if ((binding.Modifiers & GlobalHotkeyBindingDefaults.MOD_CONTROL) != 0) parts.Add("Ctrl");
+        if ((binding.Modifiers & GlobalHotkeyBindingDefaults.MOD_ALT) != 0) parts.Add("Alt");
         if ((binding.Modifiers & GlobalHotkeyBindingDefaults.MOD_SHIFT) != 0) parts.Add("Shift");
         parts.Add(VirtualKeyName(binding.VirtualKey));
         return string.Join(" + ", parts);

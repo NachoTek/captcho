@@ -228,6 +228,22 @@ public class GlobalHotkeyAllModesRemapTests
             registrar.RegisterCalls.Select(c => c.id).OrderBy(x => x).ToArray());
     }
 
+    [Fact]
+    public void Reconcile_NewRowFailingRegistration_RecordsSanitizedFailureForThatRowOnly()
+    {
+        var registrar = new FakeGlobalHotkeyRegistrar();
+        registrar.SetFailingIds(GlobalHotkeyRouteMap.IdAltPrintScreen);
+        var manager = new GlobalHotkeyManager(registrar);
+
+        var results = manager.Reconcile(IntPtr.Zero, AppSettings.WithDefaults());
+
+        Assert.Equal(6, results.Count);
+        var failure = results.Single(r => !r.Succeeded);
+        Assert.Equal(GlobalHotkeyRouteMap.IdAltPrintScreen, failure.Spec.Id);
+        Assert.Equal("RegisterHotKey", failure.Phase);
+        Assert.NotEmpty(failure.Error);
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────
 
     private static GlobalHotkeyTabSettings NewTab(AppSettings source)
