@@ -220,6 +220,7 @@ public sealed partial class MainWindow : Window
             () => _settings.EffectiveAnnotationSettings.ToToolState(),
             new WindowsOcrEngine(),
             () => _settings.OcrLanguageTag,
+            new ZxingQrScanner(),
             new WorkflowExportAdapter(_settings, new WindowsClipboardAdapter()),
             new FileSavePickerDialogAdapter(
                 () => _hwnd != IntPtr.Zero ? _hwnd : WinRT.Interop.WindowNative.GetWindowHandle(this),
@@ -844,6 +845,7 @@ public sealed partial class MainWindow : Window
                 StatusText.Text = FormatDeliveredStatus(result);
                 _hasCapture = true;
                 RecognizeTextButton.IsEnabled = true;
+                ScanQrButton.IsEnabled = true;
                 CopyPathButton.IsEnabled = _workflowSession.HasSavedFile;
                 break;
 
@@ -1063,6 +1065,7 @@ public sealed partial class MainWindow : Window
         SelectedMonitorButton.IsEnabled = enabled;
         SelectedWindowButton.IsEnabled = enabled;
         RecognizeTextButton.IsEnabled = enabled && _hasCapture;
+        ScanQrButton.IsEnabled = enabled && _hasCapture;
     }
 
     /// <summary>
@@ -1093,6 +1096,7 @@ public sealed partial class MainWindow : Window
             StatusText.Text = $"{result.Mode} — {result.Dimensions}";
             _hasCapture = true;
             RecognizeTextButton.IsEnabled = true;
+            ScanQrButton.IsEnabled = true;
 
             var frame = _captureService.LastCapturedBitmap;
             if (frame is not null)
@@ -1300,6 +1304,120 @@ public sealed partial class MainWindow : Window
         {
             // Dialog presentation failure is non-fatal; the status bar still
             // carries the recognition summary.
+        }
+    }
+
+    // ── Scan QR ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Handles "Scan QR" click — routes the Scan QR Trigger through the
+    /// production workflow session. The session scans the in-memory Frame it
+    /// already owns; no file is written and every retryable outcome preserves
+    /// the Frame. The WinUI layer stays a thin event/presentation adapter: it
+    /// disables controls during the scan, then presents the distinct outcomes
+    /// (decoded values in a selectable dialog, no-code as status, retryable
+    /// errors as status).
+    /// </summary>
+    private async void ScanQr_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isOperationRunning)
+        {
+            StatusText.Text = "A capture is already in progress.";
+            return;
+        }
+
+        if (!_hasCapture)
+        {
+            StatusText.Text = QrStatusFormatter.FormatNoFrame();
+            return;
+        }
+
+        EnterExportState();
+        StatusText.Text = "Scanning for QR codes…";
+
+        try
+        {
+            var result = await _workflowSession.ScanQrAsync();
+            ApplyQrResult(result);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"QR scanning failed: {SanitizeException(ex)}";
+        }
+        finally
+        {
+            ExitExportState();
+        }
+    }
+
+    /// <summary>
+    /// Presents a distinct QR outcome: found opens a selectable values dialog
+    /// (every decoded value included), no-code is a user-visible status, and
+    /// every retryable condition surfaces its error without clearing the
+    /// captured Frame.
+    /// </summary>
+    private void ApplyQrResult(QrScanResult result)
+    {
+        switch (result.Outcome)
+        {
+            case QrOutcome.Found:
+                StatusText.Text = QrStatusFormatter.FormatFound(result);
+                ShowQrValuesDialog(result.Values);
+                break;
+
+            case QrOutcome.NotFound:
+                StatusText.Text = QrStatusFormatter.FormatNotFound();
+                break;
+
+            case QrOutcome.NoFrame:
+                // The session owns no Frame (e.g., the only capture so far
+                // ran through a legacy route). Status-only: the legacy
+                // capture cache and its export buttons stay untouched.
+                StatusText.Text = result.Error ?? QrStatusFormatter.FormatNoFrame();
+                break;
+
+            case QrOutcome.Failed:
+            case QrOutcome.OperationInProgress:
+            default:
+                StatusText.Text = result.Error ?? "QR scanning failed. Try again.";
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Shows the decoded QR values in a small selectable dialog so the user
+    /// can read and copy them. Presentation-only — the workflow owns the
+    /// outcome.
+    /// </summary>
+    private void ShowQrValuesDialog(IReadOnlyList<string> values)
+    {
+        try
+        {
+            var dialog = new ContentDialog
+            {
+                Title = values.Count == 1 ? "QR Code" : $"QR Codes ({values.Count})",
+                Content = new ScrollViewer
+                {
+                    Content = new TextBlock
+                    {
+                        Text = string.Join(Environment.NewLine, values),
+                        IsTextSelectionEnabled = true,
+                        TextWrapping = TextWrapping.Wrap,
+                        MaxWidth = 560,
+                        MaxHeight = 360,
+                    },
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                },
+                CloseButtonText = "Close",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = Content.XamlRoot,
+            };
+            _ = dialog.ShowAsync();
+        }
+        catch
+        {
+            // Dialog presentation failure is non-fatal; the status bar still
+            // carries the scan summary.
         }
     }
 

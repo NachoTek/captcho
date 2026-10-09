@@ -15,15 +15,18 @@ using captcho.Capture;
 namespace captcho.UI;
 
 /// <summary>
-/// Read-only content for the Export tab, sourced from <see cref="ExportTabSettings"/>.
-/// Carried through the view so the code-behind binds one object.
+/// Editable content for the Export tab, sourced from
+/// <see cref="ExportTabSettings"/>. Carries the working format, JPEG quality,
+/// the format-derived extension (display only), the quality control's
+/// availability (false for PNG), and the inline quality validation error.
+/// The code-behind binds these to the format ComboBox and quality slider.
 /// </summary>
 public sealed record ExportTabContent(
-    string Heading,
-    string FormatName,
+    ExportImageFormat Format,
+    int JpegQuality,
+    bool JpegQualityAvailable,
     string FileExtension,
-    string FormatDescription,
-    string PlannedFormatsNote);
+    string? JpegQualityError);
 
 /// <summary>
 /// Read-only content for the Interface tab, sourced from <see cref="InterfaceTabSettings"/>.
@@ -96,8 +99,10 @@ public sealed record SettingsView(
     // ── Behavior tab (editable) ──
     BehaviorTabContent Behavior,
 
-    // ── Read-only tabs ──
+    // ── Export tab (editable) ──
     ExportTabContent Export,
+
+    // ── Read-only tabs ──
     InterfaceTabContent Interface,
 
     // ── Composed gating across all editable tabs ──

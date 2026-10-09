@@ -28,6 +28,8 @@ public enum SettingsField
     CaptureOptions,
     /// <summary>The <see cref="AppSettings.AnnotationSettings"/> field.</summary>
     AnnotationSettings,
+    /// <summary>The <see cref="AppSettings.ExportSettings"/> field.</summary>
+    ExportSettings,
     /// <summary>The <see cref="AppSettings.LaunchBehavior"/> field.</summary>
     LaunchBehavior,
 }
@@ -139,6 +141,16 @@ public sealed class AppSettings
     [JsonPropertyName("annotationSettings")]
     public AnnotationSettings AnnotationSettings { get; set; } = AnnotationSettings.WithDefaults();
 
+    /// <summary>
+    /// Persisted export format (PNG or JPEG) and JPEG quality (issue #45).
+    /// Older settings files written before this field shipped load with the
+    /// PNG defaults through the property initializer and
+    /// <see cref="EffectiveExportSettings"/> — a safe upgrade, never a load
+    /// failure.
+    /// </summary>
+    [JsonPropertyName("exportSettings")]
+    public ExportSettings ExportSettings { get; set; } = ExportSettings.WithDefaults();
+
     /// <summary>How long confirmed Selection geometry is retained.</summary>
     public RememberSelectionLifetime RememberSelection { get; set; } = RememberSelectionLifetime.Never;
 
@@ -215,6 +227,7 @@ public sealed class AppSettings
         FilenameTemplate = ExportDefaults.DefaultFilenameTemplate,
         CaptureOptions = CaptureOptions.WithDefaults(),
         AnnotationSettings = AnnotationSettings.WithDefaults(),
+        ExportSettings = ExportSettings.WithDefaults(),
         RememberSelection = RememberSelectionLifetime.Never,
         RememberedSelection = null,
         AnnotationEnabled = true,
@@ -259,6 +272,18 @@ public sealed class AppSettings
     [JsonIgnore]
     public AnnotationSettings EffectiveAnnotationSettings =>
         (AnnotationSettings ?? AnnotationSettings.WithDefaults()).Normalized();
+
+    /// <summary>
+    /// Resolves safe export format settings for runtime use: falls back to
+    /// PNG defaults when the backing field is null (defensive — hand-edited
+    /// settings files) and reconciles out-of-range quality through
+    /// <see cref="ExportSettings.Normalized"/>. This is the value the Export
+    /// workflow reads when writing a Frame; there is no path where it observes
+    /// an out-of-range quality.
+    /// </summary>
+    [JsonIgnore]
+    public ExportSettings EffectiveExportSettings =>
+        (ExportSettings ?? ExportSettings.WithDefaults()).Normalized();
 
     /// <summary>
     /// Resolves the automatic Export settings for runtime use, falling back to
@@ -417,6 +442,19 @@ public sealed class AppSettings
                 "Launch behavior must use a supported action, and a configured launch must select a Capture Mode."));
         }
 
+        // ExportSettings: format must be a defined ExportImageFormat and JPEG
+        // quality must lie in the inclusive 0–100 range. Blocks Apply/OK so an
+        // invalid Configuration is rejected atomically rather than persisted.
+        if (ExportSettings is null
+            || !Enum.IsDefined(ExportSettings.Format)
+            || ExportSettings.JpegQuality < ExportSettings.MinimumJpegQuality
+            || ExportSettings.JpegQuality > ExportSettings.MaximumJpegQuality)
+        {
+            issues.Add(new SettingsIssue(
+                SettingsField.ExportSettings,
+                "Export format must be PNG or JPEG, and JPEG quality must be from 0 through 100."));
+        }
+
         return issues;
     }
 
@@ -439,6 +477,7 @@ public sealed class AppSettings
             : new Dictionary<GlobalHotkeyRoute, HotkeyBinding>(GlobalHotkeyBindings),
         CaptureOptions = EffectiveCaptureOptions,
         AnnotationSettings = EffectiveAnnotationSettings,
+        ExportSettings = EffectiveExportSettings,
         RememberSelection = EffectiveRememberSelection,
         RememberedSelection = EffectiveRememberSelection == RememberSelectionLifetime.Always
             ? RememberedSelection?.Normalized()
