@@ -63,6 +63,18 @@ internal sealed class BehaviorTabSettings : EditableTabSession
     public void EditAutoCopyPath(bool value) =>
         Working.AutomaticExport = Working.EffectiveAutomaticExport with { AutoCopyPath = value };
 
+    // ── Working editable state: exit after delivery ────────────────────
+
+    /// <summary>
+    /// Whether captcho exits automatically after a confirmed Capture's
+    /// delivery completes (issue #54).
+    /// </summary>
+    public bool ExitAfterDelivery => Working.ExitAfterDelivery;
+
+    /// <summary>Sets the working exit-after-delivery toggle from user input.</summary>
+    public void EditExitAfterDelivery(bool value) =>
+        Working.ExitAfterDelivery = value;
+
     // ── Working editable state: launch behavior ────────────────────────
 
     /// <summary>The working launch action.</summary>
@@ -122,11 +134,13 @@ internal sealed class BehaviorTabSettings : EditableTabSession
         SliceIssues().FirstOrDefault(i => i.Field == SettingsField.LaunchBehavior)?.Message;
 
     /// <summary>
-    /// True when any working Behavior value — an automatic delivery toggle or
-    /// the launch behavior — differs from its baseline.
+    /// True when any working Behavior value — an automatic delivery toggle,
+    /// the exit-after-delivery toggle, or the launch behavior — differs from
+    /// its baseline.
     /// </summary>
     public override bool IsDirty =>
         Working.EffectiveAutomaticExport != Baseline.EffectiveAutomaticExport
+        || Working.ExitAfterDelivery != Baseline.ExitAfterDelivery
         || Working.EffectiveLaunchBehavior != Baseline.EffectiveLaunchBehavior;
 
     // ── Behavior slice: merge, defaults ─────────────────────────────────
@@ -141,14 +155,16 @@ internal sealed class BehaviorTabSettings : EditableTabSession
     {
         ArgumentNullException.ThrowIfNull(target);
         target.AutomaticExport = Working.EffectiveAutomaticExport;
+        target.ExitAfterDelivery = Working.ExitAfterDelivery;
         target.LaunchBehavior = Working.EffectiveLaunchBehavior;
     }
 
     /// <summary>
-    /// Restores this tab's slice to the defaults — disabled automatic Export
-    /// and the Do-nothing launch behavior — read from each model's
-    /// WithDefaults (the single default source shared by every collaborator).
-    /// Only this tab's slice is touched; the baseline is left untouched by
+    /// Restores this tab's slice to the defaults — disabled automatic
+    /// Export, the never-exit exit behavior, and the Do-nothing launch
+    /// behavior — read from each model's WithDefaults (the single default
+    /// source shared by every collaborator). Only this tab's slice is
+    /// touched; the baseline is left untouched by
     /// <see cref="EditableTabSession.Reset"/>, so Reset alone never persists
     /// and a later Cancel still reverts to the settings that existed before
     /// Reset.
@@ -156,6 +172,7 @@ internal sealed class BehaviorTabSettings : EditableTabSession
     protected override void ApplyDefaults(AppSettings working)
     {
         working.AutomaticExport = AutomaticExportSettings.WithDefaults();
+        working.ExitAfterDelivery = false;
         working.LaunchBehavior = LaunchBehaviorSettings.WithDefaults();
     }
 }

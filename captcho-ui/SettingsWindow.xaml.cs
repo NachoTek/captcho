@@ -421,6 +421,14 @@ public sealed partial class SettingsWindow : Window
         EditBehavior(() => _session.EditAutomaticCopyPath(AutoCopyPathToggle.IsOn));
 
     /// <summary>
+    /// Routes an exit-after-delivery toggle change into the session and
+    /// rebinds. Suppressed while <see cref="ApplyView"/> is programmatically
+    /// setting toggle state.
+    /// </summary>
+    private void ExitAfterDeliveryToggle_Toggled(object sender, RoutedEventArgs e) =>
+        EditBehavior(() => _session.EditExitAfterDelivery(ExitAfterDeliveryToggle.IsOn));
+
+    /// <summary>
     /// Shared shape for a Behavior-tab toggle edit: suppressed while
     /// <see cref="ApplyView"/> is programmatically setting toggle state,
     /// routes the edit through the session, and rebinds from the returned
@@ -577,6 +585,7 @@ public sealed partial class SettingsWindow : Window
             AutoSaveToggle.IsOn = view.Behavior.AutoSave;
             AutoCopyFrameToggle.IsOn = view.Behavior.AutoCopyFrame;
             AutoCopyPathToggle.IsOn = view.Behavior.AutoCopyPath;
+            ExitAfterDeliveryToggle.IsOn = view.Behavior.ExitAfterDelivery;
             LaunchActionCombo.SelectedIndex = (int)view.Behavior.LaunchAction;
             // The configured mode combo is enabled only for the Configured
             // Capture Mode action; a null selection (no mode chosen yet)
