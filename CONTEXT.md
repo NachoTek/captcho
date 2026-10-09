@@ -76,7 +76,7 @@ _Avoid_: Desktop bounds, screen area, combined display
 ### User Interface
 
 **Settings**:
-User-facing preferences configurable through the UI — hotkeys, export behavior, Annotation defaults and toggles, theme.
+User-facing preferences configurable through the UI — hotkeys, export behavior, Annotation defaults and toggles, theme, and launch behavior (what captcho does on startup: Do nothing, Last Capture Mode, or a configured Capture Mode).
 _Avoid_: Preferences, options, config
 
 **Configuration**:

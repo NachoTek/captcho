@@ -53,7 +53,7 @@ public class LaunchBehaviorTabSettingsTests
         var tab = new BehaviorTabSettings(AppSettings.WithDefaults());
 
         // Configure a mode first so switching to Configured keeps it.
-        tab.EditLaunchBehavior(CaptureMode.FullDesktop);
+        tab.EditLaunchConfiguredMode(CaptureMode.FullDesktop);
         tab.EditLaunchAction(LaunchAction.ConfiguredCaptureMode);
         tab.EditLaunchAction(action);
 
@@ -66,14 +66,14 @@ public class LaunchBehaviorTabSettingsTests
     [InlineData(CaptureMode.SelectedWindow)]
     [InlineData(CaptureMode.SelectedMonitor)]
     [InlineData(CaptureMode.Selection)]
-    public void EditLaunchBehavior_UpdatesWorkingConfiguredMode(CaptureMode mode)
+    public void EditLaunchConfiguredMode_UpdatesWorkingConfiguredMode(CaptureMode mode)
     {
         var tab = new BehaviorTabSettings(AppSettings.WithDefaults());
 
         // The configured mode is only exposed for the Configured action, so
         // the edit flow selects that action first (as the UI does).
         tab.EditLaunchAction(LaunchAction.ConfiguredCaptureMode);
-        tab.EditLaunchBehavior(mode);
+        tab.EditLaunchConfiguredMode(mode);
 
         Assert.Equal(mode, tab.LaunchConfiguredMode);
     }
@@ -84,7 +84,7 @@ public class LaunchBehaviorTabSettingsTests
         // The configured mode is only meaningful for the Configured Capture
         // Mode action; Do nothing / Last Capture Mode carry no mode.
         var tab = new BehaviorTabSettings(AppSettings.WithDefaults());
-        tab.EditLaunchBehavior(CaptureMode.Selection);
+        tab.EditLaunchConfiguredMode(CaptureMode.Selection);
 
         tab.EditLaunchAction(LaunchAction.DoNothing);
 
@@ -118,7 +118,7 @@ public class LaunchBehaviorTabSettingsTests
         };
         var tab = new BehaviorTabSettings(source);
 
-        tab.EditLaunchBehavior(CaptureMode.ActiveWindow);
+        tab.EditLaunchConfiguredMode(CaptureMode.ActiveWindow);
         tab.EditLaunchAction(LaunchAction.ConfiguredCaptureMode);
 
         Assert.Equal(@"D:\Preserved", source.SaveLocation);
@@ -151,7 +151,7 @@ public class LaunchBehaviorTabSettingsTests
         {
             LaunchBehavior = new LaunchBehaviorSettings(LaunchAction.ConfiguredCaptureMode, CaptureMode.FullDesktop),
         });
-        tab.EditLaunchBehavior(CaptureMode.Selection);
+        tab.EditLaunchConfiguredMode(CaptureMode.Selection);
 
         Assert.True(tab.IsDirty);
     }
@@ -164,7 +164,7 @@ public class LaunchBehaviorTabSettingsTests
             LaunchBehavior = new LaunchBehaviorSettings(LaunchAction.DoNothing, null),
         };
         var tab = new BehaviorTabSettings(source);
-        tab.EditLaunchBehavior(CaptureMode.Selection);
+        tab.EditLaunchConfiguredMode(CaptureMode.Selection);
         tab.EditLaunchAction(LaunchAction.ConfiguredCaptureMode);
 
         tab.Cancel();
@@ -215,7 +215,7 @@ public class LaunchBehaviorTabSettingsTests
         // which no tab owns — survives untouched.
         var tab = new BehaviorTabSettings(AppSettings.WithDefaults());
         tab.EditLaunchAction(LaunchAction.ConfiguredCaptureMode);
-        tab.EditLaunchBehavior(CaptureMode.SelectedWindow);
+        tab.EditLaunchConfiguredMode(CaptureMode.SelectedWindow);
 
         var target = new AppSettings
         {
@@ -267,7 +267,7 @@ public class LaunchBehaviorTabSettingsTests
     {
         var tab = new BehaviorTabSettings(AppSettings.WithDefaults());
         tab.EditLaunchAction(LaunchAction.ConfiguredCaptureMode);
-        tab.EditLaunchBehavior(mode);
+        tab.EditLaunchConfiguredMode(mode);
 
         Assert.True(tab.IsValid);
         Assert.Null(tab.FirstError);
@@ -291,7 +291,7 @@ public class LaunchBehaviorSessionTests
     }
 
     [Fact]
-    public void EditLaunchBehavior_UpdatesWorkingSelectionWithoutMutatingRuntime()
+    public void EditLaunchConfiguredMode_UpdatesWorkingSelectionWithoutMutatingRuntime()
     {
         var runtime = AppSettings.WithDefaults();
         var session = NewSession(runtime);
@@ -310,7 +310,7 @@ public class LaunchBehaviorSessionTests
         var session = new SettingsSession(runtime, recorder, new NoOpGlobalHotkeys());
 
         session.EditLaunchAction(LaunchAction.ConfiguredCaptureMode);
-        session.EditLaunchBehavior(CaptureMode.SelectedMonitor);
+        session.EditLaunchConfiguredMode(CaptureMode.SelectedMonitor);
         var view = session.Apply();
 
         Assert.Equal(1, recorder.SaveCount);

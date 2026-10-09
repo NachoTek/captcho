@@ -261,9 +261,9 @@ public sealed class SettingsSession
     /// Sets the working configured Capture Mode for the Configured Capture
     /// Mode launch action and returns the refreshed view.
     /// </summary>
-    public SettingsView EditLaunchBehavior(CaptureMode mode)
+    public SettingsView EditLaunchConfiguredMode(CaptureMode mode)
     {
-        _behavior.EditLaunchBehavior(mode);
+        _behavior.EditLaunchConfiguredMode(mode);
         return ClearTransientStatus();
     }
 

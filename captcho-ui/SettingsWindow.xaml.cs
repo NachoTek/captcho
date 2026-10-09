@@ -435,7 +435,7 @@ public sealed partial class SettingsWindow : Window
             return;
 
         var mode = (CaptureMode)LaunchModeCombo.SelectedIndex;
-        ApplyView(_session.EditLaunchBehavior(mode));
+        ApplyView(_session.EditLaunchConfiguredMode(mode));
     }
 
     // ── Command buttons ─────────────────────────────────────────────────

@@ -94,10 +94,11 @@ internal sealed class BehaviorTabSettings : EditableTabSession
     /// <summary>
     /// Sets the working configured Capture Mode for the
     /// <see cref="captcho.Capture.LaunchAction.ConfiguredCaptureMode"/> launch
-    /// action. The selection is retained in the working snapshot even while
-    /// another action is chosen, so switching back and forth does not lose it.
+    /// action. The selection is stored under the current action; switching to
+    /// another action (via <see cref="EditLaunchAction"/>) clears it, so a
+    /// later switch back to Configured requires choosing a mode again.
     /// </summary>
-    public void EditLaunchBehavior(CaptureMode mode)
+    public void EditLaunchConfiguredMode(CaptureMode mode)
     {
         if (!Enum.IsDefined(mode))
             return;
