@@ -272,15 +272,7 @@ public class WindowsOcrEngineTests
         if (engine.GetAvailableLanguages().Count == 0)
             return; // Skipped: no OCR language packs available headless.
 
-        ContiguousBitmap? frame = null;
-        try
-        {
-            frame = ExportTestHelpers.CreateTestBitmap(64, 64);
-        }
-        catch
-        {
-            return; // Skipped: helper unavailable.
-        }
+        var frame = ExportTestHelpers.CreateTestBitmap(64, 64);
 
         var result = await TryWinRT(() => engine.RecognizeAsync(frame, null));
         if (result is null)

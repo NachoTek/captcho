@@ -230,13 +230,9 @@ public static class OcrLanguageResolver
         if (string.IsNullOrWhiteSpace(selectedTag))
             return OcrLanguageResolution.Default;
 
-        foreach (var language in installed)
-        {
-            if (string.Equals(language.Tag, selectedTag, StringComparison.OrdinalIgnoreCase))
-                return OcrLanguageResolution.Resolved;
-        }
-
-        return OcrLanguageResolution.Unsupported;
+        return FindInstalled(selectedTag, installed) is not null
+            ? OcrLanguageResolution.Resolved
+            : OcrLanguageResolution.Unsupported;
     }
 
     /// <summary>
@@ -250,13 +246,21 @@ public static class OcrLanguageResolver
     {
         ArgumentNullException.ThrowIfNull(installed);
 
-        if (string.IsNullOrWhiteSpace(selectedTag))
-            return null;
+        return string.IsNullOrWhiteSpace(selectedTag)
+            ? null
+            : FindInstalled(selectedTag, installed)?.Tag;
+    }
 
+    /// <summary>
+    /// The installed language whose tag matches the selection
+    /// (ordinal-ignore-case), or null when none matches.
+    /// </summary>
+    private static OcrLanguage? FindInstalled(string? selectedTag, IReadOnlyList<OcrLanguage> installed)
+    {
         foreach (var language in installed)
         {
             if (string.Equals(language.Tag, selectedTag, StringComparison.OrdinalIgnoreCase))
-                return language.Tag;
+                return language;
         }
 
         return null;

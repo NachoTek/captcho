@@ -1091,7 +1091,13 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private async void RecognizeText_Click(object sender, RoutedEventArgs e)
     {
-        if (_isOperationRunning || !_hasCapture)
+        if (_isOperationRunning)
+        {
+            StatusText.Text = "A capture is already in progress.";
+            return;
+        }
+
+        if (!_hasCapture)
         {
             StatusText.Text = OcrStatusFormatter.FormatNoFrame();
             return;
