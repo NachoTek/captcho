@@ -116,7 +116,7 @@ public sealed partial class SettingsWindow : Window
         {
             contentRoot.AddHandler(
                 UIElement.KeyDownEvent,
-                ContentRoot_PreviewKeyDown,
+                new Microsoft.UI.Xaml.Input.KeyEventHandler(ContentRoot_PreviewKeyDown),
                 true);
         }
 
