@@ -87,6 +87,10 @@ public sealed class GlobalHotkeyManager
 {
     private readonly IGlobalHotkeyRegistrar _registrar;
     private readonly HashSet<int> _registeredIds = new();
+    // The combination each registered id was last registered with, so a
+    // settings-driven reconcile can detect a remapped binding and re-register
+    // exactly that Global Hotkey (unregister old combination, register new).
+    private readonly Dictionary<int, (int modifiers, int virtualKey)> _registeredBindings = new();
     private readonly List<GlobalHotkeyRegistrationResult> _registrationResults = new();
     private IntPtr _hwnd;
     private bool _disposed;
@@ -165,6 +169,7 @@ public sealed class GlobalHotkeyManager
             if (success)
             {
                 _registeredIds.Add(spec.Id);
+                _registeredBindings[spec.Id] = (spec.Modifiers, spec.VirtualKey);
             }
         }
 
@@ -191,7 +196,38 @@ public sealed class GlobalHotkeyManager
             }
         }
         _registeredIds.Clear();
+        _registeredBindings.Clear();
         _registrationResults.Clear();
+    }
+
+    /// <summary>
+    /// Reconciles runtime registration against the given settings: exactly the
+    /// enabled Global Hotkeys are registered, each with its effective binding
+    /// from Configuration (recorded combination or legacy default). A Global
+    /// Hotkey whose combination changed since it was registered is unregistered
+    /// and re-registered with the new combination; unchanged Global Hotkeys are
+    /// left alone. Idempotent and partial-failure tolerant — a Global Hotkey
+    /// that fails to register is recorded with sanitized conflict details while
+    /// the remaining enabled Global Hotkeys stay registered.
+    /// </summary>
+    /// <param name="hwnd">Window handle to receive WM_HOTKEY messages.</param>
+    /// <param name="settings">The persisted settings driving the reconcile.</param>
+    /// <returns>
+    /// Registration results for the enabled Global Hotkeys only. Disabled Global Hotkeys are
+    /// intentionally omitted so callers can distinguish "off by choice" from
+    /// "attempted but failed".
+    /// </returns>
+    public IReadOnlyList<GlobalHotkeyRegistrationResult> Reconcile(IntPtr hwnd, AppSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var specs = GlobalHotkeyRouteMap.SpecsFor(settings);
+        var enabled = new HashSet<int>();
+        foreach (var spec in specs)
+        {
+            if (settings.IsGlobalHotkeyEnabled(spec.Route))
+                enabled.Add(spec.Id);
+        }
+        return Reconcile(hwnd, enabled, specs);
     }
 
     /// <summary>
@@ -210,18 +246,40 @@ public sealed class GlobalHotkeyManager
     /// "attempted but failed".
     /// </returns>
     public IReadOnlyList<GlobalHotkeyRegistrationResult> Reconcile(IntPtr hwnd, IReadOnlySet<int> enabledIds)
+        => Reconcile(hwnd, enabledIds, GlobalHotkeyRouteMap.AllSpecs);
+
+    private IReadOnlyList<GlobalHotkeyRegistrationResult> Reconcile(
+        IntPtr hwnd,
+        IReadOnlySet<int> enabledIds,
+        IReadOnlyList<GlobalHotkeySpec> specs)
     {
         ArgumentNullException.ThrowIfNull(enabledIds);
         _hwnd = hwnd;
 
-        // Unregister anything currently registered that is no longer enabled.
+        // Unregister anything currently registered that is no longer enabled, or
+        // whose binding changed (remapped): the old combination must be released
+        // before the new one can be registered.
         foreach (var id in _registeredIds.ToArray())
         {
-            if (enabledIds.Contains(id))
+            if (!enabledIds.Contains(id))
+            {
+                try { _registrar.UnregisterHotKey(hwnd, id); }
+                catch { /* unregister failure is non-fatal */ }
+                _registeredIds.Remove(id);
+                _registeredBindings.Remove(id);
                 continue;
-            try { _registrar.UnregisterHotKey(hwnd, id); }
-            catch { /* unregister failure is non-fatal */ }
-            _registeredIds.Remove(id);
+            }
+
+            var currentSpec = FirstSpecWithId(specs, id);
+            if (currentSpec is not null
+                && _registeredBindings.TryGetValue(id, out var registered)
+                && (registered.modifiers != currentSpec.Modifiers || registered.virtualKey != currentSpec.VirtualKey))
+            {
+                try { _registrar.UnregisterHotKey(hwnd, id); }
+                catch { /* unregister failure is non-fatal */ }
+                _registeredIds.Remove(id);
+                _registeredBindings.Remove(id);
+            }
         }
 
         // Drop any stale results for now-disabled ids.
@@ -233,7 +291,7 @@ public sealed class GlobalHotkeyManager
 
         var results = new List<GlobalHotkeyRegistrationResult>();
 
-        foreach (var spec in GlobalHotkeyRouteMap.AllSpecs)
+        foreach (var spec in specs)
         {
             if (!enabledIds.Contains(spec.Id))
                 continue;
@@ -270,12 +328,25 @@ public sealed class GlobalHotkeyManager
 
             results.Add(result);
             if (success)
+            {
                 _registeredIds.Add(spec.Id);
+                _registeredBindings[spec.Id] = (spec.Modifiers, spec.VirtualKey);
+            }
         }
 
         _registrationResults.Clear();
         _registrationResults.AddRange(results);
         return RegistrationResults;
+    }
+
+    private static GlobalHotkeySpec? FirstSpecWithId(IReadOnlyList<GlobalHotkeySpec> specs, int id)
+    {
+        foreach (var spec in specs)
+        {
+            if (spec.Id == id)
+                return spec;
+        }
+        return null;
     }
 
     /// <summary>
