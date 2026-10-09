@@ -453,6 +453,142 @@ public class AnnotationGateTests
         Assert.Equal(255, result.Frame.Pixels[2 * 4 + 3]);
     }
 
+    // spec #40: text annotations
+
+    [Fact]
+    public async Task Workflow_ConfirmedTextFrameCarriesTheComposedPixels()
+    {
+        var source = BitmapBufferConverter.StripPadding(
+            new byte[120 * 48 * 4],
+            120,
+            48,
+            480);
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            script.SetTool(AnnotationTool.Text);
+            script.BeginText(new AnnotationPoint(10, 24));
+            script.EditInProgressText("HH");
+            script.CommitStroke();
+        });
+        var session = Session(
+            SuccessfulCapture(source),
+            new FakePreviewAdapter(),
+            annotation,
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Text, new AnnotationColor(255, 0, 0), 4));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        int colored = 0;
+        for (int i = 0; i < result.Frame!.Pixels.Length; i += 4)
+            if (result.Frame.Pixels[i + 2] == 255 && result.Frame.Pixels[i + 1] == 0 && result.Frame.Pixels[i] == 0)
+                colored++;
+        Assert.True(colored > 10, $"Expected composed text pixels, found {colored}.");
+        // The source Frame was never mutated by composition.
+        for (int i = 0; i < source.Pixels.Length; i += 4)
+        {
+            Assert.Equal(0, source.Pixels[i]);
+            Assert.Equal(0, source.Pixels[i + 1]);
+            Assert.Equal(0, source.Pixels[i + 2]);
+        }
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Workflow_EmptyOrCancelledText_AddsNoDocumentEntry(string content)
+    {
+        var source = Frame6x1();
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            script.SetTool(AnnotationTool.Text);
+            script.BeginText(new AnnotationPoint(0, 0));
+            script.EditInProgressText(content);
+            Assert.False(script.CommitStroke());
+            Assert.Empty(script.Document.Strokes);
+        });
+        var session = Session(
+            SuccessfulCapture(source),
+            new FakePreviewAdapter(),
+            annotation,
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Text, new AnnotationColor(255, 0, 0), 4));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        Assert.Equal(source.Pixels, result.Frame!.Pixels);
+    }
+
+    [Fact]
+    public async Task Workflow_CancelledTextEntry_LeavesNoResidueAndCommittedPixelsStay()
+    {
+        var source = Frame6x1();
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            script.SetTool(AnnotationTool.Text);
+            script.BeginText(new AnnotationPoint(0, 0));
+            script.EditInProgressText("Hi");
+            script.CancelStroke();
+            Assert.False(script.CanUndo);
+            // A committed pen stroke after the cancelled text still composes.
+            script.SetTool(AnnotationTool.Pen);
+            script.BeginStroke(new AnnotationPoint(2, 0));
+            script.CommitStroke();
+        });
+        var session = Session(
+            SuccessfulCapture(source),
+            new FakePreviewAdapter(),
+            annotation,
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Pen, new AnnotationColor(255, 0, 0), 1));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        Assert.Equal(255, result.Frame!.Pixels[2 * 4 + 2]);
+    }
+
+    [Fact]
+    public async Task Workflow_TextUndoRedoRoundTrip_ComposesExpectedPixels()
+    {
+        var source = BitmapBufferConverter.StripPadding(
+            new byte[120 * 48 * 4],
+            120,
+            48,
+            480);
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            script.SetTool(AnnotationTool.Text);
+            script.BeginText(new AnnotationPoint(10, 24));
+            script.EditInProgressText("HH");
+            script.CommitStroke();
+            script.Undo();
+            script.Redo();
+        });
+        var session = Session(
+            SuccessfulCapture(source),
+            new FakePreviewAdapter(),
+            annotation,
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Text, new AnnotationColor(255, 0, 0), 4));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        int colored = 0;
+        for (int i = 0; i < result.Frame!.Pixels.Length; i += 4)
+            if (result.Frame.Pixels[i + 2] == 255 && result.Frame.Pixels[i + 1] == 0 && result.Frame.Pixels[i] == 0)
+                colored++;
+        Assert.True(colored > 10, $"Expected restored text pixels, found {colored}.");
+        Assert.NotEqual(source.Pixels, result.Frame.Pixels);
+    }
+
     private static ContiguousBitmap Frame6x1() =>
         BitmapBufferConverter.StripPadding(
             new byte[6 * 4],

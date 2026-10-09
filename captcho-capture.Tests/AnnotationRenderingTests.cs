@@ -270,6 +270,92 @@ public class AnnotationRenderingTests
         Assert.Equal(new AnnotationColor(255, 0, 0), Pixel(rendered, 4, 2));
     }
 
+    // spec #40: text annotations
+
+    [Fact]
+    public void Render_Text_DrawsLegibleGlyphsAtTheAnchorWithoutMutatingTheSource()
+    {
+        var source = SolidFrame(120, 48, new AnnotationColor(255, 255, 255));
+        var stroke = new AnnotationStroke(
+            AnnotationTool.Text,
+            new AnnotationColor(255, 0, 0),
+            4,
+            new[] { new AnnotationPoint(10, 24) },
+            text: "HH");
+
+        var rendered = AnnotationRenderer.Render(source, new[] { stroke });
+
+        // Single-bit glyph rendering paints fully opaque text-color pixels only.
+        int colored = 0;
+        for (int y = 2; y < 46; y++)
+            for (int x = 6; x < 80; x++)
+                if (Pixel(rendered, x, y).Equals(new AnnotationColor(255, 0, 0)))
+                    colored++;
+        Assert.True(colored > 10, $"Expected legible glyph pixels, found {colored}.");
+
+        // Nothing outside a generous text region changes.
+        Assert.Equal(new AnnotationColor(255, 255, 255), Pixel(rendered, 0, 0));
+        Assert.Equal(new AnnotationColor(255, 255, 255), Pixel(rendered, 119, 47));
+        Assert.Equal(new AnnotationColor(255, 255, 255), Pixel(rendered, 10, 0));
+        Assert.Equal(new AnnotationColor(255, 255, 255), Pixel(rendered, 100, 24));
+
+        // The source Frame is never mutated.
+        Assert.Equal(new AnnotationColor(255, 255, 255), Pixel(source, 10, 24));
+        for (int i = 0; i < source.Pixels.Length; i += 4)
+            if (source.Pixels[i] != 255 || source.Pixels[i + 1] != 255 || source.Pixels[i + 2] != 255)
+                Assert.Fail("Source frame pixels were mutated.");
+    }
+
+    [Fact]
+    public void Render_Text_UsesTheSharedStrokeWidthAsItsSize()
+    {
+        var source = SolidFrame(120, 48, new AnnotationColor(255, 255, 255));
+        var small = new AnnotationStroke(
+            AnnotationTool.Text,
+            new AnnotationColor(255, 0, 0),
+            1,
+            new[] { new AnnotationPoint(10, 24) },
+            text: "HH");
+        var large = new AnnotationStroke(
+            AnnotationTool.Text,
+            new AnnotationColor(255, 0, 0),
+            8,
+            new[] { new AnnotationPoint(10, 24) },
+            text: "HH");
+
+        var smallRendered = AnnotationRenderer.Render(source, new[] { small });
+        var largeRendered = AnnotationRenderer.Render(source, new[] { large });
+
+        int CountColored(ContiguousBitmap bitmap)
+        {
+            int colored = 0;
+            for (int y = 0; y < bitmap.Height; y++)
+                for (int x = 0; x < bitmap.Width; x++)
+                    if (Pixel(bitmap, x, y).Equals(new AnnotationColor(255, 0, 0)))
+                        colored++;
+            return colored;
+        }
+
+        // A larger shared width renders a larger font, so more glyph pixels appear.
+        Assert.True(CountColored(largeRendered) > CountColored(smallRendered));
+    }
+
+    [Fact]
+    public void Render_Text_WhitespaceOnlyOrNullDrawsNothing()
+    {
+        var source = SolidFrame(120, 48, new AnnotationColor(255, 255, 255));
+        var whitespace = new AnnotationStroke(
+            AnnotationTool.Text,
+            new AnnotationColor(255, 0, 0),
+            4,
+            new[] { new AnnotationPoint(10, 24) },
+            text: "   ");
+
+        var rendered = AnnotationRenderer.Render(source, new[] { whitespace });
+
+        Assert.Equal(source.Pixels, rendered.Pixels);
+    }
+
     private static ContiguousBitmap SolidFrame(int width, int height, AnnotationColor color)
     {
         var pixels = new byte[width * height * 4];

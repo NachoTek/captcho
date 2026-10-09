@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Drawing.Text;
 using System.Linq;
+using System.Runtime.InteropServices;
 
 namespace captcho.Capture;
 
@@ -12,6 +16,7 @@ public enum AnnotationTool
     Ellipse,
     Line,
     Arrow,
+    Text,
 }
 
 /// <summary>
@@ -105,12 +110,20 @@ public sealed class AnnotationStroke
     public AnnotationFillStyle Fill { get; }
     public IReadOnlyList<AnnotationPoint> Points { get; }
 
+    /// <summary>
+    /// Text content for the text tool; null for stroke/shape tools. A text
+    /// entry carries its anchor in <see cref="Points"/>[0] and never more than
+    /// one point.
+    /// </summary>
+    public string? Text { get; }
+
     public AnnotationStroke(
         AnnotationTool tool,
         AnnotationColor color,
         int strokeWidth,
         IReadOnlyList<AnnotationPoint> points,
-        AnnotationFillStyle fill = AnnotationFillStyle.None)
+        AnnotationFillStyle fill = AnnotationFillStyle.None,
+        string? text = null)
     {
         if (!Enum.IsDefined(tool))
             throw new ArgumentOutOfRangeException(nameof(tool));
@@ -123,6 +136,7 @@ public sealed class AnnotationStroke
         StrokeWidth = strokeWidth;
         Fill = Enum.IsDefined(fill) ? fill : AnnotationFillStyle.None;
         Points = Array.AsReadOnly(points.ToArray());
+        Text = tool == AnnotationTool.Text ? text ?? string.Empty : null;
     }
 }
 
@@ -137,6 +151,7 @@ public sealed class AnnotationDocument
     private readonly List<AnnotationStroke> _redoStrokes = new();
     private List<AnnotationPoint>? _inProgressPoints;
     private AnnotationToolState? _inProgressState;
+    private string? _inProgressText;
 
     public AnnotationDocument(ContiguousBitmap sourceFrame) =>
         SourceFrame = sourceFrame ?? throw new ArgumentNullException(nameof(sourceFrame));
@@ -146,20 +161,46 @@ public sealed class AnnotationDocument
     public bool CanUndo => _strokes.Count > 0 && _inProgressPoints is null;
     public bool CanRedo => _redoStrokes.Count > 0 && _inProgressPoints is null;
 
-    public AnnotationStroke? InProgressStroke =>
-        _inProgressPoints is null || _inProgressState is null
-            ? null
-            : new AnnotationStroke(
+    /// <summary>Content of the in-progress text entry; null when no text entry is open.</summary>
+    public string? InProgressText => _inProgressText;
+
+    public AnnotationStroke? InProgressStroke
+    {
+        get
+        {
+            if (_inProgressPoints is null || _inProgressState is null)
+                return null;
+            // An empty or whitespace text entry has nothing legible to show yet.
+            if (_inProgressText is not null)
+                return string.IsNullOrWhiteSpace(_inProgressText)
+                    ? null
+                    : new AnnotationStroke(
+                        AnnotationTool.Text,
+                        _inProgressState.PenColor,
+                        _inProgressState.StrokeWidth,
+                        _inProgressPoints,
+                        text: _inProgressText);
+            return new AnnotationStroke(
                 _inProgressState.Tool,
                 _inProgressState.PenColor,
                 _inProgressState.StrokeWidth,
                 _inProgressPoints,
                 EffectiveFill(_inProgressState));
+        }
+    }
 
     public void BeginStroke(AnnotationPoint point, AnnotationToolState toolState)
     {
         ArgumentNullException.ThrowIfNull(toolState);
         var state = toolState.Normalized();
+
+        // The text tool places an editable entry at the click rather than a
+        // point stroke; its content arrives through EditInProgressText.
+        if (state.Tool == AnnotationTool.Text)
+        {
+            BeginText(point, toolState);
+            return;
+        }
 
         _inProgressState = state;
         // Shapes drag from a fixed anchor to a moving current point, so they begin with
@@ -168,11 +209,36 @@ public sealed class AnnotationDocument
         _inProgressPoints = state.Tool == AnnotationTool.Pen
             ? new List<AnnotationPoint> { point }
             : new List<AnnotationPoint> { point, point };
+        _inProgressText = null;
     }
 
     /// <summary>
-    /// The fill style a stroke actually carries: tools that cannot fill never snapshot a
-    /// lingering toolbar fill selection, so every stroke records only applicable style.
+    /// Opens a text entry at <paramref name="point"/> snapshotting the shared
+    /// style. The entry renders and commits like any other annotation; empty or
+    /// cancelled input never becomes a document entry.
+    /// </summary>
+    public void BeginText(AnnotationPoint point, AnnotationToolState toolState)
+    {
+        ArgumentNullException.ThrowIfNull(toolState);
+        var state = toolState.Normalized();
+
+        _inProgressState = state;
+        _inProgressPoints = new List<AnnotationPoint> { point };
+        _inProgressText = string.Empty;
+    }
+
+    /// <summary>Replaces the content of the open text entry; a no-op otherwise.</summary>
+    public void EditInProgressText(string content)
+    {
+        if (_inProgressText is null)
+            return;
+
+        _inProgressText = content ?? string.Empty;
+    }
+
+    /// <summary>
+    /// The fill style a stroke actually carries: tools that cannot fill never snapshot
+    /// a lingering toolbar fill selection, so every stroke records only applicable style.
     /// </summary>
     private static AnnotationFillStyle EffectiveFill(AnnotationToolState state) =>
         state.ToolSupportsFill ? state.Fill : AnnotationFillStyle.None;
@@ -187,11 +253,11 @@ public sealed class AnnotationDocument
 
     /// <summary>
     /// Replaces the current drag point of an in-progress shape. The first point stays
-    /// fixed as the anchor; pen strokes ignore this and keep every appended point.
+    /// fixed as the anchor; pen strokes and text entries ignore this.
     /// </summary>
     public void UpdateStrokePoint(AnnotationPoint point)
     {
-        if (_inProgressPoints is null || _inProgressState?.Tool == AnnotationTool.Pen)
+        if (_inProgressPoints is null || _inProgressState?.Tool is AnnotationTool.Pen or AnnotationTool.Text)
             return;
 
         _inProgressPoints[^1] = point;
@@ -201,7 +267,12 @@ public sealed class AnnotationDocument
     {
         var stroke = InProgressStroke;
         if (stroke is null)
+        {
+            // An empty or whitespace text entry commits nothing and ends the entry.
+            if (_inProgressText is not null)
+                CancelStroke();
             return false;
+        }
 
         _strokes.Add(stroke);
         if (_redoStrokes.Count > 0)
@@ -214,6 +285,7 @@ public sealed class AnnotationDocument
     {
         _inProgressPoints = null;
         _inProgressState = null;
+        _inProgressText = null;
     }
 
     /// <summary>Undo removes the latest committed stroke and updates the composed Frame on the next render.</summary>
@@ -282,6 +354,8 @@ public sealed class AnnotationSession
     public void BeginStroke(AnnotationPoint point) => Document.BeginStroke(point, ToolState);
     public void AppendStrokePoint(AnnotationPoint point) => Document.AppendStrokePoint(point);
     public void UpdateStrokePoint(AnnotationPoint point) => Document.UpdateStrokePoint(point);
+    public void BeginText(AnnotationPoint point) => Document.BeginText(point, ToolState);
+    public void EditInProgressText(string content) => Document.EditInProgressText(content);
     public bool CommitStroke() => Document.CommitStroke();
     public void CancelStroke() => Document.CancelStroke();
     public bool Undo() => Document.Undo();
@@ -291,9 +365,19 @@ public sealed class AnnotationSession
     public ContiguousBitmap Render() => Document.Render();
 }
 
-/// <summary>Software compositor for BGRA Frames and pen strokes.</summary>
+/// <summary>Software compositor for BGRA Frames and annotation strokes.</summary>
 public static class AnnotationRenderer
 {
+    /// <summary>Minimum text em size in pixels regardless of shared stroke width.</summary>
+    public const float MinimumTextEmSize = 12f;
+
+    /// <summary>
+    /// Maps the shared stroke width onto the text em size (in pixels) so text
+    /// participates in the same width control as the stroke tools.
+    /// </summary>
+    public static float TextEmSize(int strokeWidth) =>
+        Math.Max(MinimumTextEmSize, strokeWidth * 6f);
+
     public static ContiguousBitmap Render(
         ContiguousBitmap sourceFrame,
         IEnumerable<AnnotationStroke> committedStrokes,
@@ -333,6 +417,9 @@ public static class AnnotationRenderer
                 break;
             case AnnotationTool.Arrow:
                 DrawArrowStroke(width, height, stride, pixels, stroke);
+                break;
+            case AnnotationTool.Text:
+                DrawTextStroke(width, height, stride, pixels, stroke);
                 break;
         }
     }
@@ -409,6 +496,60 @@ public static class AnnotationRenderer
          Math.Min(first.Y, last.Y),
          Math.Max(first.X, last.X),
          Math.Max(first.Y, last.Y));
+
+    /// <summary>
+    /// Rasterizes a text entry with GDI+ onto a scratch ARGB surface and blends
+    /// the covered pixels into the Frame buffer. Rendering reads the glyph alpha
+    /// so anti-aliased edges composite with the annotation color.
+    /// </summary>
+    private static void DrawTextStroke(int width, int height, int stride, byte[] pixels, AnnotationStroke stroke)
+    {
+        if (string.IsNullOrWhiteSpace(stroke.Text))
+            return;
+
+        var anchor = stroke.Points[0];
+        float emSize = TextEmSize(stroke.StrokeWidth);
+        using var font = new Font(FontFamily.GenericSansSerif, emSize, FontStyle.Bold, GraphicsUnit.Pixel);
+        using var scratch = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+        var bounds = new Rectangle(0, 0, width, height);
+        using (var graphics = Graphics.FromImage(scratch))
+        {
+            graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            // The anchor is the top-left of the text; content grows right and down
+            // from the point where the user clicked.
+            graphics.DrawString(stroke.Text, font, Brushes.White, new PointF(anchor.X, anchor.Y));
+        }
+
+        var data = scratch.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            var scan = new byte[Math.Abs(data.Stride) * height];
+            Marshal.Copy(data.Scan0, scan, 0, scan.Length);
+            for (int y = 0; y < height; y++)
+            {
+                int scanRow = y * data.Stride;
+                int pixelRow = y * stride;
+                for (int x = 0; x < width; x++)
+                {
+                    int alpha = scan[scanRow + x * 4 + 3];
+                    if (alpha == 0)
+                        continue;
+                    BlendPixel(
+                        pixels,
+                        pixelRow + x * 4,
+                        new AnnotationColor(
+                            stroke.Color.Red,
+                            stroke.Color.Green,
+                            stroke.Color.Blue,
+                            (byte)Math.Clamp((int)Math.Round(stroke.Color.Alpha * alpha / 255.0), 0, 255)));
+                }
+            }
+        }
+        finally
+        {
+            scratch.UnlockBits(data);
+        }
+    }
 
     private static void FillBoundsIfFilled(
         int width,
