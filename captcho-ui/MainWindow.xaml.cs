@@ -769,12 +769,12 @@ public sealed partial class MainWindow : Window
                 {
                     PreviewImage.Source = result.PreviewImage;
                 }
-            StatusText.Text = $"{result.Mode} — {result.Dimensions}";
-            _hasCapture = true;
-            RecognizeTextButton.IsEnabled = true;
-            ScanQrButton.IsEnabled = true;
-            CopyPathButton.IsEnabled = _workflowSession.HasSavedFile;
-            break;
+                StatusText.Text = $"{result.Mode} — {result.Dimensions}";
+                _hasCapture = true;
+                RecognizeTextButton.IsEnabled = true;
+                ScanQrButton.IsEnabled = true;
+                CopyPathButton.IsEnabled = _workflowSession.HasSavedFile;
+                break;
 
             case WorkflowStatus.OperationInProgress:
                 StatusText.Text = result.Error ?? "A capture is already in progress.";

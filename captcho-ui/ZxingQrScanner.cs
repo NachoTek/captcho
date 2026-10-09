@@ -33,7 +33,9 @@ public sealed class ZxingQrScanner : IQrScanner
     /// is returned in decode order; a Frame with no QR code yields the
     /// distinct no-code outcome. Never throws for expected failures —
     /// malformed input and decode failures surface as
-    /// <see cref="QrOutcome.Failed"/> with a retryable message.
+    /// <see cref="QrOutcome.Failed"/> with a retryable message. The
+    /// synchronous CPU-bound decode runs on the thread pool so the workflow
+    /// caller's (UI) thread stays free.
     /// </summary>
     public Task<QrScanResult> ScanAsync(ContiguousBitmap frame)
     {

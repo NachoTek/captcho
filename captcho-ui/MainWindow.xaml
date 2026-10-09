@@ -118,27 +118,28 @@ Layout:
                     VerticalAlignment="Stretch"
                     Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
 
-            <!-- Recognize Text: disabled until a capture succeeds -->
-            <Button x:Name="RecognizeTextButton"
-                    Grid.Column="8"
-                    Content="Recognize Text"
-                    MinWidth="120" MinHeight="40"
-                    Margin="8,0,8,0"
-                    IsEnabled="False"
-                    Click="RecognizeText_Click"
-                    CornerRadius="6"
-                    ToolTipService.ToolTip="Recognize text in the captured Frame with Windows OCR"/>
+            <!-- Recognize Text + Scan QR: disabled until a capture succeeds -->
+            <StackPanel Grid.Column="8" Orientation="Horizontal">
+                <Button x:Name="RecognizeTextButton"
+                        Content="Recognize Text"
+                        MinWidth="120" MinHeight="40"
+                        Margin="8,0,0,0"
+                        VerticalAlignment="Stretch"
+                        IsEnabled="False"
+                        Click="RecognizeText_Click"
+                        CornerRadius="6"
+                        ToolTipService.ToolTip="Recognize text in the captured Frame with Windows OCR"/>
 
-            <!-- Scan QR: disabled until a capture succeeds -->
-            <Button x:Name="ScanQrButton"
-                    Grid.Column="8"
-                    Content="Scan QR"
-                    MinWidth="90" MinHeight="40"
-                    Margin="8,0,8,0"
-                    IsEnabled="False"
-                    Click="ScanQr_Click"
-                    CornerRadius="6"
-                    ToolTipService.ToolTip="Scan QR codes in the captured Frame"/>
+                <Button x:Name="ScanQrButton"
+                        Content="Scan QR"
+                        MinWidth="90" MinHeight="40"
+                        Margin="8,0,8,0"
+                        VerticalAlignment="Stretch"
+                        IsEnabled="False"
+                        Click="ScanQr_Click"
+                        CornerRadius="6"
+                        ToolTipService.ToolTip="Scan QR codes in the captured Frame"/>
+            </StackPanel>
 
             <!-- Menu separator -->
             <Border x:Name="MenuSeparator"

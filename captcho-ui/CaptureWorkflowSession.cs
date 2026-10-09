@@ -1075,7 +1075,10 @@ public sealed class CaptureWorkflowSession<TImage>
             if (frame is null)
                 return QrScanResult.NoFrame();
 
-            return await RunOffThread(() => _qrScanner.ScanAsync(frame)).Unwrap();
+            // The scanner offloads its synchronous CPU-bound decode
+            // internally (mirroring the capture adapters' thread-pool
+            // contract), so the session awaits it directly.
+            return await _qrScanner.ScanAsync(frame);
         }
         catch (Exception ex)
         {
