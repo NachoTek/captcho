@@ -1411,7 +1411,6 @@ public sealed class CaptureWorkflowSession<TImage>
                 Action = action,
                 Status = WorkflowExportStatus.Succeeded,
                 FilePath = path,
-                ByteCount = delivery.HandlerCount,
                 ElapsedMs = sw.Elapsed.TotalMilliseconds,
             };
         }

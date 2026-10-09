@@ -387,9 +387,6 @@ public sealed class WindowsDeliveryAdapter : IWorkflowDeliveryAdapter
         if (!File.Exists(filePath))
             return DeliveryResult.Fail("The saved file no longer exists on disk.", 0);
 
-        if (cancellationToken.IsCancellationRequested)
-            return DeliveryResult.Cancelled(0);
-
         var sw = Stopwatch.StartNew();
         try
         {

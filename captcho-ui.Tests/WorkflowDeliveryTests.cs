@@ -606,12 +606,21 @@ public class WindowsDeliveryAdapterTests
     [Fact]
     public async Task Share_MissingWindowHandle_FailsWithoutShowingShareUI()
     {
-        var adapter = new WindowsDeliveryAdapter(() => IntPtr.Zero);
+        var path = Path.Combine(Path.GetTempPath(), $"captcho_share_{Guid.NewGuid():N}.png");
+        try
+        {
+            await File.WriteAllBytesAsync(path, new byte[] { 0x89, 0x50, 0x4E, 0x47 });
+            var adapter = new WindowsDeliveryAdapter(() => IntPtr.Zero);
 
-        var result = await adapter.ShareAsync(@"C:\captcho\default.png", CancellationToken.None);
+            var result = await adapter.ShareAsync(path, CancellationToken.None);
 
-        Assert.False(result.Success);
-        Assert.Equal(DeliveryStatus.Failed, result.Status);
-        Assert.NotNull(result.Error);
+            Assert.False(result.Success);
+            Assert.Equal(DeliveryStatus.Failed, result.Status);
+            Assert.NotNull(result.Error);
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { }
+        }
     }
 }
