@@ -3,11 +3,12 @@
 // Runs the native capture off the UI thread, converts to a WriteableBitmap,
 // and returns structured results with timing for all phases.
 // Surfaces errors as user-readable strings rather than exceptions.
-// Caches the last successful ContiguousBitmap for export workflows.
+// Caches the last successful ContiguousBitmap so the legacy capture routes
+// can hand their Frame to the runtime Workflow Session, which owns the
+// Export actions (Save, Save As, Copy Frame, Copy Path) since issue #44.
 
 using System;
 using System.Diagnostics;
-using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI.Xaml.Media.Imaging;
 using captcho.Capture;
@@ -40,7 +41,9 @@ public sealed class CapturePreviewResult
 /// <summary>
 /// Orchestrates the capture→convert→display pipeline asynchronously.
 /// Does not touch UI elements directly — returns a result for the caller to apply.
-/// Caches the last successful ContiguousBitmap for save/copy export workflows.
+/// Caches the last successful ContiguousBitmap; the runtime Workflow Session
+/// adopts it (AdoptFrame) so the session remains the single Frame owner for
+/// the Export actions.
 /// </summary>
 public sealed class CapturePreviewService
 {
@@ -48,88 +51,12 @@ public sealed class CapturePreviewService
 
     /// <summary>
     /// The most recent successfully captured bitmap, or null if no capture has succeeded.
-    /// Thread-safe read via volatile. Written from two paths today: by the legacy
-    /// capture routes (under CaptureRaw/BuildDisplayResultAsync on this class) and by
-    /// <see cref="SetLastCapture"/>, which the runtime Workflow Session uses to share
-    /// its owned Frame with the legacy export path until Export migrates behind the
-    /// session. The export migration will remove the second writer.
+    /// Thread-safe read via volatile. Written by the legacy capture routes
+    /// (under CaptureRaw/BuildDisplayResultAsync on this class); MainWindow
+    /// hands it to <see cref="CaptureWorkflowSession{TImage}.AdoptFrame"/> so
+    /// the workflow session owns the Frame for Export.
     /// </summary>
     public ContiguousBitmap? LastCapturedBitmap => _lastCapturedBitmap;
-
-    /// <summary>
-    /// Saves the last captured bitmap to a specific file path as PNG.
-    /// Returns a structured ExportResult — never throws for expected failures.
-    /// </summary>
-    /// <param name="destinationPath">Full file path for the output PNG.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>ExportResult with success/failure, diagnostics, and timing.</returns>
-    public ExportResult SaveLastCaptureToFileAsync(string destinationPath,
-        CancellationToken cancellationToken = default)
-    {
-        var bitmap = _lastCapturedBitmap;
-        if (bitmap == null)
-        {
-            return ExportResult.Fail(ExportPhase.Validation,
-                "No capture to export",
-                TimeSpan.Zero);
-        }
-
-        return PngExportService.SaveAsPng(bitmap, destinationPath, cancellationToken);
-    }
-
-    /// <summary>
-    /// Saves the last captured bitmap using the provided settings for directory and template.
-    /// Resolves filename collisions automatically.
-    /// Returns a structured ExportResult — never throws for expected failures.
-    /// </summary>
-    /// <param name="settings">Application settings providing save location and filename template.</param>
-    /// <param name="title">Optional title for the filename template.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>ExportResult with success/failure, diagnostics, and timing.</returns>
-    public ExportResult SaveLastCaptureWithSettingsAsync(
-        AppSettings settings,
-        string? title = null,
-        CancellationToken cancellationToken = default)
-    {
-        var bitmap = _lastCapturedBitmap;
-        if (bitmap == null)
-        {
-            return ExportResult.Fail(ExportPhase.Validation,
-                "No capture to export",
-                TimeSpan.Zero);
-        }
-
-        string path = ExportFilenameTemplate.GetExportPath(settings, DateTime.Now, title);
-        path = ExportFilenameTemplate.ResolveCollision(path);
-
-        return PngExportService.SaveAsPng(bitmap, path, cancellationToken);
-    }
-
-    /// <summary>
-    /// Saves the last captured bitmap to the default location using the standard template.
-    /// Resolves filename collisions automatically.
-    /// Returns a structured ExportResult — never throws for expected failures.
-    /// </summary>
-    /// <param name="title">Optional title for the filename template.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>ExportResult with success/failure, diagnostics, and timing.</returns>
-    public ExportResult SaveLastCaptureToDefaultLocationAsync(
-        string? title = null,
-        CancellationToken cancellationToken = default)
-    {
-        return SaveLastCaptureWithSettingsAsync(AppSettings.WithDefaults(), title, cancellationToken);
-    }
-
-    /// <summary>
-    /// Creates a ClipboardExportService wired to this instance's last capture cache.
-    /// </summary>
-    /// <param name="clipboardAdapter">Platform clipboard adapter.</param>
-    /// <returns>A ClipboardExportService that reads from this service's cache.</returns>
-    public ClipboardExportService CreateClipboardExporter(IClipboardAdapter clipboardAdapter)
-    {
-        ArgumentNullException.ThrowIfNull(clipboardAdapter);
-        return new ClipboardExportService(clipboardAdapter, () => _lastCapturedBitmap);
-    }
 
     /// <summary>
     /// Clears the cached last capture. Useful for testing or explicit reset.
@@ -137,16 +64,6 @@ public sealed class CapturePreviewService
     public void ClearLastCapture()
     {
         _lastCapturedBitmap = null;
-    }
-
-    /// <summary>
-    /// Sets the cached last capture to a Frame owned by another component.
-    /// Used by the runtime workflow session to share its owned Frame with the
-    /// existing export path until Export also migrates behind the session.
-    /// </summary>
-    public void SetLastCapture(ContiguousBitmap frame)
-    {
-        _lastCapturedBitmap = frame ?? throw new ArgumentNullException(nameof(frame));
     }
 
     /// <summary>
