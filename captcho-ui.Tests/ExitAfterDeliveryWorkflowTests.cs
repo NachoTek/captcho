@@ -445,6 +445,27 @@ public class ExitAfterDeliveryManualTests
         Assert.True(save.IsSuccess);
         Assert.Equal(0, recorder.Count);
     }
+
+    [Fact]
+    public async Task AdoptedFrame_ManualSave_SatisfiesExit()
+    {
+        // Legacy routes (Current Monitor, Window Under Cursor) adopt their
+        // Frame instead of routing through the session's Capture paths. The
+        // adopted Capture arms the same exit evaluation with no automatic
+        // obligation, so a manual save satisfies the exit identically.
+        var export = new ScriptedExportAdapter();
+        var (session, recorder) = ExitAfterDeliveryHarness.CreateSession(
+            export, AutomaticExportSettings.WithDefaults(), exitAfterDelivery: true);
+
+        session.AdoptFrame(ExportTestHelpers.CreateTestBitmap(8, 4));
+        Assert.Equal(0, recorder.Count);
+
+        var save = await session.SaveAsync();
+
+        Assert.True(save.IsSuccess);
+        Assert.Equal(1, recorder.Count);
+        Assert.Equal(WorkflowExitReason.DeliveryCompleted, recorder.Requests[0]);
+    }
 }
 
 // ── In-progress actions never exit ───────────────────────────────────────

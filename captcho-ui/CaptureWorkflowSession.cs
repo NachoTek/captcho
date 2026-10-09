@@ -1588,12 +1588,17 @@ public sealed class CaptureWorkflowSession<TImage>
     /// Adopts a Frame captured outside the session (the remaining legacy
     /// capture routes) as the session's current exportable Frame, resetting
     /// the saved-file identity. Export actions act on this Frame until the
-    /// next Capture or adoption replaces it.
+    /// next Capture or adoption replaces it. The adopted Capture arms the
+    /// same exit evaluation with no automatic obligation — a legacy route
+    /// runs no configured automatic delivery — so a successful manual
+    /// delivery satisfies the exit exactly like a session Capture with no
+    /// automatic actions enabled.
     /// </summary>
     public void AdoptFrame(ContiguousBitmap frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
         OwnFrame(frame);
+        BeginPendingExit(report: null);
     }
 
     /// <summary>
