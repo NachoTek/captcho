@@ -21,6 +21,8 @@ public class GlobalHotkeyBindingConfigurationTests : IDisposable
     // Legacy Win32 values for the hardcoded pre-remap combinations. Duplicated
     // here on purpose: these tests pin the migration contract to exact values,
     // independent of the production tables.
+    private const int MOD_ALT = 0x0001;
+    private const int MOD_CONTROL = 0x0002;
     private const int MOD_SHIFT = 0x0004;
     private const int MOD_WIN = 0x0008;
     private const int VK_SNAPSHOT = 0x2C;
@@ -70,6 +72,8 @@ public class GlobalHotkeyBindingConfigurationTests : IDisposable
             [GlobalHotkeyRoute.ActiveWindow] = new(MOD_WIN, VK_SNAPSHOT),
             [GlobalHotkeyRoute.FullDesktop] = new(MOD_SHIFT, VK_SNAPSHOT),
             [GlobalHotkeyRoute.RectangularRegion] = new(MOD_WIN | MOD_SHIFT, VK_SNAPSHOT),
+            [GlobalHotkeyRoute.SelectedWindow] = new(MOD_ALT, VK_SNAPSHOT),
+            [GlobalHotkeyRoute.SelectedMonitor] = new(MOD_CONTROL, VK_SNAPSHOT),
         };
 
         foreach (var (route, legacy) in expected)
@@ -117,6 +121,41 @@ public class GlobalHotkeyBindingConfigurationTests : IDisposable
         Assert.True(settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.ActiveWindow));
         Assert.Equal(new HotkeyBinding(MOD_SHIFT, VK_SNAPSHOT),
             settings.EffectiveGlobalHotkeyBinding(GlobalHotkeyRoute.FullDesktop));
+    }
+
+    [Fact]
+    public void Load_PreInteractiveRoutesConfiguration_MigratesEveryRouteToItsLegacyCombination()
+    {
+        // A settings file written before the Selected Window / Selected Monitor
+        // routes existed (issue #52): the four pre-existing routes carry enabled
+        // states, the two new routes are absent. Every enabled route upgrades to
+        // its legacy hardcoded combination; the new routes resolve to their own
+        // legacy combinations and default to enabled only where the map says so.
+        File.WriteAllText(
+            Path.Combine(_tempDir, "settings.json"),
+            """
+            {
+              "hotkeyEnabledStates": { "fullDesktop": false, "selectedWindow": true }
+            }
+            """);
+
+        var result = CreateService().Load();
+
+        Assert.True(result.Success);
+        Assert.False(result.UsedDefaults);
+        var settings = result.Settings;
+        // Disabled route preserved as disabled.
+        Assert.False(settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.FullDesktop));
+        // Enabled routes upgrade to their legacy combinations.
+        Assert.True(settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.SelectedWindow));
+        Assert.Equal(new HotkeyBinding(MOD_ALT, VK_SNAPSHOT),
+            settings.EffectiveGlobalHotkeyBinding(GlobalHotkeyRoute.SelectedWindow));
+        Assert.Equal(new HotkeyBinding(MOD_CONTROL, VK_SNAPSHOT),
+            settings.EffectiveGlobalHotkeyBinding(GlobalHotkeyRoute.SelectedMonitor));
+        // Absent routes stay enabled at their legacy combinations.
+        Assert.True(settings.IsGlobalHotkeyEnabled(GlobalHotkeyRoute.CurrentMonitor));
+        Assert.Equal(new HotkeyBinding(0, VK_SNAPSHOT),
+            settings.EffectiveGlobalHotkeyBinding(GlobalHotkeyRoute.CurrentMonitor));
     }
 
     // ── Round-trip ──────────────────────────────────────────────────────

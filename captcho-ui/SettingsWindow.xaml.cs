@@ -673,8 +673,9 @@ public sealed partial class SettingsWindow : Window
     /// <summary>
     /// Clears and rebuilds the Global Hotkeys tab rows. Toggle switches are populated before
     /// their Toggled handler is attached so the initial value does not fire as an edit.
-    /// The Full Desktop row carries an inline key recorder (issue #51): a Change… button
-    /// enters capture mode and the next key press with modifiers records the combination.
+    /// Every row carries an inline key recorder (issue #52, generalizing the #51 Full
+    /// Desktop tracer bullet): a Change… button enters capture mode and the next key press
+    /// with modifiers records the combination for that row.
     /// </summary>
     private void RebuildGlobalHotkeyRows(IReadOnlyList<GlobalHotkeyRow> rows)
     {
@@ -744,23 +745,22 @@ public sealed partial class SettingsWindow : Window
             Grid.SetColumn(statusText, 1);
             Grid.SetColumn(toggle, 2);
 
-            // Inline recorder for the Full Desktop Global Hotkey only (issue #51 —
-            // the single-hotkey tracer bullet; remaining rows migrate in #52).
-            if (row.Id == GlobalHotkeyRouteMap.IdShiftPrintScreen)
+            // Inline key recorder on every Global Hotkey row (issue #52,
+            // generalizing the #51 Full Desktop tracer bullet): a Change…
+            // button enters capture mode and the next key press with modifiers
+            // records the combination for that row's Capture Mode.
+            var recordButton = new Button
             {
-                var recordButton = new Button
-                {
-                    Content = "Change…",
-                    MinHeight = 36,
-                    CornerRadius = new CornerRadius(6),
-                    Margin = new Thickness(0, 0, 0, 0),
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Tag = row.Id,
-                };
-                recordButton.Click += RecordBindingButton_Click;
-                Grid.SetColumn(recordButton, 3);
-                grid.Children.Add(recordButton);
-            }
+                Content = "Change…",
+                MinHeight = 36,
+                CornerRadius = new CornerRadius(6),
+                Margin = new Thickness(0, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                Tag = row.Id,
+            };
+            recordButton.Click += RecordBindingButton_Click;
+            Grid.SetColumn(recordButton, 3);
+            grid.Children.Add(recordButton);
 
             grid.Children.Add(info);
             grid.Children.Add(statusText);
@@ -778,7 +778,7 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
-    // ── Inline key recorder (Full Desktop row, issue #51) ──────────────
+    // ── Inline key recorder (every row, issues #51/#52) ────────────────
 
     /// <summary>
     /// The Global Hotkey id currently being recorded, or null. While set, the

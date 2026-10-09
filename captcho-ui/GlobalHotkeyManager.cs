@@ -1,7 +1,7 @@
 // GlobalHotkeyManager.cs — Registration/cleanup manager with injectable Win32 registrar abstraction.
 //
 // Provides IGlobalHotkeyRegistrar for testability (fake in tests, P/Invoke in production),
-// and GlobalHotkeyManager which registers all four specs, tracks successful registrations,
+// and GlobalHotkeyManager which registers every spec, tracks successful registrations,
 // unregisters idempotently, and exposes route resolution for WM_HOTKEY dispatch.
 
 using System;
@@ -74,8 +74,8 @@ public sealed class WindowsGlobalHotkeyRegistrar : IGlobalHotkeyRegistrar
 }
 
 /// <summary>
-/// Manages registration and cleanup of all four Global Hotkeys.
-/// Records only successful registrations, unregisters idempotently,
+/// Manages registration and cleanup of all the Global Hotkeys (one per Capture
+/// Mode). Records only successful registrations, unregisters idempotently,
 /// and exposes route resolution for WM_HOTKEY message dispatch.
 ///
 /// Usage:
@@ -104,7 +104,7 @@ public sealed class GlobalHotkeyManager
         _registrationResults.AsReadOnly();
 
     /// <summary>
-    /// Whether all four global hotkeys registered successfully.
+    /// Whether every Global Hotkey registered successfully.
     /// False before RegisterAll is called or if any failed.
     /// </summary>
     public bool AllRegistered =>
@@ -121,14 +121,14 @@ public sealed class GlobalHotkeyManager
     }
 
     /// <summary>
-    /// Registers all four capture Global Hotkeys for the given window handle.
+    /// Registers every capture Global Hotkey for the given window handle.
     /// Records successful registrations for later cleanup.
     /// Partial failure is handled gracefully: successful Global Hotkeys stay registered,
     /// and failures are recorded with sanitized error details for UI display.
     /// Idempotent: calling twice without UnregisterAll is safe — skips already-registered ids.
     /// </summary>
     /// <param name="hwnd">Window handle to receive WM_HOTKEY messages.</param>
-    /// <returns>Registration results for all four specs.</returns>
+    /// <returns>Registration results for all specs.</returns>
     public IReadOnlyList<GlobalHotkeyRegistrationResult> RegisterAll(IntPtr hwnd)
     {
         _hwnd = hwnd;

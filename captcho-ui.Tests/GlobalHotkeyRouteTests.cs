@@ -1,8 +1,9 @@
 // GlobalHotkeyRouteTests.cs — Tests for Global Hotkey route mapping, spec ids, modifiers, and unknown id behavior.
 //
-// Verifies the four Global Hotkey specifications match the slice contract exactly:
-// Print Screen → Current Monitor, Win+Print → Active Window, Shift+Print → Full Desktop,
-// Win+Shift+Print → Rectangular Region. All tests are headless (no Win32/WinUI required).
+// Verifies the six Global Hotkey specifications (one per Capture Mode) match the slice
+// contract exactly: Print Screen → Current Monitor, Win+Print → Active Window, Shift+Print
+// → Full Desktop, Win+Shift+Print → Rectangular Region, Alt+Print → Selected Window,
+// Ctrl+Print → Selected Monitor. All tests are headless (no Win32/WinUI required).
 
 using System;
 using System.Linq;
@@ -16,9 +17,9 @@ public class GlobalHotkeyRouteTests
     // ── Spec count ──────────────────────────────────────────────────────
 
     [Fact]
-    public void AllSpecs_ContainsExactlyFourEntries()
+    public void AllSpecs_ContainsExactlySixEntries()
     {
-        Assert.Equal(4, GlobalHotkeyRouteMap.AllSpecs.Count);
+        Assert.Equal(6, GlobalHotkeyRouteMap.AllSpecs.Count);
     }
 
     // ── Print Screen → Current Monitor ──────────────────────────────────
@@ -69,6 +70,30 @@ public class GlobalHotkeyRouteTests
         Assert.Equal(GlobalHotkeyRouteMap.MOD_WIN | GlobalHotkeyRouteMap.MOD_SHIFT, spec.Modifiers);
     }
 
+    // ── Alt + Print Screen → Selected Window ───────────────────────────
+
+    [Fact]
+    public void AltPrintScreen_MapsToSelectedWindow()
+    {
+        var spec = GlobalHotkeyRouteMap.AllSpecs.First(s => s.Id == GlobalHotkeyRouteMap.IdAltPrintScreen);
+        Assert.Equal(GlobalHotkeyRoute.SelectedWindow, spec.Route);
+        Assert.Equal("Alt + Print Screen", spec.Name);
+        Assert.Equal(GlobalHotkeyRouteMap.VK_SNAPSHOT, spec.VirtualKey);
+        Assert.Equal(GlobalHotkeyRouteMap.MOD_ALT, spec.Modifiers);
+    }
+
+    // ── Ctrl + Print Screen → Selected Monitor ─────────────────────────
+
+    [Fact]
+    public void CtrlPrintScreen_MapsToSelectedMonitor()
+    {
+        var spec = GlobalHotkeyRouteMap.AllSpecs.First(s => s.Id == GlobalHotkeyRouteMap.IdCtrlPrintScreen);
+        Assert.Equal(GlobalHotkeyRoute.SelectedMonitor, spec.Route);
+        Assert.Equal("Ctrl + Print Screen", spec.Name);
+        Assert.Equal(GlobalHotkeyRouteMap.VK_SNAPSHOT, spec.VirtualKey);
+        Assert.Equal(GlobalHotkeyRouteMap.MOD_CONTROL, spec.Modifiers);
+    }
+
     // ── Id uniqueness ───────────────────────────────────────────────────
 
     [Fact]
@@ -94,6 +119,8 @@ public class GlobalHotkeyRouteTests
     [InlineData(GlobalHotkeyRouteMap.IdWinPrintScreen, GlobalHotkeyRoute.ActiveWindow)]
     [InlineData(GlobalHotkeyRouteMap.IdShiftPrintScreen, GlobalHotkeyRoute.FullDesktop)]
     [InlineData(GlobalHotkeyRouteMap.IdWinShiftPrintScreen, GlobalHotkeyRoute.RectangularRegion)]
+    [InlineData(GlobalHotkeyRouteMap.IdAltPrintScreen, GlobalHotkeyRoute.SelectedWindow)]
+    [InlineData(GlobalHotkeyRouteMap.IdCtrlPrintScreen, GlobalHotkeyRoute.SelectedMonitor)]
     public void TryResolveRoute_ReturnsCorrectRoute(int id, GlobalHotkeyRoute expectedRoute)
     {
         Assert.True(GlobalHotkeyRouteMap.TryResolveRoute(id, out var route));
@@ -105,7 +132,7 @@ public class GlobalHotkeyRouteTests
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
-    [InlineData(5)]
+    [InlineData(7)]
     [InlineData(99)]
     [InlineData(int.MaxValue)]
     public void TryResolveRoute_UnknownId_ReturnsFalse(int unknownId)
@@ -127,7 +154,7 @@ public class GlobalHotkeyRouteTests
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
-    [InlineData(5)]
+    [InlineData(7)]
     [InlineData(999)]
     public void FindSpec_UnknownId_ReturnsNull(int unknownId)
     {
@@ -145,13 +172,13 @@ public class GlobalHotkeyRouteTests
         Assert.Equal(0x0008, GlobalHotkeyRouteMap.MOD_WIN);
     }
 
-    // ── Stable ids are 1–4 ──────────────────────────────────────────────
+    // ── Stable ids are 1–6 ──────────────────────────────────────────────
 
     [Fact]
-    public void StableIds_AreOneThroughFour()
+    public void StableIds_AreOneThroughSix()
     {
         var ids = GlobalHotkeyRouteMap.AllSpecs.Select(s => s.Id).OrderBy(x => x).ToList();
-        Assert.Equal(new[] { 1, 2, 3, 4 }, ids);
+        Assert.Equal(new[] { 1, 2, 3, 4, 5, 6 }, ids);
     }
 
     // ── GlobalHotkeyRegistrationResult sanitization ────────────────────────────

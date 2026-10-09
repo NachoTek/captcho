@@ -1,10 +1,11 @@
 // GlobalHotkeyRoute.cs — Pure global hotkey contract: Global Hotkey specs, mapping, and registration results.
 //
-// Defines the four Global Hotkeys with stable Win32 ids, modifier/VK constants, and the
-// capture route (defined in captcho.Capture.GlobalHotkeyRoute) each Global Hotkey triggers.
-// Free of WinUI dependencies so headless xUnit tests can verify the full mapping without a
-// desktop session. The capture route identity itself is owned by the capture/persistence
-// layer so AppSettings never depends on this UI-layer map to interpret persisted state.
+// Defines the six Global Hotkeys (one per Capture Mode) with stable Win32 ids, modifier/VK
+// constants, and the capture route (defined in captcho.Capture.GlobalHotkeyRoute) each
+// Global Hotkey triggers. Free of WinUI dependencies so headless xUnit tests can verify the
+// full mapping without a desktop session. The capture route identity itself is owned by the
+// capture/persistence layer so AppSettings never depends on this UI-layer map to interpret
+// persisted state.
 
 using System;
 using System.Collections.Generic;
@@ -90,6 +91,10 @@ public static class GlobalHotkeyRouteMap
     public const int WM_HOTKEY = 0x0312;
     /// <summary>VK_SNAPSHOT (Print Screen) virtual key code.</summary>
     public const int VK_SNAPSHOT = 0x2C;
+    /// <summary>MOD_ALT modifier flag.</summary>
+    public const int MOD_ALT = 0x0001;
+    /// <summary>MOD_CONTROL modifier flag.</summary>
+    public const int MOD_CONTROL = 0x0002;
     /// <summary>MOD_SHIFT modifier flag.</summary>
     public const int MOD_SHIFT = 0x0004;
     /// <summary>MOD_WIN (Meta/Windows key) modifier flag.</summary>
@@ -105,10 +110,15 @@ public static class GlobalHotkeyRouteMap
     public const int IdShiftPrintScreen = 3;
     /// <summary>Win + Shift + Print Screen → Rectangular Region.</summary>
     public const int IdWinShiftPrintScreen = 4;
+    /// <summary>Alt + Print Screen → Selected Window.</summary>
+    public const int IdAltPrintScreen = 5;
+    /// <summary>Ctrl + Print Screen → Selected Monitor.</summary>
+    public const int IdCtrlPrintScreen = 6;
 
     /// <summary>
-    /// All four Global Hotkey specifications. Stable ids 1–4, all using VK_SNAPSHOT
-    /// with varying modifier combinations.
+    /// All six Global Hotkey specifications — one per Capture Mode. Stable ids
+    /// 1–4 are the legacy Print Screen combinations; ids 5–6 (issue #52) give
+    /// Selected Window and Selected Monitor their own Global Hotkeys.
     /// </summary>
     public static IReadOnlyList<GlobalHotkeySpec> AllSpecs { get; } = Array.AsReadOnly(new[]
     {
@@ -143,6 +153,22 @@ public static class GlobalHotkeyRouteMap
             Modifiers = MOD_WIN | MOD_SHIFT,
             VirtualKey = VK_SNAPSHOT,
             Route = GlobalHotkeyRoute.RectangularRegion,
+        },
+        new GlobalHotkeySpec
+        {
+            Id = IdAltPrintScreen,
+            Name = "Alt + Print Screen",
+            Modifiers = MOD_ALT,
+            VirtualKey = VK_SNAPSHOT,
+            Route = GlobalHotkeyRoute.SelectedWindow,
+        },
+        new GlobalHotkeySpec
+        {
+            Id = IdCtrlPrintScreen,
+            Name = "Ctrl + Print Screen",
+            Modifiers = MOD_CONTROL,
+            VirtualKey = VK_SNAPSHOT,
+            Route = GlobalHotkeyRoute.SelectedMonitor,
         },
     });
 

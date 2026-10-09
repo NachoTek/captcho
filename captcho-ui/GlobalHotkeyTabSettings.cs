@@ -2,16 +2,17 @@
 //
 // Owns the editable per-Global-Hotkey state: a working snapshot of the persisted
 // settings, the display rows (binding, behavior description, registration
-// status) for all four Global Hotkeys, and inline enable/disable editing plus
-// key-combination recording for the Full Desktop row (issue #51; the remaining
-// routes migrate in #52). The shared snapshot/apply/cancel/reset plumbing lives
-// in EditableTabSession (written once); this tab declares only its own Global
-// Hotkeys slice — what to edit, validate, merge via WriteInto, and restore via
-// ApplyDefaults. Registration status is read live from the adapter so rows
-// reflect the latest reconcile driven by the session. Recording detects
-// suspected conflicts against the other rows' working combinations and surfaces
-// them as warnings without rejecting the value; registration failure is shown
-// as a Failed row status after Apply/OK reconciles.
+// status) for all six Global Hotkeys (one per Capture Mode), and inline
+// enable/disable editing plus key-combination recording on every row (issue
+// #52, generalizing the #51 Full Desktop tracer bullet). The shared
+// snapshot/apply/cancel/reset plumbing lives in EditableTabSession (written
+// once); this tab declares only its own Global Hotkeys slice — what to edit,
+// validate, merge via WriteInto, and restore via ApplyDefaults. Registration
+// status is read live from the adapter so rows reflect the latest reconcile
+// driven by the session. Recording detects suspected conflicts against the
+// other rows' working combinations and surfaces them as warnings without
+// rejecting the value; registration failure is shown as a Failed row status
+// after Apply/OK reconciles.
 
 using System;
 using System.Collections.Generic;
@@ -52,7 +53,7 @@ public sealed record GlobalHotkeyRow(
 
 /// <summary>
 /// Pure C# editing seam for the Global Hotkeys settings tab. Holds a working snapshot of
-/// the persisted per-Global-Hotkey enabled states, exposes the four Global Hotkeys with
+/// the persisted per-Global-Hotkey enabled states, exposes the six Global Hotkeys with
 /// their bindings and behavior descriptions, and reflects the current runtime
 /// registration status per global hotkey (read live from the adapter so a reconcile by the
 /// <see cref="SettingsSession"/> is visible without rebuilding the tab). Never
@@ -163,7 +164,7 @@ internal sealed class GlobalHotkeyTabSettings : EditableTabSession
     // ── Display rows ────────────────────────────────────────────────────
 
     /// <summary>
-    /// Builds the display rows for all four Global Hotkeys in stable-id order.
+    /// Builds the display rows for all six Global Hotkeys in stable-id order.
     /// Each row carries the Global Hotkey binding, the capture-mode behavior, the
     /// working enabled state, and the registration status derived live from the
     /// adapter's latest results. A disabled Global Hotkey always reads as Disabled regardless
@@ -218,6 +219,8 @@ internal sealed class GlobalHotkeyTabSettings : EditableTabSession
         GlobalHotkeyRoute.ActiveWindow => "Captures the active (foreground) window.",
         GlobalHotkeyRoute.FullDesktop => "Captures the full virtual desktop across all monitors.",
         GlobalHotkeyRoute.RectangularRegion => "Opens the Selection overlay to draw a region on the screen and capture it.",
+        GlobalHotkeyRoute.SelectedWindow => "Opens the window picker to click a window and capture it.",
+        GlobalHotkeyRoute.SelectedMonitor => "Opens the monitor picker to click a monitor and capture it.",
         _ => string.Empty,
     };
 
@@ -229,12 +232,10 @@ internal sealed class GlobalHotkeyTabSettings : EditableTabSession
     /// </summary>
     internal static string DisplayName(HotkeyBinding binding)
     {
-        const int MOD_ALT = 0x0001;
-        const int MOD_CONTROL = 0x0002;
         var parts = new List<string>();
         if ((binding.Modifiers & GlobalHotkeyBindingDefaults.MOD_WIN) != 0) parts.Add("Win");
-        if ((binding.Modifiers & MOD_CONTROL) != 0) parts.Add("Ctrl");
-        if ((binding.Modifiers & MOD_ALT) != 0) parts.Add("Alt");
+        if ((binding.Modifiers & GlobalHotkeyBindingDefaults.MOD_CONTROL) != 0) parts.Add("Ctrl");
+        if ((binding.Modifiers & GlobalHotkeyBindingDefaults.MOD_ALT) != 0) parts.Add("Alt");
         if ((binding.Modifiers & GlobalHotkeyBindingDefaults.MOD_SHIFT) != 0) parts.Add("Shift");
         parts.Add(VirtualKeyName(binding.VirtualKey));
         return string.Join(" + ", parts);

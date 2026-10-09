@@ -10,9 +10,9 @@ namespace captcho.Capture;
 
 /// <summary>
 /// Capture workflow that a Global Hotkey triggers. Maps one-to-one with the capture
-/// methods on CapturePreviewService. This is the stable identity Configuration keys the
-/// per-Global-Hotkey enabled state by — its meaning is defined here, in the capture layer,
-/// free of WinUI and Win32 dependencies.
+/// routes on the runtime workflow session. This is the stable identity Configuration
+/// keys the per-Global-Hotkey enabled state by — its meaning is defined here, in the
+/// capture layer, free of WinUI and Win32 dependencies.
 /// </summary>
 public enum GlobalHotkeyRoute
 {
@@ -24,4 +24,14 @@ public enum GlobalHotkeyRoute
     FullDesktop,
     /// <summary>Opens the Selection overlay to draw a region and capture it.</summary>
     RectangularRegion,
+    /// <summary>
+    /// Opens the window picker overlay to choose a target window and capture it
+    /// (the Selected Window Capture Mode, issue #52).
+    /// </summary>
+    SelectedWindow,
+    /// <summary>
+    /// Opens the monitor picker overlay to choose a target monitor and capture it
+    /// (the Selected Monitor Capture Mode, issue #52).
+    /// </summary>
+    SelectedMonitor,
 }

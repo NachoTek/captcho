@@ -31,13 +31,15 @@ public class AppSettingsTests : IDisposable
         try { Directory.Delete(_tempDir, true); } catch { }
     }
 
-    // All four capture routes, for exhaustive default/enabled assertions.
+    // All six capture routes, for exhaustive default/enabled assertions.
     private static readonly GlobalHotkeyRoute[] AllRoutes =
     {
         GlobalHotkeyRoute.CurrentMonitor,
         GlobalHotkeyRoute.ActiveWindow,
         GlobalHotkeyRoute.FullDesktop,
         GlobalHotkeyRoute.RectangularRegion,
+        GlobalHotkeyRoute.SelectedWindow,
+        GlobalHotkeyRoute.SelectedMonitor,
     };
 
     [Fact]

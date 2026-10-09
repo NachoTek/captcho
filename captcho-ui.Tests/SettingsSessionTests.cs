@@ -57,7 +57,7 @@ public class SettingsSessionTests
         Assert.Equal(@"D:\Captures", view.SaveLocation);
         Assert.Equal("custom-<title>", view.FilenameTemplate);
         Assert.Equal("custom-Screenshot.png", view.FilenameTemplatePreview);
-        Assert.Equal(4, view.GlobalHotkeyRows.Count);
+        Assert.Equal(6, view.GlobalHotkeyRows.Count);
         Assert.Null(view.StatusMessage);
         Assert.False(view.ShouldClose);
     }
