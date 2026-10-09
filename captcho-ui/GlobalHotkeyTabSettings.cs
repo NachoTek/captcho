@@ -229,11 +229,13 @@ internal sealed class GlobalHotkeyTabSettings : EditableTabSession
     /// </summary>
     internal static string DisplayName(HotkeyBinding binding)
     {
+        const int MOD_ALT = 0x0001;
+        const int MOD_CONTROL = 0x0002;
         var parts = new List<string>();
-        if ((binding.Modifiers & MOD_WIN) != 0) parts.Add("Win");
+        if ((binding.Modifiers & GlobalHotkeyBindingDefaults.MOD_WIN) != 0) parts.Add("Win");
         if ((binding.Modifiers & MOD_CONTROL) != 0) parts.Add("Ctrl");
         if ((binding.Modifiers & MOD_ALT) != 0) parts.Add("Alt");
-        if ((binding.Modifiers & MOD_SHIFT) != 0) parts.Add("Shift");
+        if ((binding.Modifiers & GlobalHotkeyBindingDefaults.MOD_SHIFT) != 0) parts.Add("Shift");
         parts.Add(VirtualKeyName(binding.VirtualKey));
         return string.Join(" + ", parts);
     }
@@ -242,21 +244,14 @@ internal sealed class GlobalHotkeyTabSettings : EditableTabSession
     {
         0x2C => "Print Screen",
         >= 0x70 and <= 0x87 => $"F{virtualKey - 0x70 + 1}",
-        0x30 or (>= 0x31 and <= 0x39) => ((char)('0' + (virtualKey - 0x30))).ToString(),
-        0x41 or (>= 0x42 and <= 0x5A) => ((char)('A' + (virtualKey - 0x41))).ToString(),
+        >= 0x30 and <= 0x39 => ((char)('0' + (virtualKey - 0x30))).ToString(),
+        >= 0x41 and <= 0x5A => ((char)('A' + (virtualKey - 0x41))).ToString(),
         0x20 => "Space",
         0x1B => "Esc",
         0x09 => "Tab",
         0x0D => "Enter",
         _ => $"Key 0x{virtualKey:X2}",
     };
-
-    // Win32 modifier flag constants (mirrored from the capture-layer defaults
-    // table for display purposes).
-    private const int MOD_ALT = 0x0001;
-    private const int MOD_CONTROL = 0x0002;
-    private const int MOD_SHIFT = 0x0004;
-    private const int MOD_WIN = 0x0008;
 
     // ── Validation, gating, dirty tracking ──────────────────────────────
 

@@ -597,6 +597,7 @@ public sealed partial class SettingsWindow : Window
         var view = _session.RecordGlobalHotkeyBinding(id, new HotkeyBinding(modifiers, vk));
         _recordingHotkeyId = null;
         RebuildGlobalHotkeyRows(view.GlobalHotkeyRows);
+        ApplyView(view);
         e.Handled = true;
     }
 

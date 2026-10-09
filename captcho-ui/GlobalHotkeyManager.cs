@@ -6,6 +6,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 using captcho.Capture;
 
@@ -270,7 +271,7 @@ public sealed class GlobalHotkeyManager
                 continue;
             }
 
-            var currentSpec = FirstSpecWithId(specs, id);
+            var currentSpec = specs.FirstOrDefault(s => s.Id == id);
             if (currentSpec is not null
                 && _registeredBindings.TryGetValue(id, out var registered)
                 && (registered.modifiers != currentSpec.Modifiers || registered.virtualKey != currentSpec.VirtualKey))
@@ -337,16 +338,6 @@ public sealed class GlobalHotkeyManager
         _registrationResults.Clear();
         _registrationResults.AddRange(results);
         return RegistrationResults;
-    }
-
-    private static GlobalHotkeySpec? FirstSpecWithId(IReadOnlyList<GlobalHotkeySpec> specs, int id)
-    {
-        foreach (var spec in specs)
-        {
-            if (spec.Id == id)
-                return spec;
-        }
-        return null;
     }
 
     /// <summary>
