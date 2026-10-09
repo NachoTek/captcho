@@ -153,6 +153,18 @@ Layout:
                                    TextWrapping="Wrap"
                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                    Text="Never starts each Selection clean. Session reuses it until Captcho exits. Always reuses it across restarts while the monitor layout remains compatible."/>
+                        <TextBlock Text="Text Recognition (OCR)"
+                                   Margin="0,8,0,0"
+                                   FontSize="14"
+                                   FontWeight="SemiBold"/>
+                        <ComboBox x:Name="OcrLanguageCombo"
+                                  Header="Recognition language"
+                                  MinWidth="280"
+                                  SelectionChanged="OcrLanguageCombo_SelectionChanged"/>
+                        <TextBlock FontSize="12"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   Text="Languages come from the OCR language packs installed with Windows. Default uses your Windows preferred languages. Install additional packs under Settings → Time &amp; language → Language &amp; region."/>
                     </StackPanel>
                 </ScrollViewer>
             </TabViewItem>

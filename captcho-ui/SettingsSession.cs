@@ -174,6 +174,18 @@ public sealed class SettingsSession
         return ClearTransientStatus();
     }
 
+    /// <summary>
+    /// Sets the working OCR language selection (BCP-47 tag, or null/empty for
+    /// the user's default OCR language). The tag is a selection, not a
+    /// guarantee — it is resolved against the installed OCR language packs at
+    /// recognition time, so this edit never blocks on pack availability.
+    /// </summary>
+    public SettingsView EditOcrLanguageTag(string? tag)
+    {
+        _capture.EditOcrLanguageTag(tag);
+        return ClearTransientStatus();
+    }
+
     // ── Editable Annotation-tab edits ───────────────────────────────────
 
     /// <summary>Sets the default Annotation tool for new sessions.</summary>
@@ -344,7 +356,8 @@ public sealed class SettingsSession
                 IncludeDecorations: _capture.IncludeDecorations,
                 IncludeShadow: _capture.IncludeShadow,
                 RememberSelection: _capture.RememberSelection,
-                AnnotationEnabled: _capture.AnnotationEnabled),
+                AnnotationEnabled: _capture.AnnotationEnabled,
+                OcrLanguageTag: _capture.OcrLanguageTag),
 
             Annotation: new AnnotationTabContent(
                 DefaultTool: _annotation.DefaultTool,

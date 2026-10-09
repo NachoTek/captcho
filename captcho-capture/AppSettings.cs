@@ -124,6 +124,22 @@ public sealed class AppSettings
     /// </summary>
     public bool AnnotationEnabled { get; set; } = true;
 
+    /// <summary>
+    /// BCP-47 tag of the language Windows OCR recognizes with (e.g.,
+    /// "en-US"), or null/empty to use the user's default OCR language. The
+    /// tag is a selection, not a guarantee: at recognition time it is matched
+    /// against the installed OCR language packs, and a tag whose pack was
+    /// removed resolves to a retryable unsupported-language outcome rather
+    /// than a silent fallback (spec #49).
+    /// </summary>
+    /// <remarks>
+    /// The JSON property name is pinned to <c>ocrLanguageTag</c>; older
+    /// settings files written before OCR shipped load with the null default
+    /// (engine default language), matching the pre-OCR behavior.
+    /// </remarks>
+    [JsonPropertyName("ocrLanguageTag")]
+    public string? OcrLanguageTag { get; set; }
+
     // Future properties can be added here. System.Text.Json will ignore
     // unknown properties on read and only serialize declared ones.
 
@@ -140,6 +156,7 @@ public sealed class AppSettings
         RememberSelection = RememberSelectionLifetime.Never,
         RememberedSelection = null,
         AnnotationEnabled = true,
+        OcrLanguageTag = null,
     };
 
     /// <summary>
@@ -284,5 +301,6 @@ public sealed class AppSettings
             ? RememberedSelection?.Normalized()
             : null,
         AnnotationEnabled = AnnotationEnabled,
+        OcrLanguageTag = string.IsNullOrWhiteSpace(OcrLanguageTag) ? null : OcrLanguageTag.Trim(),
     };
 }

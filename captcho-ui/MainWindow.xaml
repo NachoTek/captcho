@@ -42,6 +42,12 @@ Layout:
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
             <Button x:Name="FullDesktopButton"
@@ -112,15 +118,16 @@ Layout:
                     VerticalAlignment="Stretch"
                     Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
 
-            <!-- Settings button -->
-            <Button x:Name="SettingsButton"
+            <!-- Recognize Text: disabled until a capture succeeds -->
+            <Button x:Name="RecognizeTextButton"
                     Grid.Column="8"
-                    Content="Settings…"
-                    MinWidth="90" MinHeight="40"
+                    Content="Recognize Text"
+                    MinWidth="120" MinHeight="40"
                     Margin="8,0,8,0"
-                    Click="Settings_Click"
+                    IsEnabled="False"
+                    Click="RecognizeText_Click"
                     CornerRadius="6"
-                    ToolTipService.ToolTip="Open settings (F4 or Ctrl+,)"/>
+                    ToolTipService.ToolTip="Recognize text in the captured Frame with Windows OCR"/>
 
             <!-- Menu separator -->
             <Border x:Name="MenuSeparator"
@@ -129,9 +136,19 @@ Layout:
                     VerticalAlignment="Stretch"
                     Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
 
+            <!-- Settings button -->
+            <Button x:Name="SettingsButton"
+                    Grid.Column="10"
+                    Content="Settings…"
+                    MinWidth="90" MinHeight="40"
+                    Margin="8,0,8,0"
+                    Click="Settings_Click"
+                    CornerRadius="6"
+                    ToolTipService.ToolTip="Open settings (F4 or Ctrl+,)"/>
+
             <!-- About button -->
             <Button x:Name="AboutButton"
-                    Grid.Column="10"
+                    Grid.Column="11"
                     Content="About"
                     MinWidth="80" MinHeight="40"
                     Margin="8,0,8,0"
@@ -140,7 +157,7 @@ Layout:
 
             <!-- Exit button -->
             <Button x:Name="ExitButton"
-                    Grid.Column="11"
+                    Grid.Column="12"
                     Content="Exit"
                     MinWidth="80" MinHeight="40"
                     Margin="8,0,8,0"
@@ -149,7 +166,7 @@ Layout:
 
             <!-- Export buttons: disabled until a capture succeeds -->
             <Button x:Name="SaveButton"
-                    Grid.Column="12"
+                    Grid.Column="13"
                     Content="Save"
                     MinWidth="80" MinHeight="40"
                     Margin="0,0,6,0"
@@ -159,7 +176,7 @@ Layout:
                     ToolTipService.ToolTip="Save to default location"/>
 
             <Button x:Name="SaveAsButton"
-                    Grid.Column="13"
+                    Grid.Column="14"
                     Content="Save As…"
                     MinWidth="90" MinHeight="40"
                     Margin="0,0,6,0"
@@ -169,7 +186,7 @@ Layout:
                     ToolTipService.ToolTip="Choose location and filename"/>
 
             <Button x:Name="CopyToClipboardButton"
-                    Grid.Column="14"
+                    Grid.Column="15"
                     Content="Copy"
                     MinWidth="80" MinHeight="40"
                     Margin="0,0,8,0"
@@ -180,7 +197,7 @@ Layout:
 
             <!-- Delay input: compact NumberBox for 0–60 second countdown -->
             <NumberBox x:Name="DelaySecondsInput"
-                       Grid.Column="15"
+                       Grid.Column="16"
                        Header="Delay (s)"
                        Minimum="0" Maximum="60"
                        SmallChange="1" LargeChange="5"
@@ -193,7 +210,7 @@ Layout:
 
             <!-- Countdown progress: determinate bar hidden when idle -->
             <ProgressBar x:Name="CountdownProgress"
-                         Grid.Column="16"
+                         Grid.Column="17"
                          Width="120" MinHeight="6"
                          Margin="8,0,4,0"
                          VerticalAlignment="Center"
@@ -203,7 +220,7 @@ Layout:
 
             <!-- Cancel countdown button: hidden when idle -->
             <Button x:Name="CancelDelayButton"
-                    Grid.Column="17"
+                    Grid.Column="18"
                     Content="Cancel"
                     MinWidth="70" MinHeight="40"
                     Margin="4,0,0,0"
@@ -212,7 +229,7 @@ Layout:
                     CornerRadius="6"/>
 
             <ProgressRing x:Name="CaptureProgress"
-                          Grid.Column="17"
+                          Grid.Column="19"
                           Width="28" Height="28"
                           Margin="4,0,0,0"
                           Visibility="Collapsed"

@@ -15,6 +15,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Foundation;
 using captcho.Capture;
@@ -197,7 +198,9 @@ public sealed partial class MainWindow : Window
                         _configurationService)),
             new AnnotationOverlayAdapter(),
             () => _settings.AnnotationEnabled,
-            () => _settings.EffectiveAnnotationSettings.ToToolState());
+            () => _settings.EffectiveAnnotationSettings.ToToolState(),
+            new WindowsOcrEngine(),
+            () => _settings.OcrLanguageTag);
 
         // Initialize Global Hotkeys after the window has an HWND.
         // In WinUI 3, the HWND is available immediately after construction.
@@ -750,6 +753,7 @@ public sealed partial class MainWindow : Window
                 }
                 StatusText.Text = $"{result.Mode} — {result.Dimensions}";
                 _hasCapture = true;
+                RecognizeTextButton.IsEnabled = true;
                 break;
 
             case WorkflowStatus.OperationInProgress:
@@ -943,6 +947,7 @@ public sealed partial class MainWindow : Window
         RegionCaptureButton.IsEnabled = enabled;
         SelectedMonitorButton.IsEnabled = enabled;
         SelectedWindowButton.IsEnabled = enabled;
+        RecognizeTextButton.IsEnabled = enabled && _hasCapture;
     }
 
     /// <summary>
@@ -967,6 +972,7 @@ public sealed partial class MainWindow : Window
             PreviewImage.Source = result.ImageSource;
             StatusText.Text = $"{result.Mode} — {result.Dimensions}";
             _hasCapture = true;
+            RecognizeTextButton.IsEnabled = true;
         }
         else
         {
@@ -1068,6 +1074,118 @@ public sealed partial class MainWindow : Window
     private void About_Click(object sender, RoutedEventArgs e)
     {
         StatusText.Text = "captcho — Screen Capture Tool v1.0";
+    }
+
+    // ── Recognize Text (OCR) ─────────────────────────────────────────
+
+    /// <summary>
+    /// Handles "Recognize Text" click — routes the Recognize Text Trigger
+    /// through the production workflow session. The session resolves the
+    /// persisted language selection against the installed OCR language packs
+    /// and recognizes text on the in-memory Frame it already owns; no file is
+    /// written and every retryable outcome preserves the Frame. The WinUI
+    /// layer stays a thin event/presentation adapter: it disables controls
+    /// during recognition, then presents the distinct outcomes (recognized
+    /// text in a selectable dialog, no-text as status, retryable errors as
+    /// status).
+    /// </summary>
+    private async void RecognizeText_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isOperationRunning || !_hasCapture)
+        {
+            StatusText.Text = OcrStatusFormatter.FormatNoFrame();
+            return;
+        }
+
+        EnterExportState();
+        StatusText.Text = "Recognizing text…";
+
+        try
+        {
+            var result = await _workflowSession.RecognizeTextAsync();
+            ApplyOcrResult(result);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Text recognition failed: {SanitizeException(ex)}";
+        }
+        finally
+        {
+            ExitExportState();
+        }
+    }
+
+    /// <summary>
+    /// Presents a distinct OCR outcome: Recognized-text opens a selectable
+    /// text dialog (and stages the text on the clipboard-adjacent preview
+    /// path), no-text is a user-visible status, and every retryable condition
+    /// surfaces its error without clearing the captured Frame.
+    /// </summary>
+    private void ApplyOcrResult(OcrResult result)
+    {
+        switch (result.Outcome)
+        {
+            case OcrOutcome.RecognizedText:
+                StatusText.Text = OcrStatusFormatter.FormatRecognized(result);
+                ShowRecognizedTextDialog(result.Text, result.LanguageTag);
+                break;
+
+            case OcrOutcome.NoText:
+                StatusText.Text = OcrStatusFormatter.FormatNoText(result);
+                break;
+
+            case OcrOutcome.NoFrame:
+                // The session owns no Frame (e.g., the only capture so far
+                // ran through a legacy route). Status-only: the legacy
+                // capture cache and its export buttons stay untouched.
+                StatusText.Text = result.Error ?? OcrStatusFormatter.FormatNoFrame();
+                break;
+
+            case OcrOutcome.UnsupportedLanguage:
+            case OcrOutcome.Failed:
+            case OcrOutcome.OperationInProgress:
+            default:
+                StatusText.Text = result.Error ?? "Text recognition failed. Try again.";
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Shows the recognized text in a small selectable dialog so the user can
+    /// read and copy it. Presentation-only — the workflow owns the outcome.
+    /// </summary>
+    private void ShowRecognizedTextDialog(string text, string languageTag)
+    {
+        try
+        {
+            var dialog = new ContentDialog
+            {
+                Title = string.IsNullOrEmpty(languageTag)
+                    ? "Recognized Text"
+                    : $"Recognized Text ({languageTag})",
+                Content = new ScrollViewer
+                {
+                    Content = new TextBlock
+                    {
+                        Text = text,
+                        IsTextSelectionEnabled = true,
+                        TextWrapping = TextWrapping.Wrap,
+                        MaxWidth = 560,
+                        MaxHeight = 360,
+                    },
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                },
+                CloseButtonText = "Close",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = Content.XamlRoot,
+            };
+            _ = dialog.ShowAsync();
+        }
+        catch
+        {
+            // Dialog presentation failure is non-fatal; the status bar still
+            // carries the recognition summary.
+        }
     }
 
     // ── Settings window coordinator delegates ─────────────────────────

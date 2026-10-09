@@ -41,18 +41,38 @@ public sealed partial class SettingsWindow : Window
     /// </summary>
     private bool _applyingView;
 
+    /// <summary>
+    /// The OCR-capable languages offered by the Recognition language combo.
+    /// Populated once at open from the OCR engine's installed language packs
+    /// (supplied by the coordinator's factory so tests can inject a fake
+    /// list); index 0 is the Default entry, followed by one entry per
+    /// installed language.
+    /// </summary>
+    private readonly IReadOnlyList<OcrLanguage> _ocrLanguages;
+
     private const string WindowPlacementKey = "SettingsWindowPlacement";
 
     /// <summary>
     /// Production constructor that receives the composed session (built by the
     /// coordinator from the live runtime settings, ConfigurationService, and Global
-    /// Global Hotkey adapter).
+    /// Global Hotkey adapter) plus the OCR-capable languages to offer for
+    /// Recognition. Uses the installed Windows OCR language packs when the
+    /// engine is not supplied.
     /// </summary>
     /// <param name="session">Composed settings session that owns all tab behavior.</param>
-    public SettingsWindow(SettingsSession session)
+    public SettingsWindow(SettingsSession session) : this(session, null)
+    {
+    }
+
+    /// <summary>
+    /// Full constructor with an injected OCR engine supplying the language
+    /// list. Tests pass a fake engine; production omits it.
+    /// </summary>
+    public SettingsWindow(SettingsSession session, IOcrEngine? ocrEngine)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _localSettings = Windows.Storage.ApplicationData.Current.LocalSettings;
+        _ocrLanguages = LoadOcrLanguages(ocrEngine);
 
         InitializeComponent();
 
@@ -91,6 +111,7 @@ public sealed partial class SettingsWindow : Window
         // decoration/shadow dependency).
 
         RebuildGlobalHotkeyRows(view.GlobalHotkeyRows);
+        PopulateOcrLanguageCombo();
         ApplyView(view);
 
         // Hook Closed event for coordinator cleanup
@@ -220,6 +241,91 @@ public sealed partial class SettingsWindow : Window
         ApplyView(_session.EditRememberSelection(lifetime));
     }
 
+    // ── Capture tab: OCR language ─────────────────────────────────────
+
+    /// <summary>
+    /// Routes a Recognition language selection into the session. Index 0 is
+    /// the Default entry (null tag — the engine's user-default language);
+    /// every other index maps to the installed language at that position.
+    /// Suppressed while <see cref="ApplyView"/> is programmatically setting
+    /// combo state.
+    /// </summary>
+    private void OcrLanguageCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_applyingView || OcrLanguageCombo.SelectedIndex < 0)
+            return;
+
+        string? tag = OcrLanguageCombo.SelectedIndex == 0
+            ? null
+            : _ocrLanguages[OcrLanguageCombo.SelectedIndex - 1].Tag;
+        ApplyView(_session.EditOcrLanguageTag(tag));
+    }
+
+    /// <summary>
+    /// Reads the installed OCR languages from the supplied engine (or the
+    /// production Windows engine). Never throws — an engine failure yields an
+    /// empty list, leaving the combo with just the Default entry.
+    /// </summary>
+    private static IReadOnlyList<OcrLanguage> LoadOcrLanguages(IOcrEngine? engine)
+    {
+        try
+        {
+            var effective = engine ?? new WindowsOcrEngine();
+            return effective.GetAvailableLanguages();
+        }
+        catch
+        {
+            return Array.Empty<OcrLanguage>();
+        }
+    }
+
+    /// <summary>
+    /// Populates the Recognition language combo from the installed OCR
+    /// languages: a Default entry followed by one entry per installed pack
+    /// ("English (United States) [en-US]"). The current working selection is
+    /// selected under the <see cref="_applyingView"/> guard so populating
+    /// does not register as a user edit.
+    /// </summary>
+    private void PopulateOcrLanguageCombo()
+    {
+        _applyingView = true;
+        try
+        {
+            OcrLanguageCombo.Items.Clear();
+            OcrLanguageCombo.Items.Add("Default (Windows preferred languages)");
+            foreach (var language in _ocrLanguages)
+                OcrLanguageCombo.Items.Add(OcrLanguageResolver.FormatForDisplay(language));
+
+            OcrLanguageCombo.SelectedIndex = SelectedOcrLanguageIndex(_session.View.Capture.OcrLanguageTag);
+        }
+        finally
+        {
+            _applyingView = false;
+        }
+    }
+
+    /// <summary>
+    /// Maps a persisted OCR language tag to its combo index: 0 for the
+    /// Default entry (null/empty tag), 1 + position for an installed match,
+    /// and 0 when the selected pack is no longer installed — so a removed
+    /// pack visibly falls back to Default in the UI while recognition
+    /// surfaces the retryable unsupported-language outcome for the stale
+    /// persisted tag.
+    /// </summary>
+    private int SelectedOcrLanguageIndex(string? tag)
+    {
+        if (string.IsNullOrWhiteSpace(tag))
+            return 0;
+
+        for (int i = 0; i < _ocrLanguages.Count; i++)
+        {
+            if (string.Equals(_ocrLanguages[i].Tag, tag, StringComparison.OrdinalIgnoreCase))
+                return i + 1;
+        }
+
+        return 0;
+    }
+
     // ── Annotation tab event routing ─────────────────────────────────────────
 
     private void AnnotationToolCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -346,6 +452,7 @@ public sealed partial class SettingsWindow : Window
             CaptureShadowNoteText.Visibility = view.Capture.IncludeDecorations
                 ? Visibility.Collapsed
                 : Visibility.Visible;
+            OcrLanguageCombo.SelectedIndex = SelectedOcrLanguageIndex(view.Capture.OcrLanguageTag);
 
             AnnotationToolCombo.SelectedIndex = (int)view.Annotation.DefaultTool;
             AnnotationPenColorCombo.SelectedIndex = AnnotationColorIndex(view.Annotation.PenColor);

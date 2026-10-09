@@ -46,7 +46,8 @@ public sealed record CaptureTabContent(
     bool IncludeDecorations,
     bool IncludeShadow,
     RememberSelectionLifetime RememberSelection,
-    bool AnnotationEnabled);
+    bool AnnotationEnabled,
+    string? OcrLanguageTag);
 
 /// <summary>Editable defaults shown by the Annotation Settings tab.</summary>
 public sealed record AnnotationTabContent(
