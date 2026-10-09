@@ -69,6 +69,14 @@ internal sealed class CaptureTabSettings : EditableTabSession
     public bool AnnotationEnabled => Working.AnnotationEnabled;
 
     /// <summary>
+    /// The working OCR language selection: the BCP-47 tag of the installed
+    /// language Windows OCR recognizes with, or null for the user's default
+    /// OCR language. Editing updates the working snapshot without touching
+    /// the source.
+    /// </summary>
+    public string? OcrLanguageTag => Working.OcrLanguageTag;
+
+    /// <summary>
     /// Sets the working mouse-pointer default from user input. Never persists or
     /// mutates the original persisted settings.
     /// </summary>
@@ -141,6 +149,16 @@ internal sealed class CaptureTabSettings : EditableTabSession
     /// <summary>Sets whether the post-capture Annotation gate is enabled.</summary>
     public void EditAnnotationEnabled(bool value) => Working.AnnotationEnabled = value;
 
+    /// <summary>
+    /// Sets the working OCR language selection. A null or whitespace tag
+    /// selects the user's default OCR language; a real tag is persisted
+    /// verbatim and resolved against the installed OCR language packs at
+    /// recognition time, so a pack that is later removed surfaces as a
+    /// retryable unsupported-language outcome instead of blocking the edit.
+    /// </summary>
+    public void EditOcrLanguageTag(string? tag) =>
+        Working.OcrLanguageTag = string.IsNullOrWhiteSpace(tag) ? null : tag.Trim();
+
     // ── Validation ──────────────────────────────────────────────────────
 
     /// <summary>
@@ -162,7 +180,8 @@ internal sealed class CaptureTabSettings : EditableTabSession
     public override bool IsDirty =>
         Working.CaptureOptions != Baseline.CaptureOptions
         || Working.EffectiveRememberSelection != Baseline.EffectiveRememberSelection
-        || Working.AnnotationEnabled != Baseline.AnnotationEnabled;
+        || Working.AnnotationEnabled != Baseline.AnnotationEnabled
+        || !string.Equals(Working.OcrLanguageTag, Baseline.OcrLanguageTag, StringComparison.OrdinalIgnoreCase);
 
     // ── Capture slice: merge, defaults ──────────────────────────────────
 
@@ -177,6 +196,9 @@ internal sealed class CaptureTabSettings : EditableTabSession
         target.CaptureOptions = Working.CaptureOptions;
         target.RememberSelection = Working.EffectiveRememberSelection;
         target.AnnotationEnabled = Working.AnnotationEnabled;
+        target.OcrLanguageTag = string.IsNullOrWhiteSpace(Working.OcrLanguageTag)
+            ? null
+            : Working.OcrLanguageTag.Trim();
         if (Working.EffectiveRememberSelection != RememberSelectionLifetime.Always)
             target.RememberedSelection = null;
     }
@@ -195,5 +217,6 @@ internal sealed class CaptureTabSettings : EditableTabSession
         working.RememberSelection = RememberSelectionLifetime.Never;
         working.RememberedSelection = null;
         working.AnnotationEnabled = true;
+        working.OcrLanguageTag = null;
     }
 }

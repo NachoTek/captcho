@@ -452,8 +452,8 @@ public sealed class AnnotationOverlayWindow : IDisposable
         const int widthButton = 38;
         const int widthLabel = 86;
         const int undoWidth = 58;
-        // Pen + four shapes + text + color + fill + width stepper + undo/redo + confirm/cancel.
-        int contentWidth = toolWidth * 6
+        // Pen + four shapes + text + marker + color + fill + width stepper + undo/redo + confirm/cancel.
+        int contentWidth = toolWidth * 7
             + colorWidth
             + fillWidth
             + widthButton * 2 + widthLabel
@@ -464,7 +464,7 @@ public sealed class AnnotationOverlayWindow : IDisposable
         int y = 20;
         int x = startX;
         _toolButtons.Clear();
-        foreach (var tool in new[] { AnnotationTool.Pen, AnnotationTool.Rectangle, AnnotationTool.Ellipse, AnnotationTool.Line, AnnotationTool.Arrow, AnnotationTool.Text })
+        foreach (var tool in new[] { AnnotationTool.Pen, AnnotationTool.Rectangle, AnnotationTool.Ellipse, AnnotationTool.Line, AnnotationTool.Arrow, AnnotationTool.Text, AnnotationTool.Marker })
         {
             _toolButtons.Add((new Rectangle(x, y, toolWidth, height), tool));
             x += toolWidth + gap;
@@ -528,6 +528,7 @@ public sealed class AnnotationOverlayWindow : IDisposable
             [AnnotationTool.Line] = "Line",
             [AnnotationTool.Arrow] = "Arrow",
             [AnnotationTool.Text] = "Text",
+            [AnnotationTool.Marker] = "Marker",
         };
         foreach (var (bounds, tool) in _toolButtons)
             DrawCentered(graphics, toolLabels[tool], smallFont, text, bounds);
@@ -656,6 +657,16 @@ public sealed class AnnotationOverlayWindow : IDisposable
             // The text tool places an editable entry; entry content is committed
             // as one annotation document entry on Return or click-away.
             _annotationSession.BeginText(ToFramePoint(downPoint));
+            Render();
+            return;
+        }
+
+        if (_annotationSession.ToolState.Tool == AnnotationTool.Marker)
+        {
+            // The marker tool places one numbered entry per click; the number is
+            // assigned at placement and the entry commits immediately.
+            _annotationSession.BeginMarker(ToFramePoint(downPoint));
+            _annotationSession.CommitStroke();
             Render();
             return;
         }
