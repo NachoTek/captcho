@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Drawing.Text;
 using System.Linq;
+using System.Runtime.InteropServices;
 
 namespace captcho.Capture;
 
@@ -12,6 +16,8 @@ public enum AnnotationTool
     Ellipse,
     Line,
     Arrow,
+    Text,
+    Marker,
 }
 
 /// <summary>
@@ -105,12 +111,29 @@ public sealed class AnnotationStroke
     public AnnotationFillStyle Fill { get; }
     public IReadOnlyList<AnnotationPoint> Points { get; }
 
+    /// <summary>
+    /// Text content for the text tool; null for stroke/shape tools. A text
+    /// entry carries its anchor in <see cref="Points"/>[0] and never more than
+    /// one point.
+    /// </summary>
+    public string? Text { get; }
+
+    /// <summary>
+    /// Sequence number for the marker tool; null for every other tool. Numbers
+    /// follow commit order: the next marker takes one past the highest number
+    /// still committed, so undo never renumbers the survivors and redo restores
+    /// the original number.
+    /// </summary>
+    public int? MarkerNumber { get; }
+
     public AnnotationStroke(
         AnnotationTool tool,
         AnnotationColor color,
         int strokeWidth,
         IReadOnlyList<AnnotationPoint> points,
-        AnnotationFillStyle fill = AnnotationFillStyle.None)
+        AnnotationFillStyle fill = AnnotationFillStyle.None,
+        string? text = null,
+        int? markerNumber = null)
     {
         if (!Enum.IsDefined(tool))
             throw new ArgumentOutOfRangeException(nameof(tool));
@@ -123,6 +146,10 @@ public sealed class AnnotationStroke
         StrokeWidth = strokeWidth;
         Fill = Enum.IsDefined(fill) ? fill : AnnotationFillStyle.None;
         Points = Array.AsReadOnly(points.ToArray());
+        Text = tool == AnnotationTool.Text ? text ?? string.Empty : null;
+        MarkerNumber = tool == AnnotationTool.Marker
+            ? markerNumber is null or < 1 ? 1 : markerNumber
+            : null;
     }
 }
 
@@ -137,6 +164,8 @@ public sealed class AnnotationDocument
     private readonly List<AnnotationStroke> _redoStrokes = new();
     private List<AnnotationPoint>? _inProgressPoints;
     private AnnotationToolState? _inProgressState;
+    private string? _inProgressText;
+    private int? _inProgressMarkerNumber;
 
     public AnnotationDocument(ContiguousBitmap sourceFrame) =>
         SourceFrame = sourceFrame ?? throw new ArgumentNullException(nameof(sourceFrame));
@@ -146,40 +175,125 @@ public sealed class AnnotationDocument
     public bool CanUndo => _strokes.Count > 0 && _inProgressPoints is null;
     public bool CanRedo => _redoStrokes.Count > 0 && _inProgressPoints is null;
 
-    public AnnotationStroke? InProgressStroke =>
-        _inProgressPoints is null || _inProgressState is null
-            ? null
-            : new AnnotationStroke(
+    /// <summary>Content of the in-progress text entry; null when no text entry is open.</summary>
+    public string? InProgressText => _inProgressText;
+
+    public AnnotationStroke? InProgressStroke
+    {
+        get
+        {
+            if (_inProgressPoints is null || _inProgressState is null)
+                return null;
+            // An empty or whitespace text entry has nothing legible to show yet.
+            if (_inProgressText is not null)
+                return string.IsNullOrWhiteSpace(_inProgressText)
+                    ? null
+                    : new AnnotationStroke(
+                        AnnotationTool.Text,
+                        _inProgressState.PenColor,
+                        _inProgressState.StrokeWidth,
+                        _inProgressPoints,
+                        text: _inProgressText);
+            return new AnnotationStroke(
                 _inProgressState.Tool,
                 _inProgressState.PenColor,
                 _inProgressState.StrokeWidth,
                 _inProgressPoints,
-                EffectiveFill(_inProgressState));
+                EffectiveFill(_inProgressState),
+                markerNumber: _inProgressMarkerNumber);
+        }
+    }
 
     public void BeginStroke(AnnotationPoint point, AnnotationToolState toolState)
     {
         ArgumentNullException.ThrowIfNull(toolState);
         var state = toolState.Normalized();
 
+        // The text tool places an editable entry at the click rather than a
+        // point stroke; its content arrives through EditInProgressText.
+        if (state.Tool == AnnotationTool.Text)
+        {
+            BeginText(point, toolState);
+            return;
+        }
+
         _inProgressState = state;
         // Shapes drag from a fixed anchor to a moving current point, so they begin with
         // the anchor duplicated and the drag replaces the duplicate. Pen begins with a
-        // single point and grows by appending.
+        // single point and grows by appending. Markers are placed at the click alone.
         _inProgressPoints = state.Tool == AnnotationTool.Pen
             ? new List<AnnotationPoint> { point }
-            : new List<AnnotationPoint> { point, point };
+            : state.Tool == AnnotationTool.Marker
+                ? new List<AnnotationPoint> { point }
+                : new List<AnnotationPoint> { point, point };
+        _inProgressText = null;
+        _inProgressMarkerNumber = state.Tool == AnnotationTool.Marker ? NextMarkerNumber() : null;
     }
 
     /// <summary>
-    /// The fill style a stroke actually carries: tools that cannot fill never snapshot a
-    /// lingering toolbar fill selection, so every stroke records only applicable style.
+    /// The number the next committed marker will carry: one past the highest number
+    /// still committed, so undo never renumbers survivors and redo restores the
+    /// original number.
+    /// </summary>
+    private int NextMarkerNumber()
+    {
+        int highest = 0;
+        foreach (var stroke in _strokes)
+            if (stroke.MarkerNumber is > 0 and { } number && number > highest)
+                highest = number;
+        return highest + 1;
+    }
+
+    /// <summary>
+    /// Opens a text entry at <paramref name="point"/> snapshotting the shared
+    /// style. The entry renders and commits like any other annotation; empty or
+    /// cancelled input never becomes a document entry.
+    /// </summary>
+    public void BeginText(AnnotationPoint point, AnnotationToolState toolState)
+    {
+        ArgumentNullException.ThrowIfNull(toolState);
+        var state = toolState.Normalized();
+
+        _inProgressState = state;
+        _inProgressPoints = new List<AnnotationPoint> { point };
+        _inProgressText = string.Empty;
+    }
+
+    /// <summary>
+    /// Places a numbered marker at <paramref name="point"/> snapshotting the shared
+    /// style. The entry previews its assigned number and commits like any other
+    /// annotation.
+    /// </summary>
+    public void BeginMarker(AnnotationPoint point, AnnotationToolState toolState)
+    {
+        ArgumentNullException.ThrowIfNull(toolState);
+        var state = toolState.Normalized();
+
+        _inProgressState = state;
+        _inProgressPoints = new List<AnnotationPoint> { point };
+        _inProgressText = null;
+        _inProgressMarkerNumber = NextMarkerNumber();
+    }
+
+    /// <summary>Replaces the content of the open text entry; a no-op otherwise.</summary>
+    public void EditInProgressText(string content)
+    {
+        if (_inProgressText is null)
+            return;
+
+        _inProgressText = content ?? string.Empty;
+    }
+
+    /// <summary>
+    /// The fill style a stroke actually carries: tools that cannot fill never snapshot
+    /// a lingering toolbar fill selection, so every stroke records only applicable style.
     /// </summary>
     private static AnnotationFillStyle EffectiveFill(AnnotationToolState state) =>
         state.ToolSupportsFill ? state.Fill : AnnotationFillStyle.None;
 
     public void AppendStrokePoint(AnnotationPoint point)
     {
-        if (_inProgressPoints is null || _inProgressState?.Tool != AnnotationTool.Pen)
+        if (_inProgressPoints is null || _inProgressState?.Tool is not AnnotationTool.Pen)
             return;
 
         _inProgressPoints.Add(point);
@@ -187,11 +301,12 @@ public sealed class AnnotationDocument
 
     /// <summary>
     /// Replaces the current drag point of an in-progress shape. The first point stays
-    /// fixed as the anchor; pen strokes ignore this and keep every appended point.
+    /// fixed as the anchor; pen strokes, text entries, and markers ignore this.
     /// </summary>
     public void UpdateStrokePoint(AnnotationPoint point)
     {
-        if (_inProgressPoints is null || _inProgressState?.Tool == AnnotationTool.Pen)
+        if (_inProgressPoints is null
+            || _inProgressState?.Tool is AnnotationTool.Pen or AnnotationTool.Text or AnnotationTool.Marker)
             return;
 
         _inProgressPoints[^1] = point;
@@ -201,7 +316,12 @@ public sealed class AnnotationDocument
     {
         var stroke = InProgressStroke;
         if (stroke is null)
+        {
+            // An empty or whitespace text entry commits nothing and ends the entry.
+            if (_inProgressText is not null)
+                CancelStroke();
             return false;
+        }
 
         _strokes.Add(stroke);
         if (_redoStrokes.Count > 0)
@@ -214,6 +334,8 @@ public sealed class AnnotationDocument
     {
         _inProgressPoints = null;
         _inProgressState = null;
+        _inProgressText = null;
+        _inProgressMarkerNumber = null;
     }
 
     /// <summary>Undo removes the latest committed stroke and updates the composed Frame on the next render.</summary>
@@ -282,6 +404,9 @@ public sealed class AnnotationSession
     public void BeginStroke(AnnotationPoint point) => Document.BeginStroke(point, ToolState);
     public void AppendStrokePoint(AnnotationPoint point) => Document.AppendStrokePoint(point);
     public void UpdateStrokePoint(AnnotationPoint point) => Document.UpdateStrokePoint(point);
+    public void BeginText(AnnotationPoint point) => Document.BeginText(point, ToolState);
+    public void BeginMarker(AnnotationPoint point) => Document.BeginMarker(point, ToolState);
+    public void EditInProgressText(string content) => Document.EditInProgressText(content);
     public bool CommitStroke() => Document.CommitStroke();
     public void CancelStroke() => Document.CancelStroke();
     public bool Undo() => Document.Undo();
@@ -291,9 +416,22 @@ public sealed class AnnotationSession
     public ContiguousBitmap Render() => Document.Render();
 }
 
-/// <summary>Software compositor for BGRA Frames and pen strokes.</summary>
+/// <summary>Software compositor for BGRA Frames and annotation strokes.</summary>
 public static class AnnotationRenderer
 {
+    /// <summary>Minimum text em size in pixels regardless of shared stroke width.</summary>
+    public const float MinimumTextEmSize = 12f;
+
+    /// <summary>Minimum marker disc diameter in pixels regardless of shared stroke width.</summary>
+    public const double MinimumMarkerDiameter = 24.0;
+
+    /// <summary>
+    /// Maps the shared stroke width onto the text em size (in pixels) so text
+    /// participates in the same width control as the stroke tools.
+    /// </summary>
+    public static float TextEmSize(int strokeWidth) =>
+        Math.Max(MinimumTextEmSize, strokeWidth * 6f);
+
     public static ContiguousBitmap Render(
         ContiguousBitmap sourceFrame,
         IEnumerable<AnnotationStroke> committedStrokes,
@@ -333,6 +471,12 @@ public static class AnnotationRenderer
                 break;
             case AnnotationTool.Arrow:
                 DrawArrowStroke(width, height, stride, pixels, stroke);
+                break;
+            case AnnotationTool.Text:
+                DrawTextStroke(width, height, stride, pixels, stroke);
+                break;
+            case AnnotationTool.Marker:
+                DrawMarkerStroke(width, height, stride, pixels, stroke);
                 break;
         }
     }
@@ -409,6 +553,158 @@ public static class AnnotationRenderer
          Math.Min(first.Y, last.Y),
          Math.Max(first.X, last.X),
          Math.Max(first.Y, last.Y));
+
+    /// <summary>
+    /// Rasterizes a text entry with GDI+ onto a scratch ARGB surface and blends
+    /// the covered pixels into the Frame buffer. Rendering reads the glyph alpha
+    /// so anti-aliased edges composite with the annotation color.
+    /// </summary>
+    private static void DrawTextStroke(int width, int height, int stride, byte[] pixels, AnnotationStroke stroke)
+    {
+        if (string.IsNullOrWhiteSpace(stroke.Text))
+            return;
+
+        var anchor = stroke.Points[0];
+        float emSize = TextEmSize(stroke.StrokeWidth);
+        // The anchor is the top-left of the text; content grows right and down
+        // from the point where the user clicked.
+        DrawGlyphs(
+            width,
+            height,
+            stride,
+            pixels,
+            stroke.Text,
+            emSize,
+            new PointF(anchor.X, anchor.Y),
+            _ => new PointF(anchor.X, anchor.Y),
+            stroke.Color);
+    }
+
+    /// <summary>
+    /// Shared GDI+ glyph path for text and marker numerals: rasterizes
+    /// <paramref name="content"/> onto a scratch ARGB surface and blends the
+    /// glyph alpha in <paramref name="color"/> into the Frame buffer, so
+    /// anti-aliased edges composite over whatever is already drawn.
+    /// </summary>
+    private static void DrawGlyphs(
+        int width,
+        int height,
+        int stride,
+        byte[] pixels,
+        string content,
+        float emSize,
+        PointF anchor,
+        Func<SizeF, PointF> locate,
+        AnnotationColor color)
+    {
+        using var font = new Font(FontFamily.GenericSansSerif, emSize, FontStyle.Bold, GraphicsUnit.Pixel);
+        using var scratch = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+        var bounds = new Rectangle(0, 0, width, height);
+        using (var graphics = Graphics.FromImage(scratch))
+        {
+            graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            graphics.DrawString(content, font, Brushes.White, locate(graphics.MeasureString(content, font)));
+        }
+
+        var data = scratch.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            var scan = new byte[Math.Abs(data.Stride) * height];
+            Marshal.Copy(data.Scan0, scan, 0, scan.Length);
+            for (int y = 0; y < height; y++)
+            {
+                int scanRow = y * data.Stride;
+                int pixelRow = y * stride;
+                for (int x = 0; x < width; x++)
+                {
+                    int alpha = scan[scanRow + x * 4 + 3];
+                    if (alpha == 0)
+                        continue;
+                    BlendPixel(
+                        pixels,
+                        pixelRow + x * 4,
+                        new AnnotationColor(
+                            color.Red,
+                            color.Green,
+                            color.Blue,
+                            (byte)Math.Clamp((int)Math.Round(color.Alpha * alpha / 255.0), 0, 255)));
+                }
+            }
+        }
+        finally
+        {
+            scratch.UnlockBits(data);
+        }
+    }
+
+    /// <summary>
+    /// The marker disc diameter mapped from the shared stroke width so markers
+    /// participate in the same width control as the stroke tools while staying
+    /// large enough to hold a readable numeral.
+    /// </summary>
+    public static double MarkerDiameter(int strokeWidth) =>
+        Math.Max(MinimumMarkerDiameter, strokeWidth * 4.0);
+
+    /// <summary>
+    /// Draws one numbered marker: a solid disc in the shared annotation color with
+    /// the sequence numeral rasterized in white at its center, mirroring the GDI+
+    /// glyph path the text tool uses.
+    /// </summary>
+    private static void DrawMarkerStroke(int width, int height, int stride, byte[] pixels, AnnotationStroke stroke)
+    {
+        var anchor = stroke.Points[0];
+        double radius = MarkerDiameter(stroke.StrokeWidth) / 2.0;
+        int minX = Math.Max(0, (int)Math.Floor(anchor.X - radius));
+        int maxX = Math.Min(width - 1, (int)Math.Ceiling(anchor.X + radius));
+        int minY = Math.Max(0, (int)Math.Floor(anchor.Y - radius));
+        int maxY = Math.Min(height - 1, (int)Math.Ceiling(anchor.Y + radius));
+        double radiusSquared = radius * radius;
+
+        for (int y = minY; y <= maxY; y++)
+        {
+            for (int x = minX; x <= maxX; x++)
+            {
+                double distanceX = x - anchor.X;
+                double distanceY = y - anchor.Y;
+                if (distanceX * distanceX + distanceY * distanceY <= radiusSquared)
+                    BlendPixel(pixels, y * stride + x * 4, stroke.Color);
+            }
+        }
+
+        DrawMarkerNumeral(width, height, stride, pixels, anchor, radius, stroke);
+    }
+
+    /// <summary>
+    /// Blends the marker numeral in white at the disc center, so it reads
+    /// regardless of the annotation color.
+    /// </summary>
+    private static void DrawMarkerNumeral(
+        int width,
+        int height,
+        int stride,
+        byte[] pixels,
+        AnnotationPoint anchor,
+        double radius,
+        AnnotationStroke stroke)
+    {
+        string numeral = stroke.MarkerNumber?.ToString() ?? string.Empty;
+        if (numeral.Length == 0)
+            return;
+
+        // The numeral is sized to the disc and centered inside it.
+        DrawGlyphs(
+            width,
+            height,
+            stride,
+            pixels,
+            numeral,
+            (float)(radius * 1.1),
+            new PointF(anchor.X, anchor.Y),
+            measured => new PointF(
+                anchor.X - measured.Width / 2,
+                anchor.Y - measured.Height / 2),
+            new AnnotationColor(255, 255, 255));
+    }
 
     private static void FillBoundsIfFilled(
         int width,

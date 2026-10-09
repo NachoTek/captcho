@@ -387,6 +387,325 @@ public class AnnotationDocumentTests
         Assert.Equal(AnnotationFillStyle.None, stroke.Fill);
     }
 
+    // spec #40: text annotations
+
+    [Fact]
+    public void Text_CommitRetainsContentPositionAndStyleAsDocumentEntry()
+    {
+        var source = SolidFrame(8, 6, new AnnotationColor(20, 30, 40));
+        var session = new AnnotationSession(source, new AnnotationToolState(
+            AnnotationTool.Text,
+            new AnnotationColor(255, 0, 0),
+            5));
+
+        session.BeginText(new AnnotationPoint(2, 1));
+        session.EditInProgressText("Hello");
+        session.CommitStroke();
+
+        var stroke = Assert.Single(session.Document.Strokes);
+        Assert.Equal(AnnotationTool.Text, stroke.Tool);
+        Assert.Equal("Hello", stroke.Text);
+        Assert.Equal(new AnnotationPoint(2, 1), stroke.Points[0]);
+        Assert.Equal(new AnnotationColor(255, 0, 0), stroke.Color);
+        Assert.Equal(5, stroke.StrokeWidth);
+        Assert.Equal(AnnotationFillStyle.None, stroke.Fill);
+        Assert.Null(session.Document.InProgressText);
+
+        Assert.True(session.Undo());
+        Assert.Empty(session.Document.Strokes);
+        Assert.True(session.Redo());
+        var restored = Assert.Single(session.Document.Strokes);
+        Assert.Equal("Hello", restored.Text);
+        Assert.Equal(new AnnotationPoint(2, 1), restored.Points[0]);
+        Assert.Equal(new AnnotationColor(255, 0, 0), restored.Color);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Text_EmptyOrWhitespaceCommit_AddsNoDocumentEntry(string content)
+    {
+        var source = SolidFrame(8, 6, new AnnotationColor(20, 30, 40));
+        var session = new AnnotationSession(source, new AnnotationToolState(
+            AnnotationTool.Text,
+            new AnnotationColor(255, 0, 0),
+            5));
+
+        session.BeginText(new AnnotationPoint(2, 1));
+        session.EditInProgressText(content);
+
+        Assert.False(session.CommitStroke());
+
+        Assert.Empty(session.Document.Strokes);
+        Assert.Null(session.Document.InProgressText);
+        Assert.Null(session.Document.InProgressStroke);
+        Assert.Equal(source.Pixels, session.Render().Pixels);
+    }
+
+    [Fact]
+    public void Text_CancelDuringEntry_AddsNoDocumentEntryAndBlocksUndo()
+    {
+        var source = SolidFrame(8, 6, new AnnotationColor(20, 30, 40));
+        var session = new AnnotationSession(source);
+
+        session.BeginText(new AnnotationPoint(2, 1));
+        session.EditInProgressText("Hi");
+
+        session.CancelStroke();
+
+        Assert.Empty(session.Document.Strokes);
+        Assert.Null(session.Document.InProgressText);
+        Assert.False(session.CanUndo);
+        Assert.Equal(source.Pixels, session.Render().Pixels);
+    }
+
+    [Fact]
+    public void Text_EditBeforeCommit_UpdatesInProgressEntryOnly()
+    {
+        var source = SolidFrame(60, 40, new AnnotationColor(20, 30, 40));
+        var session = new AnnotationSession(source, new AnnotationToolState(
+            AnnotationTool.Text,
+            new AnnotationColor(255, 0, 0),
+            4));
+
+        session.BeginText(new AnnotationPoint(5, 5));
+        session.EditInProgressText("A");
+
+        Assert.Empty(session.Document.Strokes);
+        Assert.NotNull(session.Document.InProgressStroke);
+        Assert.Equal("A", session.Document.InProgressStroke!.Text);
+        Assert.NotEqual(source.Pixels, session.Render().Pixels);
+
+        session.EditInProgressText("AB");
+
+        Assert.Equal("AB", session.Document.InProgressStroke!.Text);
+    }
+
+    [Fact]
+    public void Text_EntrySnapshotsSharedStyleAtBegin()
+    {
+        var session = new AnnotationSession(SolidFrame(60, 40, new AnnotationColor(20, 30, 40)));
+
+        session.SetPenColor(new AnnotationColor(0, 255, 0));
+        session.SetStrokeWidth(7);
+        session.SetTool(AnnotationTool.Text);
+        session.BeginText(new AnnotationPoint(1, 1));
+        session.SetPenColor(new AnnotationColor(255, 0, 0));
+        session.SetStrokeWidth(2);
+        session.EditInProgressText("Hi");
+        session.CommitStroke();
+
+        var stroke = Assert.Single(session.Document.Strokes);
+        Assert.Equal(AnnotationTool.Text, stroke.Tool);
+        Assert.Equal(new AnnotationColor(0, 255, 0), stroke.Color);
+        Assert.Equal(7, stroke.StrokeWidth);
+    }
+
+    [Fact]
+    public void Text_EntryBlocksUndoRedoWhileInProgress()
+    {
+        var session = new AnnotationSession(SolidFrame(8, 6, new AnnotationColor(0, 0, 0)));
+
+        session.BeginStroke(new AnnotationPoint(1, 0));
+        session.CommitStroke();
+        session.BeginText(new AnnotationPoint(2, 1));
+        session.EditInProgressText("Hi");
+
+        Assert.False(session.CanUndo);
+        Assert.False(session.CanRedo);
+        Assert.False(session.Undo());
+        Assert.False(session.Redo());
+        Assert.Single(session.Document.Strokes);
+        Assert.NotNull(session.Document.InProgressText);
+    }
+
+    [Fact]
+    public void BeginStroke_WithTextTool_StartsATextEntryInsteadOfAPointStroke()
+    {
+        var session = new AnnotationSession(SolidFrame(60, 40, new AnnotationColor(0, 0, 0)), new AnnotationToolState(
+            AnnotationTool.Text,
+            new AnnotationColor(255, 0, 0),
+            4));
+
+        session.BeginStroke(new AnnotationPoint(3, 2));
+        session.AppendStrokePoint(new AnnotationPoint(5, 5));
+        session.UpdateStrokePoint(new AnnotationPoint(6, 6));
+
+        Assert.Equal(string.Empty, session.Document.InProgressText);
+        Assert.Null(session.Document.InProgressStroke);
+        Assert.Empty(session.Document.Strokes);
+    }
+
+    [Fact]
+    public void EditInProgressText_OutsideATextEntry_IsANoOp()
+    {
+        var session = new AnnotationSession(SolidFrame(8, 1, new AnnotationColor(0, 0, 0)));
+
+        session.BeginStroke(new AnnotationPoint(1, 0));
+        session.EditInProgressText("Hi");
+
+        var stroke = session.Document.InProgressStroke;
+        Assert.NotNull(stroke);
+        Assert.Null(stroke!.Text);
+        Assert.Equal(new[] { new AnnotationPoint(1, 0) }, stroke.Points);
+    }
+
+    // spec #41: numbered markers
+
+    [Fact]
+    public void Marker_CommitAssignsSequentialNumbersAndRetainsGeometryAndStyle()
+    {
+        var source = SolidFrame(120, 48, new AnnotationColor(20, 30, 40));
+        var session = new AnnotationSession(source, new AnnotationToolState(
+            AnnotationTool.Marker,
+            new AnnotationColor(255, 0, 0),
+            3));
+
+        session.BeginMarker(new AnnotationPoint(10, 10));
+        session.CommitStroke();
+        session.BeginMarker(new AnnotationPoint(60, 30));
+        session.CommitStroke();
+
+        Assert.Equal(2, session.Document.Strokes.Count);
+        Assert.All(session.Document.Strokes, s => Assert.Equal(AnnotationTool.Marker, s.Tool));
+        Assert.Equal(1, session.Document.Strokes[0].MarkerNumber);
+        Assert.Equal(2, session.Document.Strokes[1].MarkerNumber);
+        Assert.Equal(new AnnotationPoint(10, 10), session.Document.Strokes[0].Points[0]);
+        Assert.Equal(new AnnotationPoint(60, 30), session.Document.Strokes[1].Points[0]);
+        Assert.All(session.Document.Strokes, s => Assert.Single(s.Points));
+        Assert.All(session.Document.Strokes, s => Assert.Equal(new AnnotationColor(255, 0, 0), s.Color));
+        Assert.All(session.Document.Strokes, s => Assert.Equal(3, s.StrokeWidth));
+        Assert.All(session.Document.Strokes, s => Assert.Null(s.Text));
+        Assert.All(session.Document.Strokes, s => Assert.Equal(AnnotationFillStyle.None, s.Fill));
+    }
+
+    [Fact]
+    public void Marker_UndoRemovesTheLatestAndTheNextCommitNumbersPastTheHighestRemaining()
+    {
+        var source = SolidFrame(120, 48, new AnnotationColor(20, 30, 40));
+        var session = new AnnotationSession(source, new AnnotationToolState(
+            AnnotationTool.Marker,
+            new AnnotationColor(255, 0, 0),
+            3));
+
+        session.BeginMarker(new AnnotationPoint(10, 10));
+        session.CommitStroke();
+        session.BeginMarker(new AnnotationPoint(40, 10));
+        session.CommitStroke();
+        session.BeginMarker(new AnnotationPoint(70, 10));
+        session.CommitStroke();
+
+        Assert.True(session.Undo());
+
+        Assert.Equal(new int?[] { 1, 2 }, session.Document.Strokes.Select(s => s.MarkerNumber).ToArray());
+        session.BeginMarker(new AnnotationPoint(95, 10));
+        session.CommitStroke();
+
+        Assert.Equal(new int?[] { 1, 2, 3 }, session.Document.Strokes.Select(s => s.MarkerNumber).ToArray());
+        Assert.Equal(new AnnotationPoint(95, 10), session.Document.Strokes[^1].Points[0]);
+    }
+
+    [Fact]
+    public void Marker_RedoRestoresTheOriginalNumber()
+    {
+        var source = SolidFrame(120, 48, new AnnotationColor(20, 30, 40));
+        var session = new AnnotationSession(source, new AnnotationToolState(
+            AnnotationTool.Marker,
+            new AnnotationColor(255, 0, 0),
+            3));
+
+        session.BeginMarker(new AnnotationPoint(10, 10));
+        session.CommitStroke();
+        session.BeginMarker(new AnnotationPoint(40, 10));
+        session.CommitStroke();
+
+        Assert.True(session.Undo());
+        Assert.True(session.Undo());
+        Assert.True(session.Redo());
+
+        var restored = Assert.Single(session.Document.Strokes);
+        Assert.Equal(1, restored.MarkerNumber);
+        Assert.Equal(new AnnotationPoint(10, 10), restored.Points[0]);
+    }
+
+    [Fact]
+    public void Marker_NumbersOnlyCountMarkersNotOtherTools()
+    {
+        var source = SolidFrame(120, 48, new AnnotationColor(20, 30, 40));
+        var session = new AnnotationSession(source, new AnnotationToolState(
+            AnnotationTool.Marker,
+            new AnnotationColor(255, 0, 0),
+            3));
+
+        session.BeginMarker(new AnnotationPoint(10, 10));
+        session.CommitStroke();
+        session.SetTool(AnnotationTool.Pen);
+        session.BeginStroke(new AnnotationPoint(20, 20));
+        session.CommitStroke();
+        session.SetTool(AnnotationTool.Text);
+        session.BeginText(new AnnotationPoint(30, 30));
+        session.EditInProgressText("Hi");
+        session.CommitStroke();
+        session.SetTool(AnnotationTool.Marker);
+        session.BeginMarker(new AnnotationPoint(50, 30));
+        session.CommitStroke();
+
+        Assert.Equal(4, session.Document.Strokes.Count);
+        Assert.Equal(1, session.Document.Strokes[0].MarkerNumber);
+        Assert.Null(session.Document.Strokes[1].MarkerNumber);
+        Assert.Null(session.Document.Strokes[2].MarkerNumber);
+        Assert.Equal(2, session.Document.Strokes[3].MarkerNumber);
+    }
+
+    [Fact]
+    public void Marker_InProgressEntryPreviewsItsNumberAndIgnoresDragUpdates()
+    {
+        var source = SolidFrame(120, 48, new AnnotationColor(20, 30, 40));
+        var session = new AnnotationSession(source, new AnnotationToolState(
+            AnnotationTool.Marker,
+            new AnnotationColor(255, 0, 0),
+            3));
+
+        session.SetTool(AnnotationTool.Marker);
+        session.BeginStroke(new AnnotationPoint(30, 24));
+        session.AppendStrokePoint(new AnnotationPoint(50, 24));
+        session.UpdateStrokePoint(new AnnotationPoint(60, 24));
+
+        var stroke = session.Document.InProgressStroke;
+        Assert.NotNull(stroke);
+        Assert.Equal(AnnotationTool.Marker, stroke!.Tool);
+        Assert.Equal(1, stroke.MarkerNumber);
+        Assert.Equal(new[] { new AnnotationPoint(30, 24) }, stroke.Points);
+        // The in-progress entry blocks document history like any other entry.
+        Assert.False(session.Undo());
+        Assert.False(session.Redo());
+
+        session.CancelStroke();
+
+        Assert.Empty(session.Document.Strokes);
+        Assert.Null(session.Document.InProgressStroke);
+        Assert.Equal(source.Pixels, session.Render().Pixels);
+    }
+
+    [Fact]
+    public void Marker_SnapshotsSharedStyleAtBegin()
+    {
+        var session = new AnnotationSession(SolidFrame(120, 48, new AnnotationColor(20, 30, 40)));
+
+        session.SetPenColor(new AnnotationColor(0, 255, 0));
+        session.SetStrokeWidth(7);
+        session.SetTool(AnnotationTool.Marker);
+        session.BeginMarker(new AnnotationPoint(30, 24));
+        session.SetPenColor(new AnnotationColor(255, 0, 0));
+        session.SetStrokeWidth(2);
+        session.CommitStroke();
+
+        var stroke = Assert.Single(session.Document.Strokes);
+        Assert.Equal(AnnotationTool.Marker, stroke.Tool);
+        Assert.Equal(new AnnotationColor(0, 255, 0), stroke.Color);
+        Assert.Equal(7, stroke.StrokeWidth);
+    }
+
     private static ContiguousBitmap SolidFrame(int width, int height, AnnotationColor color)
     {
         var pixels = new byte[width * height * 4];
