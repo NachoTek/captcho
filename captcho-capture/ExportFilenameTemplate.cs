@@ -118,9 +118,12 @@ public static class ExportFilenameTemplate
     /// <summary>
     /// Generates the full export path using the provided settings for directory and template.
     /// Falls back to <see cref="ExportDefaults"/> when settings properties are null/empty.
+    /// The extension is derived from the configured export format (issue #45) —
+    /// never from the Filename Template, which stays format-agnostic; any
+    /// extension-like suffix the template carries is replaced.
     /// Creates the target directory if it doesn't exist.
     /// </summary>
-    /// <param name="settings">Application settings providing save location and filename template.</param>
+    /// <param name="settings">Application settings providing save location, filename template, and export format.</param>
     /// <param name="timestamp">Timestamp for date/time placeholders.</param>
     /// <param name="title">Optional capture title.</param>
     /// <param name="sequenceNumber">Optional sequence number.</param>
@@ -131,8 +134,18 @@ public static class ExportFilenameTemplate
         string template = settings.EffectiveFilenameTemplate;
         string filename = Expand(template, timestamp, title, sequenceNumber);
         string sanitized = SanitizeForFileName(filename);
-        if (!sanitized.EndsWith($".{ExportDefaults.DefaultExtension}", StringComparison.OrdinalIgnoreCase))
-            sanitized += $".{ExportDefaults.DefaultExtension}";
+        string extension = settings.EffectiveExportSettings.Format.Extension();
+        if (!sanitized.EndsWith($".{extension}", StringComparison.OrdinalIgnoreCase))
+        {
+            // Replace only a stale image-format suffix (.png/.jpg/.jpeg) left
+            // in a legacy template so the derived extension always matches
+            // the encoded bytes; any other trailing dot-segment (for example
+            // "my.capture") is ordinary filename text and is kept, with the
+            // derived extension appended as before.
+            sanitized = HasImageFormatSuffix(sanitized)
+                ? (Path.ChangeExtension(sanitized, extension) ?? sanitized + "." + extension)
+                : sanitized + "." + extension;
+        }
 
         string directory = settings.EffectiveSaveLocation;
         Directory.CreateDirectory(directory);
@@ -154,6 +167,17 @@ public static class ExportFilenameTemplate
     {
         return GetExportPath(AppSettings.WithDefaults(), timestamp, title, sequenceNumber);
     }
+
+    /// <summary>
+    /// Whether the filename ends in a known image-format extension
+    /// (.png/.jpg/.jpeg, case-insensitive) — a stale format suffix a legacy
+    /// template carried before extensions were derived from the configured
+    /// format (issue #45).
+    /// </summary>
+    private static bool HasImageFormatSuffix(string filename) =>
+        filename.EndsWith(".png", StringComparison.OrdinalIgnoreCase)
+        || filename.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase)
+        || filename.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Resolves a collision by incrementing the sequence number or appending one.

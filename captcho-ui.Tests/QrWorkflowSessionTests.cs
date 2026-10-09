@@ -43,7 +43,8 @@ public class QrWorkflowSessionTests
             static () => null,
             scanner,
             new UnconfiguredWorkflowExportAdapter(),
-            new UnavailableSaveAsDialogAdapter());
+            new UnavailableSaveAsDialogAdapter(),
+            static () => AutomaticExportSettings.WithDefaults());
 
     // ── In-memory Frame reuse ───────────────────────────────────────────
 

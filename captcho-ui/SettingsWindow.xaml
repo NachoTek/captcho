@@ -3,7 +3,8 @@
 Layout:
   ┌─────────────────────────────────────────┐
   │  TabView: General, Global Hotkeys, Capture,  │
-  │            Annotation, Export, Interface     │
+  │            Annotation, Behavior, Export,     │
+  │            Interface                         │
   ├─────────────────────────────────────────┤
   │ [Reset to Defaults] [OK] [Cancel] [Apply]   [Save status] │
   └─────────────────────────────────────────┘
@@ -92,7 +93,7 @@ Layout:
                         <TextBlock TextWrapping="Wrap"
                                    FontSize="13"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                   Text="Toggle which Global Hotkeys are active. Changes take effect on Apply or OK and persist for future launches. Global Hotkey bindings cannot be remapped."/>
+                                   Text="Toggle which Global Hotkeys are active and record new key combinations. Changes take effect on Apply or OK and persist for future launches. Suspected conflicts are warned about when you record; a combination that fails to register marks its row inactive."/>
                         <StackPanel x:Name="GlobalHotkeysRowsPanel" Spacing="8"/>
                     </StackPanel>
                 </ScrollViewer>
@@ -215,32 +216,85 @@ Layout:
                 </ScrollViewer>
             </TabViewItem>
 
+            <TabViewItem Header="Behavior">
+                <ScrollViewer Padding="20" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="Automatic Actions"
+                                   FontSize="16" FontWeight="SemiBold"
+                                   AutomationProperties.HeadingLevel="Level1"/>
+                        <TextBlock TextWrapping="Wrap"
+                                   FontSize="13"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   Text="Choose which Export actions run automatically after you confirm Annotation. Actions run in order: save, Copy Frame, then Copy Path — the saved file's path is available to Copy Path in the same sequence. Cancelling Annotation runs no automatic actions. A failed action is reported so you can retry it manually."/>
+                        <ToggleSwitch x:Name="AutoSaveToggle"
+                                      Header="Save automatically"
+                                      OnContent="On"
+                                      OffContent="Off"
+                                      Toggled="AutoSaveToggle_Toggled"
+                                      MinWidth="200"/>
+                        <ToggleSwitch x:Name="AutoCopyFrameToggle"
+                                      Header="Copy Frame automatically"
+                                      OnContent="On"
+                                      OffContent="Off"
+                                      Toggled="AutoCopyFrameToggle_Toggled"
+                                      MinWidth="200"/>
+                        <ToggleSwitch x:Name="AutoCopyPathToggle"
+                                      Header="Copy Path automatically"
+                                      OnContent="On"
+                                      OffContent="Off"
+                                      Toggled="AutoCopyPathToggle_Toggled"
+                                      MinWidth="200"/>
+                        <TextBlock FontSize="12"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   Text="Copy Path requires a saved file: enable Save automatically or save manually first."/>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabViewItem>
+
             <TabViewItem Header="Export">
                 <ScrollViewer Padding="20" VerticalScrollBarVisibility="Auto">
                     <StackPanel Spacing="12">
-                        <TextBlock x:Name="ExportFormatHeading"
+                        <TextBlock Text="Export Settings"
                                    FontSize="16" FontWeight="SemiBold"
                                    AutomationProperties.HeadingLevel="Level1"/>
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <TextBlock Text="Current format"
-                                       FontSize="14"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                            <TextBlock x:Name="ExportFormatNameText"
-                                       FontSize="14" FontWeight="SemiBold"/>
-                            <TextBlock x:Name="ExportFormatExtensionText"
-                                       FontFamily="Consolas"
-                                       FontSize="14"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        </StackPanel>
+                        <TextBlock TextWrapping="Wrap"
+                                   FontSize="13"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   Text="Choose the format Captcho saves captures in. The file extension follows the format; the Filename Template stays format-agnostic."/>
+                        <ComboBox x:Name="ExportFormatCombo"
+                                  Header="Format"
+                                  MinWidth="240"
+                                  SelectionChanged="ExportFormatCombo_SelectionChanged">
+                            <ComboBoxItem Content="PNG"/>
+                            <ComboBoxItem Content="JPEG"/>
+                        </ComboBox>
                         <TextBlock x:Name="ExportFormatDescriptionText"
                                    TextWrapping="Wrap"
                                    FontSize="13"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        <TextBlock x:Name="ExportPlannedFormatsText"
+                        <Slider x:Name="ExportJpegQualitySlider"
+                                Header="JPEG quality"
+                                Minimum="0" Maximum="100"
+                                StepFrequency="1"
+                                ValueChanged="ExportJpegQualitySlider_ValueChanged"
+                                MinWidth="240"/>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="Files are saved as"
+                                       FontSize="13"
+                                       VerticalAlignment="Center"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <TextBlock x:Name="ExportFormatExtensionText"
+                                       FontFamily="Consolas"
+                                       FontSize="13"
+                                       VerticalAlignment="Center"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        </StackPanel>
+                        <TextBlock x:Name="ExportJpegQualityErrorText"
+                                   Foreground="{ThemeResource TextFillColorCriticalBrush}"
+                                   FontSize="12"
                                    TextWrapping="Wrap"
-                                   FontSize="13" FontStyle="Italic"
-                                   Margin="0,4,0,0"
-                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                                   Visibility="Collapsed"/>
                     </StackPanel>
                 </ScrollViewer>
             </TabViewItem>

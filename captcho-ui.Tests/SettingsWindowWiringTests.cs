@@ -151,7 +151,7 @@ internal sealed class NullGlobalHotkeyAdapterForTests : IGlobalHotkeyAdapter
 
     public IReadOnlyList<GlobalHotkeyRegistrationResult> RegistrationResults => Empty;
 
-    public IReadOnlyList<GlobalHotkeyRegistrationResult> ApplyEnabledStates(IReadOnlySet<int> enabledIds)
+    public IReadOnlyList<GlobalHotkeyRegistrationResult> ApplySettings(AppSettings settings)
         => Empty;
 }
 

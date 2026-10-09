@@ -9,13 +9,15 @@
 
 using System;
 using System.Collections.Generic;
+using captcho.Capture;
 
 namespace captcho.UI;
 
 /// <summary>
 /// Reads current registration status for display and reconciles runtime
-/// registration to match the user's per-Global-Hotkey enabled choices. Injectable so the
-/// Global Hotkeys settings coordinator is testable without a Win32 Global Hotkey manager.
+/// registration to match the user's per-Global-Hotkey choices (enabled states
+/// and recorded key combinations). Injectable so the Global Hotkeys settings
+/// coordinator is testable without a Win32 Global Hotkey manager.
 /// </summary>
 public interface IGlobalHotkeyAdapter
 {
@@ -26,13 +28,15 @@ public interface IGlobalHotkeyAdapter
     IReadOnlyList<GlobalHotkeyRegistrationResult> RegistrationResults { get; }
 
     /// <summary>
-    /// Reconciles runtime registration so exactly the Global Hotkeys in
-    /// <paramref name="enabledIds"/> are registered: registers any enabled id that
-    /// is not yet active and unregisters any disabled id. Returns the registration
-    /// results for the enabled Global Hotkeys (disabled Global Hotkeys are intentionally omitted).
-    /// Must not throw for expected registration conflicts.
+    /// Reconciles runtime registration so exactly the Global Hotkeys enabled in
+    /// <paramref name="settings"/> are registered, each with its effective binding
+    /// from Configuration (recorded combination or legacy default): registers any
+    /// enabled Global Hotkey that is not yet active, unregisters any disabled one,
+    /// and re-registers any whose combination changed. Returns the registration
+    /// results for the enabled Global Hotkeys (disabled Global Hotkeys are
+    /// intentionally omitted). Must not throw for expected registration conflicts.
     /// </summary>
-    IReadOnlyList<GlobalHotkeyRegistrationResult> ApplyEnabledStates(IReadOnlySet<int> enabledIds);
+    IReadOnlyList<GlobalHotkeyRegistrationResult> ApplySettings(AppSettings settings);
 }
 
 /// <summary>
@@ -54,8 +58,8 @@ internal sealed class GlobalHotkeyManagerAdapter : IGlobalHotkeyAdapter
 
     public IReadOnlyList<GlobalHotkeyRegistrationResult> RegistrationResults => _manager.RegistrationResults;
 
-    public IReadOnlyList<GlobalHotkeyRegistrationResult> ApplyEnabledStates(IReadOnlySet<int> enabledIds)
-        => _manager.Reconcile(_hwnd, enabledIds);
+    public IReadOnlyList<GlobalHotkeyRegistrationResult> ApplySettings(AppSettings settings)
+        => _manager.Reconcile(_hwnd, settings);
 }
 
 /// <summary>
@@ -70,6 +74,6 @@ internal sealed class NullGlobalHotkeyAdapter : IGlobalHotkeyAdapter
 
     public IReadOnlyList<GlobalHotkeyRegistrationResult> RegistrationResults => Empty;
 
-    public IReadOnlyList<GlobalHotkeyRegistrationResult> ApplyEnabledStates(IReadOnlySet<int> enabledIds)
+    public IReadOnlyList<GlobalHotkeyRegistrationResult> ApplySettings(AppSettings settings)
         => Empty;
 }

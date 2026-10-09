@@ -10,6 +10,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -91,12 +92,6 @@ public sealed partial class SettingsWindow : Window
                 p => $"{p.Token} — {p.Description} ({p.Example})"));
 
         // Read-only tab content.
-        ExportFormatHeading.Text = view.Export.Heading;
-        ExportFormatNameText.Text = view.Export.FormatName;
-        ExportFormatExtensionText.Text = $"({view.Export.FileExtension})";
-        ExportFormatDescriptionText.Text = view.Export.FormatDescription;
-        ExportPlannedFormatsText.Text = view.Export.PlannedFormatsNote;
-
         InterfaceHeading.Text = view.Interface.Heading;
         InterfaceMessageText.Text = view.Interface.Message;
         InterfacePlannedText.Text = view.Interface.PlannedSettingsNote;
@@ -113,6 +108,17 @@ public sealed partial class SettingsWindow : Window
         RebuildGlobalHotkeyRows(view.GlobalHotkeyRows);
         PopulateOcrLanguageCombo();
         ApplyView(view);
+
+        // Inline key recorder: preview key presses at the content root so a
+        // recording session captures the next combination before any control
+        // consumes it.
+        if (this.Content is UIElement contentRoot)
+        {
+            contentRoot.AddHandler(
+                UIElement.KeyDownEvent,
+                ContentRoot_PreviewKeyDown,
+                true);
+        }
 
         // Hook Closed event for coordinator cleanup
         this.Closed += OnWindowClosed;
@@ -359,6 +365,74 @@ public sealed partial class SettingsWindow : Window
         ApplyView(_session.EditAnnotationStrokeWidth(value));
     }
 
+    // ── Export tab event routing (issue #45) ───────────────────────────
+
+    /// <summary>
+    /// Routes a format combo selection into the session and rebinds. Suppressed
+    /// while <see cref="ApplyView"/> is programmatically setting the selection so
+    /// the rebind does not re-enter the session.
+    /// </summary>
+    private void ExportFormatCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_applyingView || ExportFormatCombo.SelectedIndex < 0)
+            return;
+
+        ApplyView(_session.EditExportFormat(
+            (ExportImageFormat)ExportFormatCombo.SelectedIndex));
+    }
+
+    /// <summary>
+    /// Routes a JPEG quality slider change into the session and rebinds.
+    /// Suppressed while <see cref="ApplyView"/> is programmatically setting the
+    /// value.
+    /// </summary>
+    private void ExportJpegQualitySlider_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs args)
+    {
+        if (_applyingView)
+            return;
+
+        ApplyView(_session.EditExportJpegQuality((int)args.NewValue));
+    }
+
+    // ── Behavior tab event routing ─────────────────────────────────────────
+
+    /// <summary>
+    /// Routes an automatic-save toggle change into the session and rebinds.
+    /// Suppressed while <see cref="ApplyView"/> is programmatically setting
+    /// toggle state.
+    /// </summary>
+    private void AutoSaveToggle_Toggled(object sender, RoutedEventArgs e) =>
+        EditBehavior(() => _session.EditAutomaticSave(AutoSaveToggle.IsOn));
+
+    /// <summary>
+    /// Routes an automatic Copy Frame toggle change into the session and
+    /// rebinds. Suppressed while <see cref="ApplyView"/> is programmatically
+    /// setting toggle state.
+    /// </summary>
+    private void AutoCopyFrameToggle_Toggled(object sender, RoutedEventArgs e) =>
+        EditBehavior(() => _session.EditAutomaticCopyFrame(AutoCopyFrameToggle.IsOn));
+
+    /// <summary>
+    /// Routes an automatic Copy Path toggle change into the session and
+    /// rebinds. Suppressed while <see cref="ApplyView"/> is programmatically
+    /// setting toggle state.
+    /// </summary>
+    private void AutoCopyPathToggle_Toggled(object sender, RoutedEventArgs e) =>
+        EditBehavior(() => _session.EditAutomaticCopyPath(AutoCopyPathToggle.IsOn));
+
+    /// <summary>
+    /// Shared shape for a Behavior-tab toggle edit: suppressed while
+    /// <see cref="ApplyView"/> is programmatically setting toggle state,
+    /// routes the edit through the session, and rebinds from the returned
+    /// view.
+    /// </summary>
+    private void EditBehavior(Func<SettingsView> edit)
+    {
+        if (_applyingView)
+            return;
+        ApplyView(edit());
+    }
+
     // ── Command buttons ─────────────────────────────────────────────────
 
     /// <summary>
@@ -457,6 +531,24 @@ public sealed partial class SettingsWindow : Window
             AnnotationToolCombo.SelectedIndex = (int)view.Annotation.DefaultTool;
             AnnotationPenColorCombo.SelectedIndex = AnnotationColorIndex(view.Annotation.PenColor);
             AnnotationStrokeWidthInput.Value = view.Annotation.StrokeWidth;
+
+            // Export tab: format combo, quality slider, and derived display.
+            // The quality slider is enabled only for JPEG — PNG is lossless
+            // and takes no quality — while its value is always reflected from
+            // the view so a format round-trip never discards the choice.
+            ExportFormatCombo.SelectedIndex = (int)view.Export.Format;
+            ExportJpegQualitySlider.Value = view.Export.JpegQuality;
+            ExportJpegQualitySlider.IsEnabled = view.Export.JpegQualityAvailable;
+            ExportFormatExtensionText.Text = view.Export.FileExtension;
+            ExportFormatDescriptionText.Text = view.Export.Format == ExportImageFormat.Jpeg
+                ? "JPEG compresses captures into smaller files at the chosen quality. JPEG has no transparency: fully transparent pixels are saved as white."
+                : "PNG is lossless and preserves transparency, keeping sharp text and fine detail at full fidelity.";
+
+            // Behavior-tab toggles are driven from the view so Reset/Cancel
+            // rebind through this single site, under the _applyingView guard.
+            AutoSaveToggle.IsOn = view.Behavior.AutoSave;
+            AutoCopyFrameToggle.IsOn = view.Behavior.AutoCopyFrame;
+            AutoCopyPathToggle.IsOn = view.Behavior.AutoCopyPath;
         }
         finally
         {
@@ -491,6 +583,12 @@ public sealed partial class SettingsWindow : Window
         AnnotationSettingsErrorText.Visibility = string.IsNullOrEmpty(view.Annotation.Error)
             ? Visibility.Collapsed
             : Visibility.Visible;
+
+        string? exportQualityError = view.Export.JpegQualityError;
+        ExportJpegQualityErrorText.Text = exportQualityError ?? string.Empty;
+        ExportJpegQualityErrorText.Visibility = string.IsNullOrEmpty(exportQualityError)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
     }
 
     private static AnnotationColor AnnotationColorForIndex(int index) => index switch
@@ -510,9 +608,12 @@ public sealed partial class SettingsWindow : Window
     /// <summary>
     /// Clears and rebuilds the Global Hotkeys tab rows. Toggle switches are populated before
     /// their Toggled handler is attached so the initial value does not fire as an edit.
+    /// The Full Desktop row carries an inline key recorder (issue #51): a Change… button
+    /// enters capture mode and the next key press with modifiers records the combination.
     /// </summary>
     private void RebuildGlobalHotkeyRows(IReadOnlyList<GlobalHotkeyRow> rows)
     {
+        _recordingHotkeyId = null;
         GlobalHotkeysRowsPanel.Children.Clear();
         _globalHotkeyStatusCells.Clear();
 
@@ -541,13 +642,26 @@ public sealed partial class SettingsWindow : Window
             };
             toggle.Toggled += GlobalHotkeyToggle_Toggled;
 
-            var info = new StackPanel { Spacing = 2 };
-            info.Children.Add(new TextBlock
+            var bindingText = new TextBlock
             {
                 Text = row.Binding,
                 FontSize = 14,
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            });
+            };
+            var warningText = new TextBlock
+            {
+                Text = row.BindingWarning ?? string.Empty,
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = (Brush)Application.Current.Resources["TextFillColorCautionBrush"],
+                Visibility = string.IsNullOrEmpty(row.BindingWarning)
+                    ? Visibility.Collapsed
+                    : Visibility.Visible,
+            };
+
+            var info = new StackPanel { Spacing = 2 };
+            info.Children.Add(bindingText);
+            info.Children.Add(warningText);
             info.Children.Add(new TextBlock
             {
                 Text = row.Behavior,
@@ -560,9 +674,29 @@ public sealed partial class SettingsWindow : Window
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             Grid.SetColumn(info, 0);
             Grid.SetColumn(statusText, 1);
             Grid.SetColumn(toggle, 2);
+
+            // Inline recorder for the Full Desktop Global Hotkey only (issue #51 —
+            // the single-hotkey tracer bullet; remaining rows migrate in #52).
+            if (row.Id == GlobalHotkeyRouteMap.IdShiftPrintScreen)
+            {
+                var recordButton = new Button
+                {
+                    Content = "Change…",
+                    MinHeight = 36,
+                    CornerRadius = new CornerRadius(6),
+                    Margin = new Thickness(0, 0, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Tag = row.Id,
+                };
+                recordButton.Click += RecordBindingButton_Click;
+                Grid.SetColumn(recordButton, 3);
+                grid.Children.Add(recordButton);
+            }
+
             grid.Children.Add(info);
             grid.Children.Add(statusText);
             grid.Children.Add(toggle);
@@ -578,6 +712,89 @@ public sealed partial class SettingsWindow : Window
             });
         }
     }
+
+    // ── Inline key recorder (Full Desktop row, issue #51) ──────────────
+
+    /// <summary>
+    /// The Global Hotkey id currently being recorded, or null. While set, the
+    /// next non-modifier key press (with whatever modifiers are held) records
+    /// the combination through the session; Escape cancels recording.
+    /// </summary>
+    private int? _recordingHotkeyId;
+
+    /// <summary>
+    /// Win32 modifier flags mirrored for capture-mode key state reads.
+    /// </summary>
+    private const int MOD_ALT = 0x0001;
+    private const int MOD_CONTROL = 0x0002;
+    private const int MOD_SHIFT = 0x0004;
+    private const int MOD_WIN = 0x0008;
+
+    // Virtual key codes used by the recorder (Win32 values; WinUI VirtualKey
+    // maps the same integers for these keys).
+    private const int VK_ESCAPE = 0x1B;
+    private const int VK_SHIFT = 0x10;
+    private const int VK_CONTROL = 0x11;
+    private const int VK_MENU = 0x12;
+    private const int VK_LWIN = 0x5B;
+    private const int VK_RWIN = 0x5C;
+
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int nVirtKey);
+
+    /// <summary>
+    /// Enters capture mode for the row's Global Hotkey. The button re-labels to
+    /// guide the user; the next key press is intercepted in the
+    /// <see cref="KeyboardAccelerator_Typed"/>-style preview handler installed
+    /// on this window's content root.
+    /// </summary>
+    private void RecordBindingButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button || button.Tag is not int id)
+            return;
+
+        _recordingHotkeyId = id;
+        var row = _session.View.GlobalHotkeyRows.Single(r => r.Id == id);
+        button.Content = $"Press keys for “{row.Behavior}”… (Esc cancels)";
+    }
+
+    /// <summary>
+    /// While recording, intercepts key presses on the settings window: Escape
+    /// cancels; a modifier alone does nothing; any other key with its held
+    /// modifiers records the combination through the session and refreshes the
+    /// rows (rebinding the recorded binding name and any conflict warning).
+    /// </summary>
+    private void ContentRoot_PreviewKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (_recordingHotkeyId is not int id)
+            return;
+
+        var vk = (int)e.Key;
+        if (vk == VK_ESCAPE)
+        {
+            _recordingHotkeyId = null;
+            RebuildGlobalHotkeyRows(_session.View.GlobalHotkeyRows);
+            return;
+        }
+
+        // Modifier-only presses wait for the real key.
+        if (vk is 0x10 or 0x11 or 0x12 or 0x5B or 0x5C)
+            return;
+
+        int modifiers = 0;
+        if (IsPressed(VK_SHIFT)) modifiers |= MOD_SHIFT;
+        if (IsPressed(VK_CONTROL)) modifiers |= MOD_CONTROL;
+        if (IsPressed(VK_MENU)) modifiers |= MOD_ALT;
+        if (IsPressed(VK_LWIN) || IsPressed(VK_RWIN)) modifiers |= MOD_WIN;
+
+        var view = _session.RecordGlobalHotkeyBinding(id, new HotkeyBinding(modifiers, vk));
+        _recordingHotkeyId = null;
+        RebuildGlobalHotkeyRows(view.GlobalHotkeyRows);
+        ApplyView(view);
+        e.Handled = true;
+    }
+
+    private static bool IsPressed(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
 
     private static string StatusDisplay(GlobalHotkeyRegistrationStatus status, string detail) => status switch
     {

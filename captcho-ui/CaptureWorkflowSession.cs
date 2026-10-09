@@ -156,6 +156,15 @@ public sealed class WorkflowResult<TImage>
     /// <summary>Total wall-clock duration in milliseconds.</summary>
     public double TotalMs { get; init; }
 
+    /// <summary>
+    /// Report of the configured automatic delivery actions that ran after
+    /// Annotation confirmation (issue #47). Null when no automatic action was
+    /// enabled, when Annotation (or Target Selection) was cancelled, or when
+    /// the workflow failed before the delivery point — cancellation and
+    /// failure create no delivery side effects.
+    /// </summary>
+    public AutomaticExportReport? AutomaticExport { get; init; }
+
     /// <summary>True only when the workflow reached the Succeeded status.</summary>
     public bool IsSuccess => Status == WorkflowStatus.Succeeded;
 }
@@ -645,6 +654,7 @@ public sealed class CaptureWorkflowSession<TImage>
     private readonly IQrScanner _qrScanner;
     private readonly IWorkflowExportAdapter _export;
     private readonly ISaveAsDialogAdapter _saveAsDialog;
+    private readonly Func<AutomaticExportSettings> _automaticExport;
 
     // Workflow-side Capture-options override holder. Composed committed defaults
     // with per-Capture-Mode session overrides to produce the effective options
@@ -810,7 +820,8 @@ public sealed class CaptureWorkflowSession<TImage>
                captureOptions, rememberedSelection, annotationOverlay, annotationEnabled,
                annotationToolState, NullOcrEngine.Instance, static () => null,
                UnconfiguredWorkflowExportAdapter.Instance,
-               UnavailableSaveAsDialogAdapter.Instance)
+               UnavailableSaveAsDialogAdapter.Instance,
+               static () => AutomaticExportSettings.WithDefaults())
     {
     }
 
@@ -838,7 +849,8 @@ public sealed class CaptureWorkflowSession<TImage>
                captureOptions, rememberedSelection, annotationOverlay, annotationEnabled,
                annotationToolState, ocrEngine, ocrLanguageTag,
                UnconfiguredWorkflowExportAdapter.Instance,
-               UnavailableSaveAsDialogAdapter.Instance)
+               UnavailableSaveAsDialogAdapter.Instance,
+               static () => AutomaticExportSettings.WithDefaults())
     {
     }
 
@@ -865,14 +877,19 @@ public sealed class CaptureWorkflowSession<TImage>
         : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
                captureOptions, rememberedSelection, annotationOverlay, annotationEnabled,
                annotationToolState, NullOcrEngine.Instance, static () => null,
-               export, saveAsDialog)
+               export, saveAsDialog,
+               static () => AutomaticExportSettings.WithDefaults())
     {
     }
 
     /// <summary>
     /// Creates a workflow with the OCR engine, the persisted OCR language
-    /// selection, and the Export actions all wired — QR scanning defaults to
-    /// the scanner-less null scanner.
+    /// selection, the Export actions, and the configured automatic Export
+    /// source all wired — QR scanning defaults to the scanner-less null
+    /// scanner. The automatic Export settings are read through
+    /// <paramref name="automaticExport"/> when each Capture completes, so
+    /// committed Settings changes take effect on the next Capture without
+    /// reconstructing the session.
     /// </summary>
     public CaptureWorkflowSession(
         IWorkflowCaptureAdapter capture,
@@ -888,18 +905,23 @@ public sealed class CaptureWorkflowSession<TImage>
         IOcrEngine ocrEngine,
         Func<string?> ocrLanguageTag,
         IWorkflowExportAdapter export,
-        ISaveAsDialogAdapter saveAsDialog)
+        ISaveAsDialogAdapter saveAsDialog,
+        Func<AutomaticExportSettings> automaticExport)
         : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
                captureOptions, rememberedSelection, annotationOverlay, annotationEnabled,
                annotationToolState, ocrEngine, ocrLanguageTag, NullQrScanner.Instance,
-               export, saveAsDialog)
+               export, saveAsDialog, automaticExport)
     {
     }
 
     /// <summary>
     /// Creates a workflow with the OCR engine, the persisted OCR language
-    /// selection, the QR scanner, and the Export actions all wired — the
-    /// constructor production uses.
+    /// selection, the QR scanner, the Export actions, and the configured
+    /// automatic Export source all wired — the constructor production uses.
+    /// The automatic Export settings are read through
+    /// <paramref name="automaticExport"/> when each Capture completes, so
+    /// committed Settings changes take effect on the next Capture without
+    /// reconstructing the session.
     /// </summary>
     public CaptureWorkflowSession(
         IWorkflowCaptureAdapter capture,
@@ -916,7 +938,8 @@ public sealed class CaptureWorkflowSession<TImage>
         Func<string?> ocrLanguageTag,
         IQrScanner qrScanner,
         IWorkflowExportAdapter export,
-        ISaveAsDialogAdapter saveAsDialog)
+        ISaveAsDialogAdapter saveAsDialog,
+        Func<AutomaticExportSettings> automaticExport)
     {
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
         _preview = preview ?? throw new ArgumentNullException(nameof(preview));
@@ -933,6 +956,7 @@ public sealed class CaptureWorkflowSession<TImage>
         _qrScanner = qrScanner ?? throw new ArgumentNullException(nameof(qrScanner));
         _export = export ?? throw new ArgumentNullException(nameof(export));
         _saveAsDialog = saveAsDialog ?? throw new ArgumentNullException(nameof(saveAsDialog));
+        _automaticExport = automaticExport ?? throw new ArgumentNullException(nameof(automaticExport));
     }
 
     /// <summary>
@@ -1244,12 +1268,14 @@ public sealed class CaptureWorkflowSession<TImage>
 
             var composedFrame = annotationResult.Frame!;
             OwnFrame(composedFrame);
+            var automaticReport = await RunAutomaticExportAsync();
             return WorkflowResultFor(label, WorkflowStatus.Succeeded,
                 frame: composedFrame,
                 dimensions: $"{composedFrame.Width}×{composedFrame.Height}",
                 captureMs: captureResult.ElapsedMs,
                 displayMs: annotationResult.ElapsedMs,
-                totalMs: totalSw.Elapsed.TotalMilliseconds);
+                totalMs: totalSw.Elapsed.TotalMilliseconds,
+                automaticExport: automaticReport);
         }
 
         OwnFrame(frame);
@@ -1265,13 +1291,63 @@ public sealed class CaptureWorkflowSession<TImage>
                 totalMs: totalSw.Elapsed.TotalMilliseconds);
         }
 
+        var previewAutomaticReport = await RunAutomaticExportAsync();
         return WorkflowResultFor(label, WorkflowStatus.Succeeded,
             frame: frame,
             dimensions: captureResult.Dimensions,
             previewImage: previewResult.Image,
             captureMs: captureResult.ElapsedMs,
             displayMs: previewResult.ElapsedMs,
-            totalMs: totalSw.Elapsed.TotalMilliseconds);
+            totalMs: totalSw.Elapsed.TotalMilliseconds,
+            automaticExport: previewAutomaticReport);
+    }
+
+    // ── Configured automatic delivery (issue #47) ────────────────────
+
+    /// <summary>
+    /// Runs the configured automatic delivery actions for the just-confirmed
+    /// Frame, in dependency order: save, Copy Frame, then Copy Path. Save runs
+    /// first so it can establish the saved-file identity Copy Path consumes
+    /// later in the same sequence; Copy Path is skipped — not failed — when no
+    /// valid saved file exists by the time it would run. Each action composes
+    /// the same primitives the manual Export actions use, so state (identity,
+    /// clipboard) stays shared and retryable. Runs inside the already-held
+    /// operation guard of the completing Capture. Failures never throw and
+    /// never consume the Frame or a valid saved-file identity — they surface
+    /// on the returned report for manual retry. Returns null when no automatic
+    /// action is enabled.
+    /// </summary>
+    private async Task<AutomaticExportReport?> RunAutomaticExportAsync()
+    {
+        var settings = _automaticExport();
+        if (!settings.AnyEnabled)
+            return null;
+
+        WorkflowExportResult? save = null;
+        WorkflowExportResult? copyFrame = null;
+        WorkflowExportResult? copyPath = null;
+
+        if (settings.AutoSave)
+        {
+            save = await RunSaveCoreAsync(CancellationToken.None);
+        }
+
+        if (settings.AutoCopyFrame)
+        {
+            copyFrame = await RunCopyFrameCoreAsync();
+        }
+
+        if (settings.AutoCopyPath && HasSavedFile)
+        {
+            copyPath = await RunCopyPathCoreAsync();
+        }
+
+        return new AutomaticExportReport
+        {
+            Save = save,
+            CopyFrame = copyFrame,
+            CopyPath = copyPath,
+        };
     }
 
     // ── Export workflow actions (issue #44) ──────────────────────────
@@ -1322,43 +1398,58 @@ public sealed class CaptureWorkflowSession<TImage>
         var sw = Stopwatch.StartNew();
         try
         {
-            var frame = _lastFrame;
-            if (frame is null)
-            {
-                return ExportResultFor(WorkflowExportAction.Save, WorkflowExportStatus.NoFrame,
-                    error: "No capture to export.");
-            }
-
-            // First Save for this Capture: compute the default identity.
-            // Repeats (manual or after an automatic save recorded it): write
-            // the same recorded file.
-            if (_defaultSavedFilePath is null)
-            {
-                var first = await RunOffThread(() => _export.SaveDefault(frame, cancellationToken));
-                if (!first.Success)
-                {
-                    return MapFileExportResult(WorkflowExportAction.Save, first);
-                }
-
-                _defaultSavedFilePath = first.DestinationPath;
-                _lastSavedFilePath = first.DestinationPath;
-                return FileExportSucceeded(WorkflowExportAction.Save, first, sw);
-            }
-
-            var repeat = await RunOffThread(() =>
-                _export.SaveTo(frame, _defaultSavedFilePath, cancellationToken));
-            if (!repeat.Success)
-            {
-                return MapFileExportResult(WorkflowExportAction.Save, repeat);
-            }
-
-            _lastSavedFilePath = _defaultSavedFilePath;
-            return FileExportSucceeded(WorkflowExportAction.Save, repeat, sw);
+            var result = await RunSaveCoreAsync(cancellationToken);
+            return WithResultOverride(result, elapsedMs: sw.Elapsed.TotalMilliseconds);
         }
         finally
         {
             EndOperation();
         }
+    }
+
+    /// <summary>
+    /// Save core, shared by the manual action and the configured automatic
+    /// delivery: writes the session-owned Frame as a PNG using the configured
+    /// destination and Filename Template, records the Capture's default
+    /// saved-file identity on the first success, and refers repeats to that
+    /// same file. Callers own the operation guard. Elapsed time on the
+    /// returned result is the adapter's; manual callers overwrite it with the
+    /// action-level stopwatch.
+    /// </summary>
+    private async Task<WorkflowExportResult> RunSaveCoreAsync(CancellationToken cancellationToken)
+    {
+        var frame = _lastFrame;
+        if (frame is null)
+        {
+            return ExportResultFor(WorkflowExportAction.Save, WorkflowExportStatus.NoFrame,
+                error: "No capture to export.");
+        }
+
+        // First Save for this Capture: compute the default identity.
+        // Repeats (manual or after an automatic save recorded it): write
+        // the same recorded file.
+        if (_defaultSavedFilePath is null)
+        {
+            var first = await RunOffThread(() => _export.SaveDefault(frame, cancellationToken));
+            if (!first.Success)
+            {
+                return MapFileExportResult(WorkflowExportAction.Save, first);
+            }
+
+            _defaultSavedFilePath = first.DestinationPath;
+            _lastSavedFilePath = first.DestinationPath;
+            return FileExportSucceeded(WorkflowExportAction.Save, first, sw: null);
+        }
+
+        var repeat = await RunOffThread(() =>
+            _export.SaveTo(frame, _defaultSavedFilePath, cancellationToken));
+        if (!repeat.Success)
+        {
+            return MapFileExportResult(WorkflowExportAction.Save, repeat);
+        }
+
+        _lastSavedFilePath = _defaultSavedFilePath;
+        return FileExportSucceeded(WorkflowExportAction.Save, repeat, sw: null);
     }
 
     /// <summary>
@@ -1427,20 +1518,32 @@ public sealed class CaptureWorkflowSession<TImage>
         var sw = Stopwatch.StartNew();
         try
         {
-            var frame = _lastFrame;
-            if (frame is null)
-            {
-                return ExportResultFor(WorkflowExportAction.CopyFrame, WorkflowExportStatus.NoFrame,
-                    error: "No capture to copy.");
-            }
-
-            var copy = await RunOffThread(() => _export.CopyImage(frame));
-            return MapClipboardExportResult(WorkflowExportAction.CopyFrame, copy, sw);
+            var result = await RunCopyFrameCoreAsync();
+            return WithResultOverride(result, elapsedMs: sw.Elapsed.TotalMilliseconds);
         }
         finally
         {
             EndOperation();
         }
+    }
+
+    /// <summary>
+    /// Copy Frame core, shared by the manual action and the configured
+    /// automatic delivery: encodes the session-owned Frame as PNG image
+    /// content and places it on the clipboard without creating a file.
+    /// Callers own the operation guard.
+    /// </summary>
+    private async Task<WorkflowExportResult> RunCopyFrameCoreAsync()
+    {
+        var frame = _lastFrame;
+        if (frame is null)
+        {
+            return ExportResultFor(WorkflowExportAction.CopyFrame, WorkflowExportStatus.NoFrame,
+                error: "No capture to copy.");
+        }
+
+        var copy = await RunOffThread(() => _export.CopyImage(frame));
+        return MapClipboardExportResult(WorkflowExportAction.CopyFrame, copy, sw: null);
     }
 
     /// <summary>
@@ -1460,15 +1563,8 @@ public sealed class CaptureWorkflowSession<TImage>
         var sw = Stopwatch.StartNew();
         try
         {
-            var path = _lastSavedFilePath;
-            if (string.IsNullOrEmpty(path))
-            {
-                return ExportResultFor(WorkflowExportAction.CopyPath, WorkflowExportStatus.Failed,
-                    error: "No saved file to copy.");
-            }
-
-            var copy = await RunOffThread(() => _export.CopyText(path!));
-            return MapClipboardExportResult(WorkflowExportAction.CopyPath, copy, sw);
+            var result = await RunCopyPathCoreAsync();
+            return WithResultOverride(result, elapsedMs: sw.Elapsed.TotalMilliseconds);
         }
         finally
         {
@@ -1476,14 +1572,62 @@ public sealed class CaptureWorkflowSession<TImage>
         }
     }
 
+    /// <summary>
+    /// Copy Path core, shared by the manual action and the configured
+    /// automatic delivery: places the current saved file's path on the
+    /// clipboard. Unavailable until a valid saved file exists as workflow
+    /// state (a successful Save or Save As); the automatic delivery sequence
+    /// checks availability before calling. Callers own the operation guard.
+    /// </summary>
+    private async Task<WorkflowExportResult> RunCopyPathCoreAsync()
+    {
+        var path = _lastSavedFilePath;
+        if (string.IsNullOrEmpty(path))
+        {
+            return ExportResultFor(WorkflowExportAction.CopyPath, WorkflowExportStatus.Failed,
+                error: "No saved file to copy.");
+        }
+
+        var copy = await RunOffThread(() => _export.CopyText(path!));
+        var mapped = MapClipboardExportResult(WorkflowExportAction.CopyPath, copy, sw: null);
+        // Carry the copied path so report consumers (status text, automatic
+        // delivery reporting) can show what was placed on the clipboard.
+        return mapped.IsSuccess
+            ? WithResultOverride(mapped, filePath: path!)
+            : mapped;
+    }
+
     private static WorkflowExportResult ExportInProgress(WorkflowExportAction action) =>
         ExportResultFor(action, WorkflowExportStatus.OperationInProgress,
             error: "An operation is already in progress.");
 
+    /// <summary>
+    /// Copies a core-action result with per-field overrides. The manual
+    /// actions override the elapsed time with their action-level stopwatch;
+    /// the Copy Path core overrides the file path so report consumers (status
+    /// text, automatic delivery reporting) can show what was placed on the
+    /// clipboard. Unspecified fields are carried over unchanged.
+    /// </summary>
+    private static WorkflowExportResult WithResultOverride(
+        WorkflowExportResult result,
+        double? elapsedMs = null,
+        string? filePath = null) =>
+        new()
+        {
+            Action = result.Action,
+            Status = result.Status,
+            FilePath = filePath ?? result.FilePath,
+            Width = result.Width,
+            Height = result.Height,
+            ByteCount = result.ByteCount,
+            Error = result.Error,
+            ElapsedMs = elapsedMs ?? result.ElapsedMs,
+        };
+
     private static WorkflowExportResult FileExportSucceeded(
         WorkflowExportAction action,
         ExportResult save,
-        Stopwatch sw) =>
+        Stopwatch? sw) =>
         new()
         {
             Action = action,
@@ -1492,7 +1636,7 @@ public sealed class CaptureWorkflowSession<TImage>
             Width = save.Width,
             Height = save.Height,
             ByteCount = save.ByteCount,
-            ElapsedMs = sw.Elapsed.TotalMilliseconds,
+            ElapsedMs = sw?.Elapsed.TotalMilliseconds ?? save.Elapsed.TotalMilliseconds,
         };
 
     private static WorkflowExportResult MapFileExportResult(
@@ -1510,7 +1654,7 @@ public sealed class CaptureWorkflowSession<TImage>
     private static WorkflowExportResult MapClipboardExportResult(
         WorkflowExportAction action,
         ClipboardExportResult copy,
-        Stopwatch sw)
+        Stopwatch? sw)
     {
         if (copy.Success)
         {
@@ -1521,7 +1665,7 @@ public sealed class CaptureWorkflowSession<TImage>
                 Width = copy.Width,
                 Height = copy.Height,
                 ByteCount = copy.ByteCount,
-                ElapsedMs = sw.Elapsed.TotalMilliseconds,
+                ElapsedMs = sw?.Elapsed.TotalMilliseconds ?? copy.Elapsed.TotalMilliseconds,
             };
         }
 
@@ -1622,7 +1766,8 @@ public sealed class CaptureWorkflowSession<TImage>
         string? error = null,
         double captureMs = 0,
         double displayMs = 0,
-        double totalMs = 0) =>
+        double totalMs = 0,
+        AutomaticExportReport? automaticExport = null) =>
         new()
         {
             Status = status,
@@ -1634,5 +1779,6 @@ public sealed class CaptureWorkflowSession<TImage>
             CaptureMs = captureMs,
             DisplayMs = displayMs,
             TotalMs = totalMs,
+            AutomaticExport = automaticExport,
         };
 }

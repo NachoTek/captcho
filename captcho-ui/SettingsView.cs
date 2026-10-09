@@ -15,15 +15,18 @@ using captcho.Capture;
 namespace captcho.UI;
 
 /// <summary>
-/// Read-only content for the Export tab, sourced from <see cref="ExportTabSettings"/>.
-/// Carried through the view so the code-behind binds one object.
+/// Editable content for the Export tab, sourced from
+/// <see cref="ExportTabSettings"/>. Carries the working format, JPEG quality,
+/// the format-derived extension (display only), the quality control's
+/// availability (false for PNG), and the inline quality validation error.
+/// The code-behind binds these to the format ComboBox and quality slider.
 /// </summary>
 public sealed record ExportTabContent(
-    string Heading,
-    string FormatName,
+    ExportImageFormat Format,
+    int JpegQuality,
+    bool JpegQualityAvailable,
     string FileExtension,
-    string FormatDescription,
-    string PlannedFormatsNote);
+    string? JpegQualityError);
 
 /// <summary>
 /// Read-only content for the Interface tab, sourced from <see cref="InterfaceTabSettings"/>.
@@ -57,6 +60,16 @@ public sealed record AnnotationTabContent(
     string? Error);
 
 /// <summary>
+/// Editable content for the Behavior tab, sourced from
+/// <see cref="BehaviorTabSettings"/>. Carries the three independent automatic
+/// delivery toggles that run after Annotation confirmation (issue #47).
+/// </summary>
+public sealed record BehaviorTabContent(
+    bool AutoSave,
+    bool AutoCopyFrame,
+    bool AutoCopyPath);
+
+/// <summary>
 /// Immutable snapshot of everything the Settings window code-behind binds. Produced
 /// by <see cref="SettingsSession"/> on open and after every edit or session verb.
 /// Failures surface as <see cref="StatusMessage"/> + <see cref="StatusIsError"/>
@@ -79,8 +92,13 @@ public sealed record SettingsView(
     // ── Annotation tab (editable) ──
     AnnotationTabContent Annotation,
 
-    // ── Read-only tabs ──
+    // ── Behavior tab (editable) ──
+    BehaviorTabContent Behavior,
+
+    // ── Export tab (editable) ──
     ExportTabContent Export,
+
+    // ── Read-only tabs ──
     InterfaceTabContent Interface,
 
     // ── Composed gating across all editable tabs ──
