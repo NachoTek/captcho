@@ -1,9 +1,14 @@
-// PngExportService.cs — Encodes ContiguousBitmap to PNG and writes to disk.
+// JpegExportService.cs — Encodes ContiguousBitmap to JPEG and writes to disk.
 // Returns ExportResult with diagnostics; never throws for expected failures.
 // Shared GDI+ conversion and I/O diagnostics live in GdiExportHelpers.
+//
+// Alpha handling (issue #45): JPEG has no alpha channel. Transparent source
+// pixels are flattened onto white before encoding, so the output is fully
+// defined rather than rendering as black in viewers that ignore alpha.
 
 using System;
 using System.Diagnostics;
+using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Threading;
@@ -11,23 +16,25 @@ using System.Threading;
 namespace captcho.Capture;
 
 /// <summary>
-/// Encodes a ContiguousBitmap (BGRA) as PNG and writes it to disk.
-/// Uses System.Drawing for PNG encoding — no WGC or UI dependency required.
+/// Encodes a ContiguousBitmap (BGRA) as JPEG and writes it to disk.
+/// Uses System.Drawing for JPEG encoding — no WGC or UI dependency required.
 /// All expected failures return ExportResult.Fail instead of throwing.
 /// </summary>
-public static class PngExportService
+public static class JpegExportService
 {
     /// <summary>
-    /// Saves a ContiguousBitmap as a PNG file to the specified path.
-    /// Creates the destination directory if it doesn't exist.
+    /// Saves a ContiguousBitmap as a JPEG file to the specified path using the
+    /// supplied quality (inclusive 0–100). Fully transparent pixels flatten
+    /// onto white. Creates the destination directory if it doesn't exist.
     /// Returns an ExportResult (never throws for expected failures).
     /// </summary>
     /// <param name="bitmap">Source bitmap to encode.</param>
-    /// <param name="destinationPath">Full file path for the output PNG.</param>
+    /// <param name="destinationPath">Full file path for the output JPEG.</param>
+    /// <param name="quality">JPEG quality from 0 through 100 (inclusive).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>ExportResult with success/failure, diagnostics, and timing.</returns>
-    public static ExportResult SaveAsPng(ContiguousBitmap bitmap, string destinationPath,
-        CancellationToken cancellationToken = default)
+    public static ExportResult SaveAsJpeg(ContiguousBitmap bitmap, string destinationPath,
+        int quality, CancellationToken cancellationToken = default)
     {
         var sw = Stopwatch.StartNew();
 
@@ -37,6 +44,11 @@ public static class PngExportService
 
         if (string.IsNullOrWhiteSpace(destinationPath))
             return ExportResult.Fail(ExportPhase.Validation, "No destination path provided", sw.Elapsed);
+
+        if (quality < ExportSettings.MinimumJpegQuality || quality > ExportSettings.MaximumJpegQuality)
+            return ExportResult.Fail(ExportPhase.Validation,
+                $"JPEG quality must be from {ExportSettings.MinimumJpegQuality} through {ExportSettings.MaximumJpegQuality}",
+                sw.Elapsed);
 
         if (bitmap.Width <= 0 || bitmap.Height <= 0)
             return ExportResult.Fail(ExportPhase.Validation,
@@ -51,17 +63,27 @@ public static class PngExportService
         if (cancellationToken.IsCancellationRequested)
             return ExportResult.Cancelled(sw.Elapsed);
 
+        // Encode phase — resolve the JPEG codec up front; a missing codec is
+        // a reportable encode failure, not an exception mid-write.
+        var codec = GetJpegCodec();
+        if (codec is null)
+            return ExportResult.Fail(ExportPhase.Encode, "JPEG encoder unavailable", sw.Elapsed);
+
         try
         {
-            // Encode phase — create GDI+ bitmap from BGRA pixel data
-            using var gdiBitmap = GdiExportHelpers.CreateGdiBitmap(bitmap, flattenTransparentPixels: false);
+            using var parameters = new EncoderParameters(1);
+            parameters.Param[0] = new EncoderParameter(Encoder.Quality, (long)quality);
+
+            // Create GDI+ bitmap from BGRA pixel data with transparent pixels
+            // flattened onto white.
+            using var gdiBitmap = GdiExportHelpers.CreateGdiBitmap(bitmap, flattenTransparentPixels: true);
             if (gdiBitmap == null)
                 return ExportResult.Fail(ExportPhase.Encode, "Failed to create bitmap for encoding", sw.Elapsed);
 
             if (cancellationToken.IsCancellationRequested)
                 return ExportResult.Cancelled(sw.Elapsed);
 
-            // Write phase — ensure directory exists, then save PNG
+            // Write phase — ensure directory exists, then save JPEG
             string? dir = Path.GetDirectoryName(destinationPath);
             if (!string.IsNullOrEmpty(dir))
                 Directory.CreateDirectory(dir);
@@ -69,7 +91,7 @@ public static class PngExportService
             long byteCount;
             using (var fs = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None))
             {
-                gdiBitmap.Save(fs, ImageFormat.Png);
+                gdiBitmap.Save(fs, codec, parameters);
                 fs.Flush();
                 byteCount = fs.Length;
             }
@@ -118,31 +140,7 @@ public static class PngExportService
         }
     }
 
-    /// <summary>
-    /// Encodes a ContiguousBitmap to a PNG byte array in memory.
-    /// Returns null on failure. Useful for clipboard copy operations.
-    /// </summary>
-    public static byte[]? EncodeToPngBytes(ContiguousBitmap bitmap)
-    {
-        if (bitmap == null || bitmap.Width <= 0 || bitmap.Height <= 0 || bitmap.Pixels == null)
-            return null;
-
-        int expectedLength = bitmap.Width * bitmap.Height * 4;
-        if (bitmap.Pixels.Length < expectedLength)
-            return null;
-
-        try
-        {
-            using var gdiBitmap = GdiExportHelpers.CreateGdiBitmap(bitmap, flattenTransparentPixels: false);
-            if (gdiBitmap == null) return null;
-
-            using var ms = new MemoryStream();
-            gdiBitmap.Save(ms, ImageFormat.Png);
-            return ms.ToArray();
-        }
-        catch
-        {
-            return null;
-        }
-    }
+    private static ImageCodecInfo? GetJpegCodec() =>
+        Array.Find(ImageCodecInfo.GetImageEncoders(),
+            codec => string.Equals(codec.MimeType, "image/jpeg", StringComparison.OrdinalIgnoreCase));
 }

@@ -92,12 +92,6 @@ public sealed partial class SettingsWindow : Window
                 p => $"{p.Token} — {p.Description} ({p.Example})"));
 
         // Read-only tab content.
-        ExportFormatHeading.Text = view.Export.Heading;
-        ExportFormatNameText.Text = view.Export.FormatName;
-        ExportFormatExtensionText.Text = $"({view.Export.FileExtension})";
-        ExportFormatDescriptionText.Text = view.Export.FormatDescription;
-        ExportPlannedFormatsText.Text = view.Export.PlannedFormatsNote;
-
         InterfaceHeading.Text = view.Interface.Heading;
         InterfaceMessageText.Text = view.Interface.Message;
         InterfacePlannedText.Text = view.Interface.PlannedSettingsNote;
@@ -371,6 +365,35 @@ public sealed partial class SettingsWindow : Window
         ApplyView(_session.EditAnnotationStrokeWidth(value));
     }
 
+    // ── Export tab event routing (issue #45) ───────────────────────────
+
+    /// <summary>
+    /// Routes a format combo selection into the session and rebinds. Suppressed
+    /// while <see cref="ApplyView"/> is programmatically setting the selection so
+    /// the rebind does not re-enter the session.
+    /// </summary>
+    private void ExportFormatCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_applyingView || ExportFormatCombo.SelectedIndex < 0)
+            return;
+
+        ApplyView(_session.EditExportFormat(
+            (ExportImageFormat)ExportFormatCombo.SelectedIndex));
+    }
+
+    /// <summary>
+    /// Routes a JPEG quality slider change into the session and rebinds.
+    /// Suppressed while <see cref="ApplyView"/> is programmatically setting the
+    /// value.
+    /// </summary>
+    private void ExportJpegQualitySlider_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs args)
+    {
+        if (_applyingView)
+            return;
+
+        ApplyView(_session.EditExportJpegQuality((int)args.NewValue));
+    }
+
     // ── Behavior tab event routing ─────────────────────────────────────────
 
     /// <summary>
@@ -509,6 +532,18 @@ public sealed partial class SettingsWindow : Window
             AnnotationPenColorCombo.SelectedIndex = AnnotationColorIndex(view.Annotation.PenColor);
             AnnotationStrokeWidthInput.Value = view.Annotation.StrokeWidth;
 
+            // Export tab: format combo, quality slider, and derived display.
+            // The quality slider is enabled only for JPEG — PNG is lossless
+            // and takes no quality — while its value is always reflected from
+            // the view so a format round-trip never discards the choice.
+            ExportFormatCombo.SelectedIndex = (int)view.Export.Format;
+            ExportJpegQualitySlider.Value = view.Export.JpegQuality;
+            ExportJpegQualitySlider.IsEnabled = view.Export.JpegQualityAvailable;
+            ExportFormatExtensionText.Text = view.Export.FileExtension;
+            ExportFormatDescriptionText.Text = view.Export.Format == ExportImageFormat.Jpeg
+                ? "JPEG compresses captures into smaller files at the chosen quality. JPEG has no transparency: fully transparent pixels are saved as white."
+                : "PNG is lossless and preserves transparency, keeping sharp text and fine detail at full fidelity.";
+
             // Behavior-tab toggles are driven from the view so Reset/Cancel
             // rebind through this single site, under the _applyingView guard.
             AutoSaveToggle.IsOn = view.Behavior.AutoSave;
@@ -546,6 +581,12 @@ public sealed partial class SettingsWindow : Window
 
         AnnotationSettingsErrorText.Text = view.Annotation.Error ?? string.Empty;
         AnnotationSettingsErrorText.Visibility = string.IsNullOrEmpty(view.Annotation.Error)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+
+        string? exportQualityError = view.Export.JpegQualityError;
+        ExportJpegQualityErrorText.Text = exportQualityError ?? string.Empty;
+        ExportJpegQualityErrorText.Visibility = string.IsNullOrEmpty(exportQualityError)
             ? Visibility.Collapsed
             : Visibility.Visible;
     }

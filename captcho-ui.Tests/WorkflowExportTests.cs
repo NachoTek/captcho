@@ -842,6 +842,224 @@ public class WorkflowExportAdapterTests
         try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
     }
 
+    // ── Format flow (issue #45) ──────────────────────────────────────────
+
+    [Fact]
+    public void SaveDefault_JpegFormat_WritesJpegWithJpgExtension()
+    {
+        var dir = TempDir();
+        try
+        {
+            var settings = SettingsFor(dir, "shot_<yyyy>");
+            settings.ExportSettings = new ExportSettings(ExportImageFormat.Jpeg, 85);
+            var adapter = new WorkflowExportAdapter(settings, new FakeClipboardAdapter());
+            var frame = ExportTestHelpers.CreateTestBitmap(10, 6);
+
+            var result = adapter.SaveDefault(frame, CancellationToken.None);
+
+            Assert.True(result.Success, result.Message);
+            var name = Path.GetFileName(result.DestinationPath!);
+            Assert.EndsWith(".jpg", name, StringComparison.OrdinalIgnoreCase);
+            Assert.True(File.Exists(result.DestinationPath));
+
+            // JPEG SOI signature, decodable with correct dimensions.
+            using var fs = File.OpenRead(result.DestinationPath!);
+            var header = new byte[2];
+            Assert.Equal(2, fs.Read(header, 0, 2));
+            Assert.Equal(0xFF, header[0]);
+            Assert.Equal(0xD8, header[1]);
+            using var decoded = System.Drawing.Image.FromFile(result.DestinationPath!);
+            Assert.Equal(10, decoded.Width);
+            Assert.Equal(6, decoded.Height);
+        }
+        finally
+        {
+            Cleanup(dir);
+        }
+    }
+
+    [Fact]
+    public void SaveDefault_JpegQuality_FlowsToTheEncoder()
+    {
+        var dir = TempDir();
+        try
+        {
+            // Quality 100 must produce more bytes than quality 10 on a
+            // noise-filled frame: proof the configured quality reaches the
+            // encoder rather than a hard-coded value.
+            var random = new Random(20240607);
+            int size = 64;
+            byte[] pixels = new byte[size * size * 4];
+            random.NextBytes(pixels);
+            var frame = ExportTestHelpers.CreateTestBitmap(size, size, pixels);
+
+            var lowSettings = SettingsFor(dir, "low");
+            lowSettings.ExportSettings = new ExportSettings(ExportImageFormat.Jpeg, 10);
+            var highSettings = SettingsFor(Path.Combine(dir, "high"), "high");
+            highSettings.ExportSettings = new ExportSettings(ExportImageFormat.Jpeg, 100);
+
+            var low = new WorkflowExportAdapter(lowSettings, new FakeClipboardAdapter())
+                .SaveDefault(frame, CancellationToken.None);
+            var high = new WorkflowExportAdapter(highSettings, new FakeClipboardAdapter())
+                .SaveDefault(frame, CancellationToken.None);
+
+            Assert.True(low.Success, low.Message);
+            Assert.True(high.Success, high.Message);
+            Assert.True(high.ByteCount > low.ByteCount,
+                $"Quality 100 ({high.ByteCount}B) must exceed quality 10 ({low.ByteCount}B)");
+        }
+        finally
+        {
+            Cleanup(dir);
+        }
+    }
+
+    [Fact]
+    public void SaveDefault_PngFormat_PreservesTransparency()
+    {
+        var dir = TempDir();
+        try
+        {
+            var settings = SettingsFor(dir, "alpha");
+            var adapter = new WorkflowExportAdapter(settings, new FakeClipboardAdapter());
+            var frame = ExportTestHelpers.CreateTransparentBitmap(8, 8);
+
+            var result = adapter.SaveDefault(frame, CancellationToken.None);
+
+            Assert.True(result.Success, result.Message);
+            using var decoded = new System.Drawing.Bitmap(result.DestinationPath!);
+            var pixel = decoded.GetPixel(4, 4);
+            // PNG preserves the fully transparent source pixel.
+            Assert.Equal(0, pixel.A);
+        }
+        finally
+        {
+            Cleanup(dir);
+        }
+    }
+
+    [Fact]
+    public void SaveDefault_JpegFormat_FlattensTransparencyOntoWhite()
+    {
+        var dir = TempDir();
+        try
+        {
+            var settings = SettingsFor(dir, "alpha");
+            settings.ExportSettings = new ExportSettings(ExportImageFormat.Jpeg, 100);
+            var adapter = new WorkflowExportAdapter(settings, new FakeClipboardAdapter());
+            var frame = ExportTestHelpers.CreateTransparentBitmap(8, 8);
+
+            var result = adapter.SaveDefault(frame, CancellationToken.None);
+
+            Assert.True(result.Success, result.Message);
+            using var decoded = new System.Drawing.Bitmap(result.DestinationPath!);
+            var pixel = decoded.GetPixel(4, 4);
+            // Defined alpha handling: transparent pixels become white.
+            Assert.InRange(pixel.R, 250, 255);
+            Assert.InRange(pixel.G, 250, 255);
+            Assert.InRange(pixel.B, 250, 255);
+        }
+        finally
+        {
+            Cleanup(dir);
+        }
+    }
+
+    [Fact]
+    public void SaveDefault_JpegFormat_QualityBoundaries_Succeed()
+    {
+        var dir = TempDir();
+        try
+        {
+            foreach (int quality in new[] { 0, 100 })
+            {
+                var settings = SettingsFor(dir, $"q{quality}");
+                settings.ExportSettings = new ExportSettings(ExportImageFormat.Jpeg, quality);
+                var adapter = new WorkflowExportAdapter(settings, new FakeClipboardAdapter());
+                var frame = ExportTestHelpers.CreateTestBitmap(4, 4);
+
+                var result = adapter.SaveDefault(frame, CancellationToken.None);
+
+                Assert.True(result.Success, $"Quality {quality} failed: {result.Message}");
+            }
+        }
+        finally
+        {
+            Cleanup(dir);
+        }
+    }
+
+    [Fact]
+    public void SaveTo_JpegPath_WritesJpegIndependentOfConfiguredFormat()
+    {
+        // Save As writes what the chosen path says: a .jpg destination encodes
+        // JPEG (using the configured quality) even when PNG is configured,
+        // and vice versa — the extension always matches the encoded bytes.
+        var dir = TempDir();
+        try
+        {
+            var settings = SettingsFor(dir, "x");
+            settings.ExportSettings = new ExportSettings(ExportImageFormat.Jpeg, 90);
+            var adapter = new WorkflowExportAdapter(settings, new FakeClipboardAdapter());
+            var frame = ExportTestHelpers.CreateTestBitmap(4, 4);
+
+            var jpg = adapter.SaveTo(frame, Path.Combine(dir, "chosen.jpg"), CancellationToken.None);
+            var png = adapter.SaveTo(frame, Path.Combine(dir, "chosen.png"), CancellationToken.None);
+
+            Assert.True(jpg.Success, jpg.Message);
+            Assert.True(png.Success, png.Message);
+
+            Assert.Equal(0xFF, File.ReadAllBytes(jpg.DestinationPath!)[0]);
+            Assert.Equal(0xD8, File.ReadAllBytes(jpg.DestinationPath!)[1]);
+            Assert.Equal(0x89, File.ReadAllBytes(png.DestinationPath!)[0]);
+            Assert.Equal(0x50, File.ReadAllBytes(png.DestinationPath!)[1]);
+        }
+        finally
+        {
+            Cleanup(dir);
+        }
+    }
+
+    [Fact]
+    public async Task SaveDefault_RepeatedUnderJpegFormat_StillRecordsOneIdentity()
+    {
+        var dir = TempDir();
+        try
+        {
+            var settings = SettingsFor(dir, "identity");
+            settings.ExportSettings = new ExportSettings(ExportImageFormat.Jpeg, 80);
+            var adapter = new WorkflowExportAdapter(settings, new FakeClipboardAdapter());
+            var session = new CaptureWorkflowSession<object>(
+                new FakeCaptureAdapter(),
+                new FakePreviewAdapter(),
+                new FakeSelectionOverlayAdapter(),
+                new FakeMonitorPickerOverlayAdapter(),
+                new FakeWindowPickerOverlayAdapter(),
+                new SessionCaptureOptions(settings),
+                RememberedSelectionState.Disabled,
+                new FakeAnnotationOverlayAdapter(),
+                static () => false,
+                static () => AnnotationToolState.WithDefaults(),
+                adapter,
+                new FakeSaveAsDialogAdapter());
+            session.AdoptFrame(ExportTestHelpers.CreateTestBitmap(4, 4));
+
+            var first = await session.SaveAsync();
+            var second = await session.SaveAsync();
+
+            Assert.True(first.IsSuccess, first.Error);
+            Assert.True(second.IsSuccess, second.Error);
+            Assert.Equal(first.FilePath, second.FilePath);
+            Assert.EndsWith(".jpg", second.FilePath, StringComparison.OrdinalIgnoreCase);
+            // One file on disk — the repeat wrote the same identity.
+            Assert.Single(Directory.GetFiles(dir));
+        }
+        finally
+        {
+            Cleanup(dir);
+        }
+    }
+
     [Fact]
     public void SaveDefault_WritesPngUsingConfiguredDestinationAndTemplate()
     {

@@ -80,8 +80,7 @@ public class SettingsSessionTests
         var session = NewSession(new AppSettings());
 
         var view = session.View;
-        Assert.Equal("Export format", view.Export.Heading);
-        Assert.False(string.IsNullOrEmpty(view.Export.FormatName));
+        Assert.Equal(ExportImageFormat.Png, view.Export.Format);
         Assert.Equal("Interface settings", view.Interface.Heading);
         Assert.False(string.IsNullOrEmpty(view.Interface.Message));
     }
@@ -219,6 +218,136 @@ public class SettingsSessionTests
         Assert.Equal(0, recorder.CallCount);
         Assert.True(view.StatusIsError);
         Assert.Contains("absolute", view.StatusMessage);
+    }
+
+    // ── Export tab edits (issue #45) ────────────────────────────────────
+
+    [Fact]
+    public void View_OnOpen_ReflectsPersistedExportFormat()
+    {
+        var runtime = new AppSettings
+        {
+            ExportSettings = new ExportSettings(ExportImageFormat.Jpeg, 73),
+        };
+        var session = NewSession(runtime);
+
+        var view = session.View;
+        Assert.Equal(ExportImageFormat.Jpeg, view.Export.Format);
+        Assert.Equal(73, view.Export.JpegQuality);
+        Assert.True(view.Export.JpegQualityAvailable);
+        Assert.Equal(".jpg", view.Export.FileExtension);
+    }
+
+    [Fact]
+    public void EditExportFormat_UpdatesView()
+    {
+        var session = NewSession(AppSettings.WithDefaults());
+
+        var view = session.EditExportFormat(ExportImageFormat.Jpeg);
+
+        Assert.Equal(ExportImageFormat.Jpeg, view.Export.Format);
+        Assert.True(view.Export.JpegQualityAvailable);
+        Assert.Equal(".jpg", view.Export.FileExtension);
+    }
+
+    [Fact]
+    public void EditExportJpegQuality_UpdatesView()
+    {
+        var session = NewSession(AppSettings.WithDefaults());
+
+        var view = session.EditExportFormat(ExportImageFormat.Jpeg);
+        view = session.EditExportJpegQuality(42);
+
+        Assert.Equal(42, view.Export.JpegQuality);
+    }
+
+    [Fact]
+    public void EditExportJpegQuality_OutOfRange_DisablesApplyAndConfirm()
+    {
+        var session = NewSession(AppSettings.WithDefaults());
+
+        session.EditExportFormat(ExportImageFormat.Jpeg);
+        var view = session.EditExportJpegQuality(101);
+
+        Assert.False(view.CanApply);
+        Assert.False(view.CanConfirm);
+        Assert.NotNull(view.Export.JpegQualityError);
+
+        var recovered = session.EditExportJpegQuality(100);
+
+        Assert.True(recovered.CanApply);
+        Assert.True(recovered.CanConfirm);
+        Assert.Null(recovered.Export.JpegQualityError);
+    }
+
+    [Fact]
+    public void Apply_PersistsExportFormatAndQualityAtomicallyAndWritesBackRuntime()
+    {
+        var recorder = new FakeConfiguration();
+        var runtime = AppSettings.WithDefaults();
+        var session = new SettingsSession(runtime, recorder, new RecordingGlobalHotkeyAdapter());
+
+        session.EditExportFormat(ExportImageFormat.Jpeg);
+        session.EditExportJpegQuality(67);
+        var view = session.Apply();
+
+        Assert.Equal(SettingsSession.SavedMessage, view.StatusMessage);
+        // The persisted merged settings carry the export slice.
+        Assert.Equal(ExportImageFormat.Jpeg, recorder.LastSaved!.ExportSettings!.Format);
+        Assert.Equal(67, recorder.LastSaved.ExportSettings.JpegQuality);
+        // The runtime reflects the committed values without a restart — the
+        // export flow reads these.
+        Assert.Equal(ExportImageFormat.Jpeg, runtime.ExportSettings.Format);
+        Assert.Equal(67, runtime.ExportSettings.JpegQuality);
+    }
+
+    [Fact]
+    public void Cancel_AfterExportEdits_DiscardsThem()
+    {
+        var runtime = new AppSettings
+        {
+            ExportSettings = new ExportSettings(ExportImageFormat.Png, 80),
+        };
+        var session = NewSession(runtime);
+
+        session.EditExportFormat(ExportImageFormat.Jpeg);
+        session.EditExportJpegQuality(30);
+        var view = session.Cancel();
+
+        Assert.Equal(ExportImageFormat.Png, view.Export.Format);
+        Assert.False(view.Export.JpegQualityAvailable);
+        Assert.Equal(ExportImageFormat.Png, runtime.ExportSettings.Format);
+    }
+
+    [Fact]
+    public void Reset_RestoresPngDefaultsOnExportTab()
+    {
+        var runtime = new AppSettings
+        {
+            ExportSettings = new ExportSettings(ExportImageFormat.Jpeg, 73),
+        };
+        var session = NewSession(runtime);
+
+        var view = session.Reset();
+
+        Assert.Equal(ExportImageFormat.Png, view.Export.Format);
+        Assert.Equal(ExportSettings.DefaultJpegQuality, view.Export.JpegQuality);
+        Assert.False(view.Export.JpegQualityAvailable);
+    }
+
+    [Fact]
+    public void Apply_InvalidExportQuality_BlocksPersistence()
+    {
+        var recorder = new FakeConfiguration();
+        var session = new SettingsSession(AppSettings.WithDefaults(), recorder, new RecordingGlobalHotkeyAdapter());
+
+        session.EditExportFormat(ExportImageFormat.Jpeg);
+        session.EditExportJpegQuality(-1);
+        var view = session.Apply();
+
+        Assert.Equal(0, recorder.CallCount);
+        Assert.True(view.StatusIsError);
+        Assert.NotNull(view.Export.JpegQualityError);
     }
 
     // ── Edits return a refreshed view ──────────────────────────────────

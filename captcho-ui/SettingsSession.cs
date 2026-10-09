@@ -77,10 +77,10 @@ public sealed class SettingsSession
         _capture = new CaptureTabSettings(runtime);
         _annotation = new AnnotationTabSettings(runtime);
         _behavior = new BehaviorTabSettings(runtime);
-        _export = new ExportTabSettings();
+        _export = new ExportTabSettings(runtime);
         _interface = new InterfaceTabSettings();
 
-        _editableTabs = new EditableTabSession[] { _general, _globalHotkeyTab, _capture, _annotation, _behavior };
+        _editableTabs = new EditableTabSession[] { _general, _globalHotkeyTab, _capture, _annotation, _behavior, _export };
     }
 
     // ── View ────────────────────────────────────────────────────────────
@@ -220,6 +220,30 @@ public sealed class SettingsSession
     public SettingsView EditAnnotationStrokeWidth(int value)
     {
         _annotation.EditStrokeWidth(value);
+        return ClearTransientStatus();
+    }
+
+    // ── Editable Export-tab edits (issue #45) ───────────────────────────
+
+    /// <summary>
+    /// Sets the working export format (PNG or JPEG) and returns the refreshed
+    /// view. The returned view re-derives the quality control's availability
+    /// and the display extension from the new format.
+    /// </summary>
+    public SettingsView EditExportFormat(ExportImageFormat value)
+    {
+        _export.EditFormat(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>
+    /// Sets the working JPEG quality (inclusive 0–100) and returns the
+    /// refreshed view. An out-of-range value surfaces as an inline error and
+    /// disables Apply/OK through the composed gate.
+    /// </summary>
+    public SettingsView EditExportJpegQuality(int value)
+    {
+        _export.EditJpegQuality(value);
         return ClearTransientStatus();
     }
 
@@ -409,11 +433,11 @@ public sealed class SettingsSession
                 AutoCopyPath: _behavior.AutoCopyPath),
 
             Export: new ExportTabContent(
-                Heading: _export.Heading,
-                FormatName: _export.FormatName,
+                Format: _export.Format,
+                JpegQuality: _export.JpegQuality,
+                JpegQualityAvailable: _export.JpegQualityAvailable,
                 FileExtension: _export.FileExtension,
-                FormatDescription: _export.FormatDescription,
-                PlannedFormatsNote: _export.PlannedFormatsNote),
+                JpegQualityError: _export.JpegQualityError),
             Interface: new InterfaceTabContent(
                 Heading: _interface.Heading,
                 Message: _interface.Message,
