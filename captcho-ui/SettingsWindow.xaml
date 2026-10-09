@@ -177,6 +177,7 @@ Layout:
                             <ComboBoxItem Content="Line"/>
                             <ComboBoxItem Content="Arrow"/>
                             <ComboBoxItem Content="Text"/>
+                            <ComboBoxItem Content="Marker"/>
                         </ComboBox>
                         <ComboBox x:Name="AnnotationPenColorCombo"
                                   Header="Pen color"

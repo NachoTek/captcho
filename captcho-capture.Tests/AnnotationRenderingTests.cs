@@ -356,6 +356,114 @@ public class AnnotationRenderingTests
         Assert.Equal(source.Pixels, rendered.Pixels);
     }
 
+    // spec #41: numbered markers
+
+    [Fact]
+    public void Render_Marker_DrawsFilledDiscWithWhiteNumeralAtTheAnchorWithoutMutatingTheSource()
+    {
+        var source = SolidFrame(120, 48, new AnnotationColor(255, 255, 255));
+        var stroke = new AnnotationStroke(
+            AnnotationTool.Marker,
+            new AnnotationColor(255, 0, 0),
+            4,
+            new[] { new AnnotationPoint(20, 24) },
+            markerNumber: 1);
+
+        var rendered = AnnotationRenderer.Render(source, new[] { stroke });
+
+        // The disc extends well beyond a bare stroke of the same width; probes sit
+        // near the disc edge, clear of the centered numeral.
+        Assert.Equal(new AnnotationColor(255, 0, 0), Pixel(rendered, 30, 24));
+        Assert.Equal(new AnnotationColor(255, 0, 0), Pixel(rendered, 10, 24));
+        Assert.Equal(new AnnotationColor(255, 0, 0), Pixel(rendered, 20, 34));
+        Assert.Equal(new AnnotationColor(255, 0, 0), Pixel(rendered, 20, 14));
+        // A readable white numeral is stamped inside the disc.
+        int whiteInDisc = 0;
+        for (int y = 18; y <= 30; y++)
+            for (int x = 14; x <= 26; x++)
+                if (Pixel(rendered, x, y).Equals(new AnnotationColor(255, 255, 255)))
+                    whiteInDisc++;
+        Assert.True(whiteInDisc > 5, $"Expected numeral pixels, found {whiteInDisc}.");
+        // Outside the disc nothing changes, and the source is never mutated.
+        Assert.Equal(new AnnotationColor(255, 255, 255), Pixel(rendered, 0, 0));
+        Assert.Equal(new AnnotationColor(255, 255, 255), Pixel(rendered, 119, 47));
+        Assert.Equal(new AnnotationColor(255, 255, 255), Pixel(source, 20, 24));
+    }
+
+    [Fact]
+    public void Render_Marker_NumeralScalesWithTheSharedStrokeWidth()
+    {
+        // A dark source keeps the white numeral distinguishable from the background.
+        var source = SolidFrame(200, 90, new AnnotationColor(20, 30, 40));
+        var small = new AnnotationStroke(
+            AnnotationTool.Marker,
+            new AnnotationColor(255, 0, 0),
+            1,
+            new[] { new AnnotationPoint(30, 45) },
+            markerNumber: 1);
+        var large = new AnnotationStroke(
+            AnnotationTool.Marker,
+            new AnnotationColor(255, 0, 0),
+            8,
+            new[] { new AnnotationPoint(30, 45) },
+            markerNumber: 1);
+
+        var smallRendered = AnnotationRenderer.Render(source, new[] { small });
+        var largeRendered = AnnotationRenderer.Render(source, new[] { large });
+
+        int CountWhiteInDisc(ContiguousBitmap bitmap, int x0, int x1, int y0, int y1)
+        {
+            int white = 0;
+            for (int y = y0; y <= y1; y++)
+                for (int x = x0; x <= x1; x++)
+                    if (Pixel(bitmap, x, y).Equals(new AnnotationColor(255, 255, 255)))
+                        white++;
+            return white;
+        }
+
+        // The larger width grows the disc and with it the numeral, so more white
+        // pixels appear in a fixed window around the anchor.
+        Assert.True(CountWhiteInDisc(largeRendered, 10, 60, 20, 70) > CountWhiteInDisc(smallRendered, 10, 60, 20, 70));
+    }
+
+    [Fact]
+    public void Render_Markers_DrawEachNumeralInCommitOrder()
+    {
+        var source = SolidFrame(260, 90, new AnnotationColor(255, 255, 255));
+        var markers = new[]
+        {
+            new AnnotationStroke(
+                AnnotationTool.Marker,
+                new AnnotationColor(255, 0, 0),
+                3,
+                new[] { new AnnotationPoint(30, 45) },
+                markerNumber: 1),
+            new AnnotationStroke(
+                AnnotationTool.Marker,
+                new AnnotationColor(255, 0, 0),
+                3,
+                new[] { new AnnotationPoint(120, 45) },
+                markerNumber: 2),
+        };
+
+        var rendered = AnnotationRenderer.Render(source, markers);
+
+        foreach (var marker in markers)
+        {
+            int cx = marker.Points[0].X;
+            int cy = marker.Points[0].Y;
+            // Probe near the disc edge, clear of the centered numeral.
+            Assert.Equal(new AnnotationColor(255, 0, 0), Pixel(rendered, cx + 10, cy));
+            Assert.Equal(new AnnotationColor(255, 0, 0), Pixel(rendered, cx - 10, cy));
+            int whiteInDisc = 0;
+            for (int y = cy - 10; y <= cy + 10; y++)
+                for (int x = cx - 12; x <= cx + 12; x++)
+                    if (Pixel(rendered, x, y).Equals(new AnnotationColor(255, 255, 255)))
+                        whiteInDisc++;
+            Assert.True(whiteInDisc > 5, $"Expected numeral pixels at ({cx},{cy}), found {whiteInDisc}.");
+        }
+    }
+
     private static ContiguousBitmap SolidFrame(int width, int height, AnnotationColor color)
     {
         var pixels = new byte[width * height * 4];
