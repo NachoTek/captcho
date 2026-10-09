@@ -377,7 +377,7 @@ public sealed partial class MainWindow : Window
                 if (!_isSettingsAcceleratorPressed)
                 {
                     _isSettingsAcceleratorPressed = true;
-                    DispatcherQueue.TryEnqueue(() => Settings_Click(null, null!));
+                    DispatcherQueue.TryEnqueue(OpenSettings);
                 }
                 return IntPtr.Zero;
             }
@@ -1249,7 +1249,14 @@ public sealed partial class MainWindow : Window
     /// Handles Settings button click — opens the settings dialog using the coordinator.
     /// Also invoked by F4 or Ctrl+, keyboard accelerators.
     /// </summary>
-    private void Settings_Click(object sender, RoutedEventArgs e)
+    private void Settings_Click(object sender, RoutedEventArgs e) => OpenSettings();
+
+    /// <summary>
+    /// Opens the settings dialog through the coordinator. Shared by the
+    /// Settings button, the F4/Ctrl+, accelerators, and the subclassed
+    /// WndProc route — no event payload is fabricated for programmatic calls.
+    /// </summary>
+    private void OpenSettings()
     {
         if (_settingsCoordinator == null)
         {
