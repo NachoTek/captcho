@@ -651,6 +651,7 @@ public sealed class CaptureWorkflowSession<TImage>
     private readonly Func<AnnotationToolState> _annotationToolState;
     private readonly IOcrEngine _ocrEngine;
     private readonly Func<string?> _ocrLanguageTag;
+    private readonly IQrScanner _qrScanner;
     private readonly IWorkflowExportAdapter _export;
     private readonly ISaveAsDialogAdapter _saveAsDialog;
     private readonly Func<AutomaticExportSettings> _automaticExport;
@@ -884,10 +885,11 @@ public sealed class CaptureWorkflowSession<TImage>
     /// <summary>
     /// Creates a workflow with the OCR engine, the persisted OCR language
     /// selection, the Export actions, and the configured automatic Export
-    /// source all wired — the constructor production uses. The automatic
-    /// Export settings are read through <paramref name="automaticExport"/>
-    /// when each Capture completes, so committed Settings changes take effect
-    /// on the next Capture without reconstructing the session.
+    /// source all wired — QR scanning defaults to the scanner-less null
+    /// scanner. The automatic Export settings are read through
+    /// <paramref name="automaticExport"/> when each Capture completes, so
+    /// committed Settings changes take effect on the next Capture without
+    /// reconstructing the session.
     /// </summary>
     public CaptureWorkflowSession(
         IWorkflowCaptureAdapter capture,
@@ -905,6 +907,39 @@ public sealed class CaptureWorkflowSession<TImage>
         IWorkflowExportAdapter export,
         ISaveAsDialogAdapter saveAsDialog,
         Func<AutomaticExportSettings> automaticExport)
+        : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
+               captureOptions, rememberedSelection, annotationOverlay, annotationEnabled,
+               annotationToolState, ocrEngine, ocrLanguageTag, NullQrScanner.Instance,
+               export, saveAsDialog, automaticExport)
+    {
+    }
+
+    /// <summary>
+    /// Creates a workflow with the OCR engine, the persisted OCR language
+    /// selection, the QR scanner, the Export actions, and the configured
+    /// automatic Export source all wired — the constructor production uses.
+    /// The automatic Export settings are read through
+    /// <paramref name="automaticExport"/> when each Capture completes, so
+    /// committed Settings changes take effect on the next Capture without
+    /// reconstructing the session.
+    /// </summary>
+    public CaptureWorkflowSession(
+        IWorkflowCaptureAdapter capture,
+        IPreviewAdapter<TImage> preview,
+        ISelectionOverlayAdapter selectionOverlay,
+        IMonitorPickerOverlayAdapter monitorPickerOverlay,
+        IWindowPickerOverlayAdapter windowPickerOverlay,
+        SessionCaptureOptions captureOptions,
+        RememberedSelectionState rememberedSelection,
+        IAnnotationOverlayAdapter annotationOverlay,
+        Func<bool> annotationEnabled,
+        Func<AnnotationToolState> annotationToolState,
+        IOcrEngine ocrEngine,
+        Func<string?> ocrLanguageTag,
+        IQrScanner qrScanner,
+        IWorkflowExportAdapter export,
+        ISaveAsDialogAdapter saveAsDialog,
+        Func<AutomaticExportSettings> automaticExport)
     {
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
         _preview = preview ?? throw new ArgumentNullException(nameof(preview));
@@ -918,6 +953,7 @@ public sealed class CaptureWorkflowSession<TImage>
         _annotationToolState = annotationToolState ?? throw new ArgumentNullException(nameof(annotationToolState));
         _ocrEngine = ocrEngine ?? throw new ArgumentNullException(nameof(ocrEngine));
         _ocrLanguageTag = ocrLanguageTag ?? throw new ArgumentNullException(nameof(ocrLanguageTag));
+        _qrScanner = qrScanner ?? throw new ArgumentNullException(nameof(qrScanner));
         _export = export ?? throw new ArgumentNullException(nameof(export));
         _saveAsDialog = saveAsDialog ?? throw new ArgumentNullException(nameof(saveAsDialog));
         _automaticExport = automaticExport ?? throw new ArgumentNullException(nameof(automaticExport));
@@ -1031,6 +1067,49 @@ public sealed class CaptureWorkflowSession<TImage>
             // keeps an unexpected adapter failure retryable instead of
             // crashing the workflow caller.
             return OcrResult.Fail($"Text recognition failed: {ex.Message}");
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    /// <summary>
+    /// Routes a Scan QR Trigger through the production workflow. QR scanning
+    /// is a post-capture workflow feature (not an Export): it operates on the
+    /// in-memory Frame the session already owns — no file is created or
+    /// required — and surfaces distinct found, no-code, no-Frame,
+    /// scanner-failure, and operation-in-progress outcomes through
+    /// <see cref="QrScanResult"/> (spec #48). Found carries every decoded
+    /// value so one or many codes are returned without silently dropping
+    /// valid results. Every retryable outcome preserves the Frame: a retry
+    /// re-scans the same pixels without another Capture, and the Frame stays
+    /// available for delivery. Runs under the same operation guard as Capture
+    /// so a Trigger that arrives mid-scan is rejected rather than queued.
+    /// Never throws for expected failures.
+    /// </summary>
+    public async Task<QrScanResult> ScanQrAsync()
+    {
+        if (!TryBeginOperation())
+            return QrScanResult.Busy();
+
+        try
+        {
+            var frame = _lastFrame;
+            if (frame is null)
+                return QrScanResult.NoFrame();
+
+            // The scanner offloads its synchronous CPU-bound decode
+            // internally (mirroring the capture adapters' thread-pool
+            // contract), so the session awaits it directly.
+            return await _qrScanner.ScanAsync(frame);
+        }
+        catch (Exception ex)
+        {
+            // The scanner contract says never-throw, but a defensive catch
+            // keeps an unexpected adapter failure retryable instead of
+            // crashing the workflow caller.
+            return QrScanResult.Fail($"QR scanning failed: {ex.Message}");
         }
         finally
         {
@@ -1662,6 +1741,20 @@ public sealed class CaptureWorkflowSession<TImage>
 
         public Task<OcrResult> RecognizeAsync(ContiguousBitmap frame, string? languageTag) =>
             Task.FromResult(OcrResult.Fail("Text recognition is not available."));
+    }
+
+    /// <summary>
+    /// Stand-in scanner for sessions constructed without QR wiring. Scan QR
+    /// is a post-capture workflow feature delivered by the scanner adapter —
+    /// without one there is nothing to scan with, which is a retryable
+    /// configuration gap, not a crash.
+    /// </summary>
+    private sealed class NullQrScanner : IQrScanner
+    {
+        public static NullQrScanner Instance { get; } = new();
+
+        public Task<QrScanResult> ScanAsync(ContiguousBitmap frame) =>
+            Task.FromResult(QrScanResult.Fail("QR scanning is not available."));
     }
 
     private static WorkflowResult<TImage> WorkflowResultFor(
