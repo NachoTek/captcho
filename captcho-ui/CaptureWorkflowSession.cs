@@ -640,6 +640,8 @@ public sealed class CaptureWorkflowSession<TImage>
     private readonly IAnnotationOverlayAdapter _annotationOverlay;
     private readonly Func<bool> _annotationEnabled;
     private readonly Func<AnnotationToolState> _annotationToolState;
+    private readonly IWorkflowExportAdapter _export;
+    private readonly ISaveAsDialogAdapter _saveAsDialog;
 
     // Workflow-side Capture-options override holder. Composed committed defaults
     // with per-Capture-Mode session overrides to produce the effective options
@@ -659,10 +661,20 @@ public sealed class CaptureWorkflowSession<TImage>
 
     // The Frame owned by the session after the most recent successful Capture.
     // Stays null until the first successful Capture; replaced on each success.
-    // Production export still reads from CapturePreviewService's cache (a
-    // transitional bridge); the export migration will move readers here so the
-    // session becomes the canonical Frame owner.
+    // Export actions read from this field — the session is the canonical Frame
+    // owner for Save, Save As, Copy Frame, and Copy Path (issue #44).
     private ContiguousBitmap? _lastFrame;
+
+    // The one default saved-file identity for the current Capture. Computed
+    // by the first successful Save (or the export adapter's automatic-save
+    // path) and reused by every later Save so repeats refer to the same file
+    // instead of creating accidental duplicates. Reset when a new Frame is
+    // captured or adopted.
+    private string? _defaultSavedFilePath;
+
+    // The most recently saved file of any kind (default or Save As). Copy
+    // Path reads this once a valid saved file exists.
+    private string? _lastSavedFilePath;
 
     /// <summary>
     /// The Frame owned by the session after the most recent successful Capture.
@@ -678,6 +690,27 @@ public sealed class CaptureWorkflowSession<TImage>
     /// overrides through the same instance the workflow reads (spec #35).
     /// </summary>
     public SessionCaptureOptions SessionOptions => _captureOptions;
+
+    /// <summary>
+    /// The one default saved-file identity for the current Capture — the path
+    /// the first successful Save wrote. Null until Save succeeds, after a new
+    /// Capture, or after <see cref="AdoptFrame"/>. Repeating Save refers to
+    /// this file; Save As never replaces it.
+    /// </summary>
+    public string? DefaultSavedFilePath => _defaultSavedFilePath;
+
+    /// <summary>
+    /// The most recently saved file for the current Capture — the default
+    /// identity or the latest Save As choice. Null until some save succeeds
+    /// for this Capture. Copy Path copies this once it is valid.
+    /// </summary>
+    public string? LastSavedFilePath => _lastSavedFilePath;
+
+    /// <summary>
+    /// Whether a saved file exists as workflow state for the current Capture.
+    /// Copy Path is available only while this is true.
+    /// </summary>
+    public bool HasSavedFile => !string.IsNullOrEmpty(_lastSavedFilePath);
 
     /// <summary>
     /// Creates a workflow session bound to the supplied platform adapters and a
@@ -765,6 +798,34 @@ public sealed class CaptureWorkflowSession<TImage>
         IAnnotationOverlayAdapter annotationOverlay,
         Func<bool> annotationEnabled,
         Func<AnnotationToolState> annotationToolState)
+        : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
+               captureOptions, rememberedSelection, annotationOverlay, annotationEnabled,
+               annotationToolState,
+               UnconfiguredWorkflowExportAdapter.Instance,
+               UnavailableSaveAsDialogAdapter.Instance)
+    {
+    }
+
+    /// <summary>
+    /// Creates a workflow with the Export actions wired (issue #44). The
+    /// session owns the default saved-file identity, Copy Path availability,
+    /// and the operation guard across Save, Save As, Copy Frame, and Copy
+    /// Path; the adapters supply only PNG writing, clipboard placement, and
+    /// the Save As dialog.
+    /// </summary>
+    public CaptureWorkflowSession(
+        IWorkflowCaptureAdapter capture,
+        IPreviewAdapter<TImage> preview,
+        ISelectionOverlayAdapter selectionOverlay,
+        IMonitorPickerOverlayAdapter monitorPickerOverlay,
+        IWindowPickerOverlayAdapter windowPickerOverlay,
+        SessionCaptureOptions captureOptions,
+        RememberedSelectionState rememberedSelection,
+        IAnnotationOverlayAdapter annotationOverlay,
+        Func<bool> annotationEnabled,
+        Func<AnnotationToolState> annotationToolState,
+        IWorkflowExportAdapter export,
+        ISaveAsDialogAdapter saveAsDialog)
     {
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
         _preview = preview ?? throw new ArgumentNullException(nameof(preview));
@@ -776,6 +837,8 @@ public sealed class CaptureWorkflowSession<TImage>
         _annotationOverlay = annotationOverlay ?? throw new ArgumentNullException(nameof(annotationOverlay));
         _annotationEnabled = annotationEnabled ?? throw new ArgumentNullException(nameof(annotationEnabled));
         _annotationToolState = annotationToolState ?? throw new ArgumentNullException(nameof(annotationToolState));
+        _export = export ?? throw new ArgumentNullException(nameof(export));
+        _saveAsDialog = saveAsDialog ?? throw new ArgumentNullException(nameof(saveAsDialog));
     }
 
     /// <summary>
@@ -997,7 +1060,7 @@ public sealed class CaptureWorkflowSession<TImage>
             }
 
             var composedFrame = annotationResult.Frame!;
-            _lastFrame = composedFrame;
+            OwnFrame(composedFrame);
             return WorkflowResultFor(label, WorkflowStatus.Succeeded,
                 frame: composedFrame,
                 dimensions: $"{composedFrame.Width}×{composedFrame.Height}",
@@ -1006,7 +1069,7 @@ public sealed class CaptureWorkflowSession<TImage>
                 totalMs: totalSw.Elapsed.TotalMilliseconds);
         }
 
-        _lastFrame = frame;
+        OwnFrame(frame);
         var previewResult = _preview.Present(frame);
         if (!previewResult.Success)
         {
@@ -1027,6 +1090,271 @@ public sealed class CaptureWorkflowSession<TImage>
             displayMs: previewResult.ElapsedMs,
             totalMs: totalSw.Elapsed.TotalMilliseconds);
     }
+
+    // ── Export workflow actions (issue #44) ──────────────────────────
+
+    /// <summary>
+    /// Takes ownership of a Frame as the session's current exportable Frame,
+    /// resetting the saved-file identity — one default saved-file identity
+    /// per Capture. Called on Capture success (preview and Annotation routes
+    /// both land here) and by <see cref="AdoptFrame(ContiguousBitmap)"/> for
+    /// legacy routes that still capture outside the session.
+    /// </summary>
+    private void OwnFrame(ContiguousBitmap frame)
+    {
+        _lastFrame = frame;
+        _defaultSavedFilePath = null;
+        _lastSavedFilePath = null;
+    }
+
+    /// <summary>
+    /// Adopts a Frame captured outside the session (the remaining legacy
+    /// capture routes) as the session's current exportable Frame, resetting
+    /// the saved-file identity. Export actions act on this Frame until the
+    /// next Capture or adoption replaces it.
+    /// </summary>
+    public void AdoptFrame(ContiguousBitmap frame)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        OwnFrame(frame);
+    }
+
+    /// <summary>
+    /// Save: writes the session-owned Frame as a PNG using the configured
+    /// destination and Filename Template, and records that file as the
+    /// Capture's default saved-file identity. A repeated Save — including
+    /// after an automatic save routed through this action — writes the same
+    /// recorded file instead of expanding the template again, so one Capture
+    /// never accumulates accidental duplicate files. Failures and
+    /// cancellations are retryable: a failed attempt records no identity.
+    /// Never throws for expected failures.
+    /// </summary>
+    public async Task<WorkflowExportResult> SaveAsync(CancellationToken cancellationToken = default)
+    {
+        if (!TryBeginOperation())
+        {
+            return ExportInProgress(WorkflowExportAction.Save);
+        }
+
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var frame = _lastFrame;
+            if (frame is null)
+            {
+                return ExportResultFor(WorkflowExportAction.Save, WorkflowExportStatus.NoFrame,
+                    error: "No capture to export.");
+            }
+
+            // First Save for this Capture: compute the default identity.
+            // Repeats (manual or after an automatic save recorded it): write
+            // the same recorded file.
+            if (_defaultSavedFilePath is null)
+            {
+                var first = await RunOffThread(() => _export.SaveDefault(frame, cancellationToken));
+                if (!first.Success)
+                {
+                    return MapFileExportResult(WorkflowExportAction.Save, first);
+                }
+
+                _defaultSavedFilePath = first.DestinationPath;
+                _lastSavedFilePath = first.DestinationPath;
+                return FileExportSucceeded(WorkflowExportAction.Save, first, sw);
+            }
+
+            var repeat = await RunOffThread(() =>
+                _export.SaveTo(frame, _defaultSavedFilePath, cancellationToken));
+            if (!repeat.Success)
+            {
+                return MapFileExportResult(WorkflowExportAction.Save, repeat);
+            }
+
+            _lastSavedFilePath = _defaultSavedFilePath;
+            return FileExportSucceeded(WorkflowExportAction.Save, repeat, sw);
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    /// <summary>
+    /// Save As: shows the Save As dialog, then writes the session-owned Frame
+    /// to the explicitly chosen path. The created file becomes the last
+    /// saved file (so Copy Path refers to it) but does not replace the
+    /// default saved-file identity — a later Save still refers to (or
+    /// creates) the Capture's default file. Cancelling the dialog ends the
+    /// action with <see cref="WorkflowExportStatus.Cancelled"/> and no side
+    /// effects. Never throws for expected failures.
+    /// </summary>
+    public async Task<WorkflowExportResult> SaveAsAsync(CancellationToken cancellationToken = default)
+    {
+        if (!TryBeginOperation())
+        {
+            return ExportInProgress(WorkflowExportAction.SaveAs);
+        }
+
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            if (_lastFrame is null)
+            {
+                return ExportResultFor(WorkflowExportAction.SaveAs, WorkflowExportStatus.NoFrame,
+                    error: "No capture to export.");
+            }
+
+            // The dialog is modal UI: invoked on the caller's thread, matching
+            // the interactive overlay adapters' contract.
+            var chosenPath = await _saveAsDialog.ShowAsync();
+            if (string.IsNullOrEmpty(chosenPath))
+            {
+                return ExportResultFor(WorkflowExportAction.SaveAs, WorkflowExportStatus.Cancelled,
+                    error: "Save cancelled.");
+            }
+
+            var frame = _lastFrame;
+            var save = await RunOffThread(() => _export.SaveTo(frame, chosenPath!, cancellationToken));
+            if (!save.Success)
+            {
+                return MapFileExportResult(WorkflowExportAction.SaveAs, save);
+            }
+
+            _lastSavedFilePath = save.DestinationPath;
+            return FileExportSucceeded(WorkflowExportAction.SaveAs, save, sw);
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    /// <summary>
+    /// Copy Frame: encodes the session-owned Frame as PNG image content and
+    /// places it on the Windows clipboard without creating a file — the
+    /// clipboard-only workflow requires no saved file. Never throws for
+    /// expected failures.
+    /// </summary>
+    public async Task<WorkflowExportResult> CopyFrameAsync()
+    {
+        if (!TryBeginOperation())
+        {
+            return ExportInProgress(WorkflowExportAction.CopyFrame);
+        }
+
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var frame = _lastFrame;
+            if (frame is null)
+            {
+                return ExportResultFor(WorkflowExportAction.CopyFrame, WorkflowExportStatus.NoFrame,
+                    error: "No capture to copy.");
+            }
+
+            var copy = await RunOffThread(() => _export.CopyImage(frame));
+            return MapClipboardExportResult(WorkflowExportAction.CopyFrame, copy, sw);
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    /// <summary>
+    /// Copy Path: places the current saved file's path on the clipboard.
+    /// Unavailable — <see cref="WorkflowExportStatus.Failed"/> with a
+    /// user-visible error — until a valid saved file exists as workflow
+    /// state for the current Capture (a successful Save or Save As). Never
+    /// throws for expected failures.
+    /// </summary>
+    public async Task<WorkflowExportResult> CopyPathAsync()
+    {
+        if (!TryBeginOperation())
+        {
+            return ExportInProgress(WorkflowExportAction.CopyPath);
+        }
+
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var path = _lastSavedFilePath;
+            if (string.IsNullOrEmpty(path))
+            {
+                return ExportResultFor(WorkflowExportAction.CopyPath, WorkflowExportStatus.Failed,
+                    error: "No saved file to copy.");
+            }
+
+            var copy = await RunOffThread(() => _export.CopyText(path!));
+            return MapClipboardExportResult(WorkflowExportAction.CopyPath, copy, sw);
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    private static WorkflowExportResult ExportInProgress(WorkflowExportAction action) =>
+        ExportResultFor(action, WorkflowExportStatus.OperationInProgress,
+            error: "An operation is already in progress.");
+
+    private static WorkflowExportResult FileExportSucceeded(
+        WorkflowExportAction action,
+        ExportResult save,
+        Stopwatch sw) =>
+        new()
+        {
+            Action = action,
+            Status = WorkflowExportStatus.Succeeded,
+            FilePath = save.DestinationPath,
+            Width = save.Width,
+            Height = save.Height,
+            ByteCount = save.ByteCount,
+            ElapsedMs = sw.Elapsed.TotalMilliseconds,
+        };
+
+    private static WorkflowExportResult MapFileExportResult(
+        WorkflowExportAction action,
+        ExportResult save)
+    {
+        if (save.Phase == ExportPhase.Cancelled)
+        {
+            return ExportResultFor(action, WorkflowExportStatus.Cancelled, error: "Export cancelled.");
+        }
+
+        return ExportResultFor(action, WorkflowExportStatus.Failed, error: save.Message);
+    }
+
+    private static WorkflowExportResult MapClipboardExportResult(
+        WorkflowExportAction action,
+        ClipboardExportResult copy,
+        Stopwatch sw)
+    {
+        if (copy.Success)
+        {
+            return new()
+            {
+                Action = action,
+                Status = WorkflowExportStatus.Succeeded,
+                Width = copy.Width,
+                Height = copy.Height,
+                ByteCount = copy.ByteCount,
+                ElapsedMs = sw.Elapsed.TotalMilliseconds,
+            };
+        }
+
+        return ExportResultFor(action, WorkflowExportStatus.Failed, error: copy.Message);
+    }
+
+    private static WorkflowExportResult ExportResultFor(
+        WorkflowExportAction action,
+        WorkflowExportStatus status,
+        string? error = null) =>
+        new()
+        {
+            Action = action,
+            Status = status,
+            Error = error,
+        };
 
     private static WorkflowResult<TImage> Cancelled(CaptureMode mode, Stopwatch totalSw) =>
         WorkflowResultFor(ModeLabel(mode), WorkflowStatus.Cancelled,

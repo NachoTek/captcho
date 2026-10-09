@@ -73,6 +73,7 @@ Set the **Delay (sec)** spinner to 0-60 seconds, then click any capture button. 
 - **Save** — Saves to your configured location with the current filename template
 - **Save As** — Opens a file picker to choose location and filename
 - **Copy** — Copies the screenshot to your clipboard for pasting elsewhere
+- **Copy Path** — Copies the saved file's path to your clipboard (available after a save)
 
 Default save location: `Pictures\captcho\` in your user profile.
 
