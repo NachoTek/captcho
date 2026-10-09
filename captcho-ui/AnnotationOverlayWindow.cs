@@ -25,12 +25,14 @@ public sealed class AnnotationOverlayWindow : IDisposable
     private const int WM_CLOSE = 0x0010;
     private const int WM_DESTROY = 0x0002;
     private const int WM_KEYDOWN = 0x0100;
+    private const int WM_CHAR = 0x0102;
     private const int WM_MOUSEMOVE = 0x0200;
     private const int WM_LBUTTONDOWN = 0x0201;
     private const int WM_LBUTTONUP = 0x0202;
     private const int VK_ESCAPE = 0x1B;
     private const int VK_RETURN = 0x0D;
     private const int VK_CONTROL = 0x11;
+    private const int VK_BACK = 0x08;
     private const int SM_XVIRTUALSCREEN = 76;
     private const int SM_YVIRTUALSCREEN = 77;
     private const int SM_CXVIRTUALSCREEN = 78;
@@ -236,6 +238,38 @@ public sealed class AnnotationOverlayWindow : IDisposable
 
     private IntPtr HandleWindowMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam)
     {
+        // While a text entry is open, keystrokes edit the entry instead of driving
+        // the overlay: printable characters append, Backspace removes, Return commits,
+        // and Escape cancels the entry (a second Escape cancels Annotation).
+        if (IsTexting)
+        {
+            switch (message)
+            {
+                case WM_CHAR:
+                    return HandleTextInput(wParam);
+                case WM_KEYDOWN when wParam.ToInt32() == VK_RETURN:
+                    CommitTextEntry();
+                    return IntPtr.Zero;
+                case WM_KEYDOWN when wParam.ToInt32() == VK_ESCAPE:
+                    _annotationSession.CancelStroke();
+                    Render();
+                    return IntPtr.Zero;
+                case WM_KEYDOWN when wParam.ToInt32() == VK_BACK:
+                    BackspaceTextEntry();
+                    return IntPtr.Zero;
+                case WM_LBUTTONDOWN:
+                    // Clicking away commits the open entry first, then the click
+                    // proceeds through the normal toolbar/placement path.
+                    CommitTextEntry();
+                    HandleFrameClick(
+                        window,
+                        new System.Drawing.Point(SignedLowWord(lParam), SignedHighWord(lParam)));
+                    return IntPtr.Zero;
+                default:
+                    return DefWindowProcW(window, message, wParam, lParam);
+            }
+        }
+
         switch (message)
         {
             case WM_KEYDOWN when wParam.ToInt32() == VK_RETURN:
@@ -253,15 +287,7 @@ public sealed class AnnotationOverlayWindow : IDisposable
                 return IntPtr.Zero;
             case WM_LBUTTONDOWN:
                 var downPoint = new System.Drawing.Point(SignedLowWord(lParam), SignedHighWord(lParam));
-                if (HandleToolbarClick(downPoint))
-                    return IntPtr.Zero;
-                if (_frameBounds.Contains(downPoint))
-                {
-                    _drawing = true;
-                    SetCapture(window);
-                    _annotationSession.BeginStroke(ToFramePoint(downPoint));
-                    Render();
-                }
+                HandleFrameClick(window, downPoint);
                 return IntPtr.Zero;
             case WM_MOUSEMOVE when _drawing:
                 var movePoint = new System.Drawing.Point(SignedLowWord(lParam), SignedHighWord(lParam));
@@ -426,19 +452,19 @@ public sealed class AnnotationOverlayWindow : IDisposable
         const int widthButton = 38;
         const int widthLabel = 86;
         const int undoWidth = 58;
-        // Pen + four shapes + color + fill + width stepper + undo/redo + confirm/cancel.
-        int contentWidth = toolWidth * 5
+        // Pen + four shapes + text + color + fill + width stepper + undo/redo + confirm/cancel.
+        int contentWidth = toolWidth * 6
             + colorWidth
             + fillWidth
             + widthButton * 2 + widthLabel
             + undoWidth * 2
             + buttonWidth * 2
-            + gap * 12;
+            + gap * 13;
         int startX = Math.Max(8, (_virtualWidth - contentWidth) / 2);
         int y = 20;
         int x = startX;
         _toolButtons.Clear();
-        foreach (var tool in new[] { AnnotationTool.Pen, AnnotationTool.Rectangle, AnnotationTool.Ellipse, AnnotationTool.Line, AnnotationTool.Arrow })
+        foreach (var tool in new[] { AnnotationTool.Pen, AnnotationTool.Rectangle, AnnotationTool.Ellipse, AnnotationTool.Line, AnnotationTool.Arrow, AnnotationTool.Text })
         {
             _toolButtons.Add((new Rectangle(x, y, toolWidth, height), tool));
             x += toolWidth + gap;
@@ -501,6 +527,7 @@ public sealed class AnnotationOverlayWindow : IDisposable
             [AnnotationTool.Ellipse] = "Ellipse",
             [AnnotationTool.Line] = "Line",
             [AnnotationTool.Arrow] = "Arrow",
+            [AnnotationTool.Text] = "Text",
         };
         foreach (var (bounds, tool) in _toolButtons)
             DrawCentered(graphics, toolLabels[tool], smallFont, text, bounds);
@@ -519,6 +546,21 @@ public sealed class AnnotationOverlayWindow : IDisposable
         DrawCentered(graphics, "Redo", smallFont, _annotationSession.CanRedo ? text : textDisabled, _redoButton);
         DrawCentered(graphics, "Confirm", smallFont, text, _confirmButton);
         DrawCentered(graphics, "Cancel", smallFont, text, _cancelButton);
+
+        if (IsTexting)
+        {
+            // Editing affordance: a hint bar under the toolbar while a text entry is
+            // open, spelling out commit (Return) and cancel (Escape) behavior.
+            using var hintPanel = new SolidBrush(Color.FromArgb(220, 28, 30, 34));
+            var hintBounds = new Rectangle(startX - 12, y + height + 12, contentWidth + 24, height);
+            graphics.FillRectangle(hintPanel, hintBounds);
+            DrawCentered(
+                graphics,
+                "Type to edit - Return commits, Escape cancels",
+                smallFont,
+                text,
+                hintBounds);
+        }
     }
 
     private bool HandleToolbarClick(System.Drawing.Point point)
@@ -594,6 +636,65 @@ public sealed class AnnotationOverlayWindow : IDisposable
     {
         if (undo ? _annotationSession.Undo() : _annotationSession.Redo())
             Render();
+    }
+
+    private bool IsTexting => _annotationSession.Document.InProgressText is not null;
+
+    /// <summary>
+    /// Non-texting left-click path: toolbar first, then frame placement. The text
+    /// tool opens an editable entry; every other tool begins a drag stroke.
+    /// </summary>
+    private void HandleFrameClick(IntPtr window, System.Drawing.Point downPoint)
+    {
+        if (HandleToolbarClick(downPoint))
+            return;
+        if (!_frameBounds.Contains(downPoint))
+            return;
+
+        if (_annotationSession.ToolState.Tool == AnnotationTool.Text)
+        {
+            // The text tool places an editable entry; entry content is committed
+            // as one annotation document entry on Return or click-away.
+            _annotationSession.BeginText(ToFramePoint(downPoint));
+            Render();
+            return;
+        }
+
+        _drawing = true;
+        SetCapture(window);
+        _annotationSession.BeginStroke(ToFramePoint(downPoint));
+        Render();
+    }
+
+    private IntPtr HandleTextInput(IntPtr wParam)
+    {
+        int character = wParam.ToInt32();
+        if (character == VK_BACK || character == VK_RETURN || character == VK_ESCAPE)
+            return IntPtr.Zero;
+        if (char.IsControl((char)character) || (char.IsWhiteSpace((char)character) && character != ' '))
+            return IntPtr.Zero;
+
+        _annotationSession.EditInProgressText(
+            _annotationSession.Document.InProgressText + (char)character);
+        Render();
+        return IntPtr.Zero;
+    }
+
+    private void BackspaceTextEntry()
+    {
+        var content = _annotationSession.Document.InProgressText;
+        if (string.IsNullOrEmpty(content))
+            return;
+
+        _annotationSession.EditInProgressText(content[..^1]);
+        Render();
+    }
+
+    private void CommitTextEntry()
+    {
+        // Empty or whitespace input commits nothing; the document drops the entry.
+        _annotationSession.CommitStroke();
+        Render();
     }
 
     private AnnotationPoint ToFramePoint(System.Drawing.Point point)
