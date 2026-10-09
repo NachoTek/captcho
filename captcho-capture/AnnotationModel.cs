@@ -490,7 +490,7 @@ public static class AnnotationRenderer
             return;
 
         if (stroke.Shadow == AnnotationShadowStyle.Drop && stroke.Tool != AnnotationTool.Blur)
-            DrawStrokeShadow(sourceFrame, width, height, stride, pixels, stroke);
+            DrawStrokeShadow(width, height, stride, pixels, stroke);
 
         switch (stroke.Tool)
         {
@@ -629,7 +629,6 @@ public static class AnnotationRenderer
     /// clamping every rasterizer already applies, so edge entries stay inside.
     /// </summary>
     private static void DrawStrokeShadow(
-        ContiguousBitmap sourceFrame,
         int width,
         int height,
         int stride,
