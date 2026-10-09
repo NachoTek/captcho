@@ -133,6 +133,7 @@ public sealed class AnnotationOverlayWindow : IDisposable
     private readonly List<(Rectangle Bounds, AnnotationTool Tool)> _toolButtons = new();
     private Rectangle _colorButton;
     private Rectangle _fillButton;
+    private Rectangle _shadowButton;
     private Rectangle _widthDownButton;
     private Rectangle _widthUpButton;
     private Rectangle _undoButton;
@@ -449,17 +450,19 @@ public sealed class AnnotationOverlayWindow : IDisposable
         const int toolWidth = 86;
         const int colorWidth = 54;
         const int fillWidth = 54;
+        const int shadowWidth = 66;
         const int widthButton = 38;
         const int widthLabel = 86;
         const int undoWidth = 58;
-        // Pen + four shapes + text + marker + blur + color + fill + width stepper + undo/redo + confirm/cancel.
+        // Pen + four shapes + text + marker + blur + color + fill + shadow + width stepper + undo/redo + confirm/cancel.
         int contentWidth = toolWidth * 8
             + colorWidth
             + fillWidth
+            + shadowWidth
             + widthButton * 2 + widthLabel
             + undoWidth * 2
             + buttonWidth * 2
-            + gap * 13;
+            + gap * 14;
         int startX = Math.Max(8, (_virtualWidth - contentWidth) / 2);
         int y = 20;
         int x = startX;
@@ -473,6 +476,8 @@ public sealed class AnnotationOverlayWindow : IDisposable
         x += colorWidth + gap;
         _fillButton = new Rectangle(x, y, fillWidth, height);
         x += fillWidth + gap;
+        _shadowButton = new Rectangle(x, y, shadowWidth, height);
+        x += shadowWidth + gap;
         _widthDownButton = new Rectangle(x, y, widthButton, height);
         x += widthButton + gap;
         var widthText = new Rectangle(x, y, widthLabel, height);
@@ -488,6 +493,7 @@ public sealed class AnnotationOverlayWindow : IDisposable
         _cancelButton = new Rectangle(x, y, buttonWidth, height);
 
         bool fillApplies = _annotationSession.ToolState.ToolSupportsFill;
+        bool shadowApplies = _annotationSession.ToolState.ToolSupportsShadow;
 
         graphics.SmoothingMode = SmoothingMode.AntiAlias;
         using var panel = new SolidBrush(Color.FromArgb(220, 28, 30, 34));
@@ -508,6 +514,14 @@ public sealed class AnnotationOverlayWindow : IDisposable
             graphics.FillRectangle(
                 _annotationSession.ToolState.Fill == AnnotationFillStyle.Solid ? accent : neutral,
                 _fillButton);
+        }
+        if (shadowApplies)
+        {
+            // The shadow effect applies to every stroke-rendered tool; blur is
+            // geometry-only, so the control hides while blur is active.
+            graphics.FillRectangle(
+                _annotationSession.ToolState.Shadow == AnnotationShadowStyle.Drop ? accent : neutral,
+                _shadowButton);
         }
         graphics.FillRectangle(neutral, _widthDownButton);
         graphics.FillRectangle(neutral, widthText);
@@ -541,6 +555,13 @@ public sealed class AnnotationOverlayWindow : IDisposable
                 smallFont,
                 text,
                 _fillButton);
+        if (shadowApplies)
+            DrawCentered(
+                graphics,
+                "Shadow",
+                smallFont,
+                text,
+                _shadowButton);
         DrawCentered(graphics, "-", font, text, _widthDownButton);
         DrawCentered(graphics, $"Width {_annotationSession.ToolState.StrokeWidth}", smallFont, text, widthText);
         DrawCentered(graphics, "+", font, text, _widthUpButton);
@@ -597,6 +618,16 @@ public sealed class AnnotationOverlayWindow : IDisposable
                 _annotationSession.ToolState.Fill == AnnotationFillStyle.Solid
                     ? AnnotationFillStyle.None
                     : AnnotationFillStyle.Solid);
+            Render();
+            return true;
+        }
+
+        if (_shadowButton.Contains(point) && _annotationSession.ToolState.ToolSupportsShadow)
+        {
+            _annotationSession.SetShadow(
+                _annotationSession.ToolState.Shadow == AnnotationShadowStyle.Drop
+                    ? AnnotationShadowStyle.None
+                    : AnnotationShadowStyle.Drop);
             Render();
             return true;
         }
