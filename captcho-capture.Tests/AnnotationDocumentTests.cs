@@ -764,6 +764,72 @@ public class AnnotationDocumentTests
         Assert.Equal(9, stroke.StrokeWidth);
     }
 
+    // spec #43: annotation shadows
+
+    [Theory]
+    [InlineData(AnnotationTool.Pen)]
+    [InlineData(AnnotationTool.Rectangle)]
+    [InlineData(AnnotationTool.Ellipse)]
+    [InlineData(AnnotationTool.Line)]
+    [InlineData(AnnotationTool.Arrow)]
+    [InlineData(AnnotationTool.Text)]
+    [InlineData(AnnotationTool.Marker)]
+    public void Shadow_SnapshotsWithTheEntryAndUndoRedoRestoresIt(AnnotationTool tool)
+    {
+        var source = SolidFrame(120, 60, new AnnotationColor(20, 30, 40));
+        var session = new AnnotationSession(source, new AnnotationToolState(
+            tool,
+            new AnnotationColor(255, 0, 0),
+            4));
+
+        session.SetShadow(AnnotationShadowStyle.Drop);
+        if (tool == AnnotationTool.Text)
+        {
+            session.BeginText(new AnnotationPoint(10, 20));
+            session.EditInProgressText("Hi");
+            Assert.Equal(AnnotationShadowStyle.Drop, session.Document.InProgressStroke!.Shadow);
+        }
+        else if (tool == AnnotationTool.Marker)
+        {
+            session.BeginMarker(new AnnotationPoint(20, 20));
+        }
+        else
+        {
+            session.BeginStroke(new AnnotationPoint(10, 20));
+            if (tool != AnnotationTool.Pen)
+                session.UpdateStrokePoint(new AnnotationPoint(60, 40));
+        }
+        session.CommitStroke();
+
+        var stroke = Assert.Single(session.Document.Strokes);
+        Assert.Equal(AnnotationShadowStyle.Drop, stroke.Shadow);
+
+        Assert.True(session.Undo());
+        Assert.Empty(session.Document.Strokes);
+        Assert.True(session.Redo());
+        var restored = Assert.Single(session.Document.Strokes);
+        Assert.Equal(AnnotationShadowStyle.Drop, restored.Shadow);
+    }
+
+    [Fact]
+    public void Blur_NeverSnapshotsALingeringShadowSelection()
+    {
+        var session = new AnnotationSession(SolidFrame(40, 30, new AnnotationColor(20, 30, 40)), new AnnotationToolState(
+            AnnotationTool.Blur,
+            new AnnotationColor(255, 0, 0),
+            4));
+
+        // Shadow enabled while a shadow-capable tool was active, then the tool changed.
+        session.SetShadow(AnnotationShadowStyle.Drop);
+        session.SetTool(AnnotationTool.Blur);
+        session.BeginStroke(new AnnotationPoint(2, 2));
+        session.UpdateStrokePoint(new AnnotationPoint(20, 12));
+        session.CommitStroke();
+
+        var stroke = Assert.Single(session.Document.Strokes);
+        Assert.Equal(AnnotationShadowStyle.None, stroke.Shadow);
+    }
+
     private static ContiguousBitmap CheckerboardFrame(int width, int height)
     {
         var pixels = new byte[width * height * 4];

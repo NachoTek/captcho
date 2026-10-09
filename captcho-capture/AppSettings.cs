@@ -30,6 +30,8 @@ public enum SettingsField
     AnnotationSettings,
     /// <summary>The <see cref="AppSettings.ExportSettings"/> field.</summary>
     ExportSettings,
+    /// <summary>The <see cref="AppSettings.LaunchBehavior"/> field.</summary>
+    LaunchBehavior,
 }
 
 /// <summary>
@@ -191,6 +193,39 @@ public sealed class AppSettings
     [JsonPropertyName("automaticExport")]
     public AutomaticExportSettings AutomaticExport { get; set; } = AutomaticExportSettings.WithDefaults();
 
+    /// <summary>
+    /// Persisted launch behavior: what captcho does on startup (issue #53) —
+    /// Do nothing (the safe default), trigger the last Capture Mode used, or
+    /// trigger a configured Capture Mode. Older Configuration files omit this
+    /// object and retain the Do-nothing default through the property
+    /// initializer and <see cref="EffectiveLaunchBehavior"/>.
+    /// </summary>
+    [JsonPropertyName("launchBehavior")]
+    public LaunchBehaviorSettings LaunchBehavior { get; set; } = LaunchBehaviorSettings.WithDefaults();
+
+    /// <summary>
+    /// Whether captcho exits automatically after a confirmed Capture's
+    /// delivery completes (issue #54). The exit fires only after the
+    /// Annotation overlay is dismissed and every configured delivery
+    /// action — manual or automatic — finished successfully; cancellation,
+    /// failure, and unfinished actions keep the application running.
+    /// Older Configuration files omit this property and therefore retain
+    /// the never-exit default.
+    /// </summary>
+    [JsonPropertyName("exitAfterDelivery")]
+    public bool ExitAfterDelivery { get; set; }
+
+    /// <summary>
+    /// The last Capture Mode used, recorded at runtime so the
+    /// <see cref="LaunchAction.LastCaptureMode"/> launch behavior can restore
+    /// it on the next run. Recording is owned by the workflow session's
+    /// launch state (only while that action needs it); this property is pure
+    /// persisted state. Null until a capture happens, and for older
+    /// Configuration files.
+    /// </summary>
+    [JsonPropertyName("lastCaptureMode")]
+    public CaptureMode? LastCaptureMode { get; set; }
+
     // Future properties can be added here. System.Text.Json will ignore
     // unknown properties on read and only serialize declared ones.
 
@@ -210,6 +245,9 @@ public sealed class AppSettings
         AnnotationEnabled = true,
         AutomaticExport = AutomaticExportSettings.WithDefaults(),
         OcrLanguageTag = null,
+        LaunchBehavior = LaunchBehaviorSettings.WithDefaults(),
+        ExitAfterDelivery = false,
+        LastCaptureMode = null,
     };
 
     /// <summary>
@@ -269,6 +307,27 @@ public sealed class AppSettings
     [JsonIgnore]
     public AutomaticExportSettings EffectiveAutomaticExport =>
         AutomaticExport ?? AutomaticExportSettings.WithDefaults();
+
+    /// <summary>
+    /// Resolves the launch behavior for runtime use, falling back to the
+    /// Do-nothing defaults when the backing field is null (defensive — it is
+    /// initialized non-null, but a hand-edited settings file could leave it
+    /// null on read).
+    /// </summary>
+    [JsonIgnore]
+    public LaunchBehaviorSettings EffectiveLaunchBehavior =>
+        LaunchBehavior ?? LaunchBehaviorSettings.WithDefaults();
+
+    /// <summary>
+    /// Resolves the recorded last Capture Mode for runtime use, falling back
+    /// to null when the persisted value is absent or an out-of-range enum
+    /// (a hand-edited settings file).
+    /// </summary>
+    [JsonIgnore]
+    public CaptureMode? EffectiveLastCaptureMode =>
+        LastCaptureMode is not null && Enum.IsDefined(LastCaptureMode.Value)
+            ? LastCaptureMode
+            : null;
 
     /// <summary>Returns a valid remembered-Selection lifetime for runtime use.</summary>
     [JsonIgnore]
@@ -385,6 +444,17 @@ public sealed class AppSettings
                 "Annotation defaults must use a supported tool and a stroke width from 1 through 64."));
         }
 
+        // LaunchBehavior: the Configured Capture Mode action must carry a
+        // known Capture Mode. The Behavior tab's typed edits always supply
+        // one, so this gates the persistence boundary (a hand-edited or
+        // partially-written settings file cannot configure "capture nothing").
+        if (LaunchBehavior is null || !LaunchBehavior.IsValid)
+        {
+            issues.Add(new SettingsIssue(
+                SettingsField.LaunchBehavior,
+                "Launch behavior must use a supported action, and a configured launch must select a Capture Mode."));
+        }
+
         // ExportSettings: format must be a defined ExportImageFormat and JPEG
         // quality must lie in the inclusive 0–100 range. Blocks Apply/OK so an
         // invalid Configuration is rejected atomically rather than persisted.
@@ -428,5 +498,8 @@ public sealed class AppSettings
         AnnotationEnabled = AnnotationEnabled,
         AutomaticExport = EffectiveAutomaticExport,
         OcrLanguageTag = string.IsNullOrWhiteSpace(OcrLanguageTag) ? null : OcrLanguageTag.Trim(),
+        LaunchBehavior = EffectiveLaunchBehavior,
+        ExitAfterDelivery = ExitAfterDelivery,
+        LastCaptureMode = EffectiveLastCaptureMode,
     };
 }

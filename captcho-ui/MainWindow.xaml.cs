@@ -6,6 +6,8 @@
 // updating the preview image, status, and timing text.
 // Export buttons (Save, Save As…, Copy) are wired to the export service methods
 // and disabled until a capture succeeds and while export/capture/countdown is running.
+// Saved-file-gated actions (Copy Path, Open With, Share) additionally require a
+// valid saved file to exist as workflow state for the current Capture.
 // Global hotkeys (Print Screen, Win+Print, Shift+Print, Win+Shift+Print) are registered
 // on startup via RegisterHotKey and routed through WM_HOTKEY to the same capture workflows.
 
@@ -68,6 +70,14 @@ public sealed partial class MainWindow : Window
     /// Ensures only one settings dialog is open at a time.
     /// </summary>
     private SettingsWindowCoordinator? _settingsCoordinator;
+
+    /// <summary>
+    /// Routes the configured launch behavior at startup: resolves the
+    /// chosen action through the settings and dispatches the resolved
+    /// Capture Mode to the same five production workflow routes the buttons
+    /// and Global Hotkeys use (issue #53). Never bespoke capture code.
+    /// </summary>
+    private readonly LaunchTriggerRouter _launchRouter;
 
     /// <summary>
     /// Tracks whether a capture has succeeded and the cached bitmap is available for export.
@@ -177,13 +187,22 @@ public sealed partial class MainWindow : Window
         // adapters: native pixel acquisition, the Selection overlay, the
         // Selected Monitor picker overlay, the Selected Window picker overlay,
         // the preview transition, the Export actions (Save, Save As,
-        // Copy Frame, Copy Path), and Windows OCR for Recognize Text. The
+        // Copy Frame, Copy Path), and the Windows-first OCR chain with the
+        // packaged Tesseract fallback for Recognize Text (issue #50). The
         // session owns Capture Mode routing and the post-capture workflow —
         // including the one default saved-file identity per Capture — from
         // here. The SessionCaptureOptions is bound to the live runtime
         // AppSettings so committed-default changes (applied through Settings)
         // are observable, and so per-Capture-Mode session overrides flow into
-        // the effective options each route forwards (spec #34).
+        // the effective options each route forwards (spec #34). The
+        // LaunchBehaviorState records the last Capture Mode of every
+        // successful capture — persisting it only while the launch behavior
+        // needs it (issue #53).
+        var launchState = new LaunchBehaviorState(
+            _settings,
+            _configurationService is null
+                ? null
+                : new ConfigurationLaunchBehaviorPersistence(_settings, _configurationService));
         _workflowSession = new CaptureWorkflowSession<WriteableBitmap>(
             new WindowsCaptureAdapter(),
             new WriteableBitmapPreviewAdapter(),
@@ -202,18 +221,36 @@ public sealed partial class MainWindow : Window
             new AnnotationOverlayAdapter(),
             () => _settings.AnnotationEnabled,
             () => _settings.EffectiveAnnotationSettings.ToToolState(),
-            new WindowsOcrEngine(),
+            FallbackOcrEngine.WindowsWithTesseract(),
             () => _settings.OcrLanguageTag,
             new ZxingQrScanner(),
             new WorkflowExportAdapter(_settings, new WindowsClipboardAdapter()),
             new FileSavePickerDialogAdapter(
                 () => _hwnd != IntPtr.Zero ? _hwnd : WinRT.Interop.WindowNative.GetWindowHandle(this),
                 () => _settings),
-            () => _settings.EffectiveAutomaticExport);
+            () => _settings.EffectiveAutomaticExport,
+            launchState,
+            new WindowsDeliveryAdapter(
+                () => _hwnd != IntPtr.Zero ? _hwnd : WinRT.Interop.WindowNative.GetWindowHandle(this)),
+            OnWorkflowExitRequested,
+            () => _settings.ExitAfterDelivery);
 
         // Initialize Global Hotkeys after the window has an HWND.
         // In WinUI 3, the HWND is available immediately after construction.
         InitializeGlobalHotkeys();
+
+        // Apply the configured launch behavior (issue #53): dispatch the
+        // resolved Capture Mode through the same production workflow routes
+        // the buttons and Global Hotkeys use. Runs asynchronously after the
+        // window is shown (see OnActivated first-run) so the interactive
+        // overlays appear over a fully activated window.
+        _launchRouter = new LaunchTriggerRouter(new ProductionWorkflowRoutes(
+            RunFullDesktopWorkflowAsync,
+            RunActiveWindowWorkflowAsync,
+            RunSelectionWorkflowAsync,
+            RunSelectedMonitorWorkflowAsync,
+            RunSelectedWindowWorkflowAsync));
+        Activated += OnFirstActivatedApplyLaunchBehavior;
 
         // Initialize settings coordinator with production delegates
         if (_configurationService != null)
@@ -229,7 +266,87 @@ public sealed partial class MainWindow : Window
         this.Closed += OnWindowClosed;
     }
 
+    // ── Exit after confirmed delivery (issue #54) ───────────────────────
+
+    /// <summary>
+    /// Guards the automatic-exit request so the window closes (and the app
+    /// exits through App's Closed handler) exactly once even if a second
+    /// request races the shutdown.
+    /// </summary>
+    private bool _exitRequested;
+
+    /// <summary>
+    /// Workflow exit request receiver (issue #54): the session raised it
+    /// after the Annotation overlay was dismissed and every configured
+    /// delivery action finished successfully. The WinUI layer stays a thin
+    /// adapter — it schedules the shutdown on the UI thread; the exit
+    /// decision itself is workflow-owned. Failures never crash: an exit
+    /// request that cannot be scheduled is ignored (the user can still close
+    /// manually).
+    /// </summary>
+    private void OnWorkflowExitRequested(WorkflowExitReason reason)
+    {
+        if (_exitRequested)
+            return;
+        _exitRequested = true;
+
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_isOperationRunning)
+            {
+                // The request observed finished delivery state, but a new
+                // operation is in flight on the UI thread — defer to the
+                // user rather than yanking the window mid-operation.
+                _exitRequested = false;
+                return;
+            }
+
+            Close();
+        });
+    }
+
     // ── Global Hotkey initialization and cleanup ─────────────────────────────
+
+    /// <summary>
+    /// Whether the configured launch behavior has been applied. The Trigger
+    /// runs once, on the first Activated event, so the interactive overlays
+    /// and the preview window appear over a fully activated window.
+    /// </summary>
+    private bool _hasAppliedLaunchBehavior;
+
+    /// <summary>
+    /// Applies the configured launch behavior on the first activation.
+    /// Failures never crash startup: an unroutable launch behavior leaves the
+    /// window idle with a status message, matching how hotkey registration
+    /// failures surface.
+    /// </summary>
+    private void OnFirstActivatedApplyLaunchBehavior(object sender, WindowActivatedEventArgs args)
+    {
+        if (_hasAppliedLaunchBehavior)
+            return;
+
+        _hasAppliedLaunchBehavior = true;
+        Activated -= OnFirstActivatedApplyLaunchBehavior;
+        _ = RunLaunchBehaviorAsync();
+    }
+
+    /// <summary>
+    /// Runs the configured launch behavior through the production workflow
+    /// routes. Startup stays idle (no dispatch, no status change) for Do
+    /// nothing, a missing last Capture Mode, or invalid persisted values —
+    /// the safe fallbacks resolved in AppSettings.ResolveStartupMode.
+    /// </summary>
+    private async Task RunLaunchBehaviorAsync()
+    {
+        try
+        {
+            await _launchRouter.RunStartupAsync(_settings);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Launch behavior failed: {SanitizeException(ex)}";
+        }
+    }
 
     /// <summary>
     /// Registers every global hotkey and installs a WndProc subclass for WM_HOTKEY.
@@ -302,7 +419,7 @@ public sealed partial class MainWindow : Window
                 if (!_isSettingsAcceleratorPressed)
                 {
                     _isSettingsAcceleratorPressed = true;
-                    DispatcherQueue.TryEnqueue(() => Settings_Click(null, null!));
+                    DispatcherQueue.TryEnqueue(OpenSettings);
                 }
                 return IntPtr.Zero;
             }
@@ -641,14 +758,93 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Handles "Open With" click — routes the Open With Export action
+    /// through the workflow session, which hands the saved file to Windows
+    /// application association (discovery plus launch). Unavailable until a
+    /// valid saved file exists.
+    /// </summary>
+    private async void OpenWith_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isOperationRunning || !_hasCapture)
+        {
+            StatusText.Text = ExportStatusFormatter.FormatNoCapture();
+            return;
+        }
+
+        EnterExportState();
+        StatusText.Text = "Opening with Windows…";
+
+        try
+        {
+            var result = await _workflowSession.OpenWithAsync();
+            ApplyWorkflowExportResult(result);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Open With failed: {SanitizeException(ex)}";
+            TimingText.Text = "";
+        }
+        finally
+        {
+            ExitExportState();
+        }
+    }
+
+    /// <summary>
+    /// Handles "Share" click — routes the Share Export action through the
+    /// workflow session, which invokes the Windows share interface with the
+    /// delivered Capture file. Unavailable until a valid saved file exists.
+    /// </summary>
+    private async void Share_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isOperationRunning || !_hasCapture)
+        {
+            StatusText.Text = ExportStatusFormatter.FormatNoCapture();
+            return;
+        }
+
+        EnterExportState();
+        StatusText.Text = "Sharing…";
+
+        try
+        {
+            var result = await _workflowSession.ShareAsync();
+            ApplyWorkflowExportResult(result);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Share failed: {SanitizeException(ex)}";
+            TimingText.Text = "";
+        }
+        finally
+        {
+            ExitExportState();
+        }
+    }
+
+    /// <summary>
     /// Applies a WorkflowExportResult to the status and timing text and
-    /// refreshes Copy Path availability from the session's saved-file state.
+    /// refreshes saved-file-gated action availability (Copy Path, Open With,
+    /// Share) from the session's saved-file state.
     /// </summary>
     private void ApplyWorkflowExportResult(WorkflowExportResult result)
     {
         StatusText.Text = ExportStatusFormatter.FormatStatus(result);
         TimingText.Text = ExportStatusFormatter.FormatTiming(result);
-        CopyPathButton.IsEnabled = _workflowSession.HasSavedFile;
+        RefreshSavedFileActions();
+    }
+
+    /// <summary>
+    /// Refreshes the saved-file-gated toolbar actions — Copy Path, Open
+    /// With, and Share — from the session's current saved-file state, so
+    /// they are visibly disabled until a valid saved Capture exists.
+    /// </summary>
+    private void RefreshSavedFileActions()
+    {
+        var enabled = _workflowSession.HasSavedFile;
+        CopyPathButton.IsEnabled = enabled;
+        OpenWithButton.IsEnabled = enabled;
+        ShareButton.IsEnabled = enabled;
     }
 
     // ── Delayed capture orchestration ────────────────────────────────
@@ -781,7 +977,7 @@ public sealed partial class MainWindow : Window
                 _hasCapture = true;
                 RecognizeTextButton.IsEnabled = true;
                 ScanQrButton.IsEnabled = true;
-                CopyPathButton.IsEnabled = _workflowSession.HasSavedFile;
+                RefreshSavedFileActions();
                 break;
 
             case WorkflowStatus.OperationInProgress:
@@ -1005,15 +1201,19 @@ public sealed partial class MainWindow : Window
 
     /// <summary>
     /// Enables or disables the export buttons (Save, Save As…, Copy, Copy
-    /// Path). Copy Path additionally requires a saved file to exist as
-    /// workflow state for the current Capture.
+    /// Path, Open With, Share). Copy Path, Open With, and Share additionally
+    /// require a saved file to exist as workflow state for the current
+    /// Capture.
     /// </summary>
     private void SetExportButtonsEnabled(bool enabled)
     {
         SaveButton.IsEnabled = enabled;
         SaveAsButton.IsEnabled = enabled;
         CopyToClipboardButton.IsEnabled = enabled;
-        CopyPathButton.IsEnabled = enabled && _workflowSession.HasSavedFile;
+        var savedFileActions = enabled && _workflowSession.HasSavedFile;
+        CopyPathButton.IsEnabled = savedFileActions;
+        OpenWithButton.IsEnabled = savedFileActions;
+        ShareButton.IsEnabled = savedFileActions;
     }
 
     /// <summary>
@@ -1038,7 +1238,7 @@ public sealed partial class MainWindow : Window
             {
                 _workflowSession.AdoptFrame(frame);
             }
-            CopyPathButton.IsEnabled = _workflowSession.HasSavedFile;
+            RefreshSavedFileActions();
         }
         else
         {
@@ -1097,7 +1297,14 @@ public sealed partial class MainWindow : Window
     /// Handles Settings button click — opens the settings dialog using the coordinator.
     /// Also invoked by F4 or Ctrl+, keyboard accelerators.
     /// </summary>
-    private void Settings_Click(object sender, RoutedEventArgs e)
+    private void Settings_Click(object sender, RoutedEventArgs e) => OpenSettings();
+
+    /// <summary>
+    /// Opens the settings dialog through the coordinator. Shared by the
+    /// Settings button, the F4/Ctrl+, accelerators, and the subclassed
+    /// WndProc route — no event payload is fabricated for programmatic calls.
+    /// </summary>
+    private void OpenSettings()
     {
         if (_settingsCoordinator == null)
         {

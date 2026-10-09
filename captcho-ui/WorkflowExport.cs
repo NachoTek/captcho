@@ -7,6 +7,8 @@
 // (including after an automatic save routed through the same action) refers
 // to the same file instead of creating accidental duplicates, while Save As
 // intentionally produces another file without replacing that identity.
+// Open With and Share (issue #46) extend the same action surface over the
+// delivery seam in WorkflowDelivery.cs.
 // Platform work — PNG encoding/writing, the Windows clipboard, and the Save As
 // file dialog — is supplied through narrow adapters so the workflow rules
 // stay headless-testable, mirroring the capture/overlay adapter seams.
@@ -48,6 +50,20 @@ public enum WorkflowExportAction
     /// until a valid saved file exists for the current Capture.
     /// </summary>
     CopyPath,
+
+    /// <summary>
+    /// Open With: hands the saved file to Windows application association —
+    /// discovery of the applications registered for its type plus launch.
+    /// Unavailable until a valid saved file exists for the current Capture.
+    /// </summary>
+    OpenWith,
+
+    /// <summary>
+    /// Share: invokes the Windows share interface with the delivered Capture
+    /// file. Unavailable until a valid saved file exists for the current
+    /// Capture.
+    /// </summary>
+    Share,
 }
 
 /// <summary>

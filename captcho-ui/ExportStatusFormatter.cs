@@ -104,6 +104,10 @@ public static class ExportStatusFormatter
                     $"Copied to clipboard ({result.Width}×{result.Height})",
                 WorkflowExportAction.CopyPath =>
                     $"Copied path: {result.FilePath}",
+                WorkflowExportAction.OpenWith =>
+                    $"Opened {Path.GetFileName(result.FilePath ?? "unknown.png")} with Windows",
+                WorkflowExportAction.Share =>
+                    $"Sharing {Path.GetFileName(result.FilePath ?? "unknown.png")}…",
                 _ => "Export succeeded.",
             };
         }
@@ -113,11 +117,15 @@ public static class ExportStatusFormatter
 
         if (result.Status == WorkflowExportStatus.Cancelled)
         {
-            // Save As cancellation means the user dismissed the picker; other
-            // action cancellations come from the export itself.
-            return result.Action == WorkflowExportAction.SaveAs
-                ? FormatPickerCancelled()
-                : "Export cancelled.";
+            // Save As cancellation means the user dismissed the picker; the
+            // delivery cancellations name their own action.
+            return result.Action switch
+            {
+                WorkflowExportAction.SaveAs => FormatPickerCancelled(),
+                WorkflowExportAction.OpenWith => "Open With cancelled.",
+                WorkflowExportAction.Share => "Share cancelled.",
+                _ => "Export cancelled.",
+            };
         }
 
         if (result.Status == WorkflowExportStatus.OperationInProgress)
@@ -127,6 +135,8 @@ public static class ExportStatusFormatter
         {
             WorkflowExportAction.CopyFrame => $"Clipboard failed: {result.Error}",
             WorkflowExportAction.CopyPath => $"Copy path failed: {result.Error}",
+            WorkflowExportAction.OpenWith => $"Open With failed: {result.Error}",
+            WorkflowExportAction.Share => $"Share failed: {result.Error}",
             _ => $"Export failed: {result.Error}",
         };
     }

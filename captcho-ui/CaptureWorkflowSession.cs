@@ -165,6 +165,13 @@ public sealed class WorkflowResult<TImage>
     /// </summary>
     public AutomaticExportReport? AutomaticExport { get; init; }
 
+    /// <summary>
+    /// The Capture Mode this Trigger actually captured, set when the capture
+    /// succeeded (after any Target Selection mode switch). Drives the
+    /// last-Capture-Mode recording for the launch behavior (issue #53).
+    /// </summary>
+    public CaptureMode? TriggeredCaptureMode { get; init; }
+
     /// <summary>True only when the workflow reached the Succeeded status.</summary>
     public bool IsSuccess => Status == WorkflowStatus.Succeeded;
 }
@@ -560,6 +567,21 @@ public enum AnnotationOutcome
 }
 
 /// <summary>
+/// Why the Workflow Session requested an application exit (issue #54). The
+/// exit decision is workflow-owned state; the WinUI layer only turns the
+/// request into shutdown.
+/// </summary>
+public enum WorkflowExitReason
+{
+    /// <summary>
+    /// A confirmed Capture's delivery completed — the Annotation overlay was
+    /// dismissed and every configured delivery action (manual or automatic)
+    /// finished successfully.
+    /// </summary>
+    DeliveryCompleted,
+}
+
+/// <summary>
 /// WinUI-free result returned by Annotation. Confirmation carries
 /// the frozen composed Frame; cancellation carries no Frame; failure preserves
 /// an error for user-visible reporting.
@@ -654,7 +676,34 @@ public sealed class CaptureWorkflowSession<TImage>
     private readonly IQrScanner _qrScanner;
     private readonly IWorkflowExportAdapter _export;
     private readonly ISaveAsDialogAdapter _saveAsDialog;
+    private readonly IWorkflowDeliveryAdapter _delivery;
     private readonly Func<AutomaticExportSettings> _automaticExport;
+
+    // Exit-after-delivery (issue #54). The setting is read per-evaluation so
+    // committed Settings changes apply without rebuilding the session; the
+    // recorder is the WinUI shutdown seam. Both default to inert values so
+    // every pre-#54 construction keeps its behavior.
+    private readonly Func<bool> _exitAfterDelivery;
+    private readonly Action<WorkflowExitReason>? _exitRecorder;
+
+    // Exit-decision state for the current Capture: which configured
+    // automatic actions are still pending since the Annotation overlay was
+    // dismissed, and whether the exit condition was already satisfied (the
+    // per-Capture exactly-once guard). Cleared when a new Frame is owned.
+    private bool _exitPending;
+    private bool _exitSatisfied;
+
+    // The configured automatic actions that failed at the last automatic
+    // run of the current Capture — the outstanding obligation a later manual
+    // success must complete before the exit can fire. Cleared when a new
+    // Frame is owned.
+    private readonly HashSet<WorkflowExportAction> _pendingFailedAutomatic = new();
+
+    // Last-Capture-Mode recording for the launch behavior (issue #53). When
+    // wired, every successful Capture records the mode that actually ran
+    // (after any Target Selection mode switch); the state itself decides —
+    // per capture — whether the configured launch behavior needs the value.
+    private readonly ILaunchBehaviorRecorder? _launchRecorder;
 
     // Workflow-side Capture-options override holder. Composed committed defaults
     // with per-Capture-Mode session overrides to produce the effective options
@@ -855,11 +904,46 @@ public sealed class CaptureWorkflowSession<TImage>
     }
 
     /// <summary>
+    /// Creates a workflow with the Export and delivery actions wired
+    /// (issues #44/#46). The session owns the default saved-file identity,
+    /// Copy Path/Open With/Share availability, and the operation guard
+    /// across all Export actions; the adapters supply only PNG writing,
+    /// clipboard placement, the Save As dialog, and Windows delivery. OCR
+    /// defaults to the engine-less null engine, QR to the scanner-less null
+    /// scanner, and the automatic Export source to defaults.
+    /// </summary>
+    public CaptureWorkflowSession(
+        IWorkflowCaptureAdapter capture,
+        IPreviewAdapter<TImage> preview,
+        ISelectionOverlayAdapter selectionOverlay,
+        IMonitorPickerOverlayAdapter monitorPickerOverlay,
+        IWindowPickerOverlayAdapter windowPickerOverlay,
+        SessionCaptureOptions captureOptions,
+        RememberedSelectionState rememberedSelection,
+        IAnnotationOverlayAdapter annotationOverlay,
+        Func<bool> annotationEnabled,
+        Func<AnnotationToolState> annotationToolState,
+        IWorkflowExportAdapter export,
+        ISaveAsDialogAdapter saveAsDialog,
+        IWorkflowDeliveryAdapter delivery)
+        : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
+               captureOptions, rememberedSelection, annotationOverlay, annotationEnabled,
+               annotationToolState, NullOcrEngine.Instance, static () => null, NullQrScanner.Instance,
+               export, saveAsDialog,
+               static () => AutomaticExportSettings.WithDefaults(),
+               launchRecorder: null,
+               delivery)
+    {
+    }
+
+    /// <summary>
     /// Creates a workflow with the Export actions wired (issue #44). The
     /// session owns the default saved-file identity, Copy Path availability,
     /// and the operation guard across Save, Save As, Copy Frame, and Copy
     /// Path; the adapters supply only PNG writing, clipboard placement, and
     /// the Save As dialog. OCR defaults to the engine-less null engine.
+    /// Delivery actions (issue #46) stay unwired — they fail cleanly through
+    /// the null-object delivery adapter.
     /// </summary>
     public CaptureWorkflowSession(
         IWorkflowCaptureAdapter capture,
@@ -889,7 +973,15 @@ public sealed class CaptureWorkflowSession<TImage>
     /// scanner. The automatic Export settings are read through
     /// <paramref name="automaticExport"/> when each Capture completes, so
     /// committed Settings changes take effect on the next Capture without
-    /// reconstructing the session.
+    /// reconstructing the session. The optional
+    /// <paramref name="launchRecorder"/> wires last-Capture-Mode recording
+    /// for the launch behavior (issue #53); when omitted, captures are not
+    /// recorded. The optional <paramref name="delivery"/> wires the Open
+    /// With/Share delivery actions (issue #46); when omitted, they fail
+    /// cleanly through the null-object delivery adapter. The optional
+    /// <paramref name="exitRecorder"/> and <paramref name="exitAfterDelivery"/>
+    /// wire the exit-after-delivery Behavior Setting (issue #54); when
+    /// omitted, the session never requests an exit.
     /// </summary>
     public CaptureWorkflowSession(
         IWorkflowCaptureAdapter capture,
@@ -906,11 +998,16 @@ public sealed class CaptureWorkflowSession<TImage>
         Func<string?> ocrLanguageTag,
         IWorkflowExportAdapter export,
         ISaveAsDialogAdapter saveAsDialog,
-        Func<AutomaticExportSettings> automaticExport)
+        Func<AutomaticExportSettings> automaticExport,
+        ILaunchBehaviorRecorder? launchRecorder = null,
+        IWorkflowDeliveryAdapter? delivery = null,
+        Action<WorkflowExitReason>? exitRecorder = null,
+        Func<bool>? exitAfterDelivery = null)
         : this(capture, preview, selectionOverlay, monitorPickerOverlay, windowPickerOverlay,
                captureOptions, rememberedSelection, annotationOverlay, annotationEnabled,
                annotationToolState, ocrEngine, ocrLanguageTag, NullQrScanner.Instance,
-               export, saveAsDialog, automaticExport)
+               export, saveAsDialog, automaticExport, launchRecorder, delivery,
+               exitRecorder, exitAfterDelivery)
     {
     }
 
@@ -921,7 +1018,17 @@ public sealed class CaptureWorkflowSession<TImage>
     /// The automatic Export settings are read through
     /// <paramref name="automaticExport"/> when each Capture completes, so
     /// committed Settings changes take effect on the next Capture without
-    /// reconstructing the session.
+    /// reconstructing the session. The optional
+    /// <paramref name="launchRecorder"/> wires last-Capture-Mode recording
+    /// for the launch behavior (issue #53); when omitted, captures are not
+    /// recorded. The optional <paramref name="delivery"/> wires the Open
+    /// With/Share delivery actions (issue #46); when omitted, they fail
+    /// cleanly through the null-object delivery adapter. The optional
+    /// <paramref name="exitRecorder"/> and <paramref name="exitAfterDelivery"/>
+    /// wire the exit-after-delivery Behavior Setting (issue #54): when the
+    /// setting is enabled, a confirmed Capture's completed delivery raises
+    /// exactly one exit request; when omitted, the session never requests an
+    /// exit.
     /// </summary>
     public CaptureWorkflowSession(
         IWorkflowCaptureAdapter capture,
@@ -939,7 +1046,11 @@ public sealed class CaptureWorkflowSession<TImage>
         IQrScanner qrScanner,
         IWorkflowExportAdapter export,
         ISaveAsDialogAdapter saveAsDialog,
-        Func<AutomaticExportSettings> automaticExport)
+        Func<AutomaticExportSettings> automaticExport,
+        ILaunchBehaviorRecorder? launchRecorder = null,
+        IWorkflowDeliveryAdapter? delivery = null,
+        Action<WorkflowExitReason>? exitRecorder = null,
+        Func<bool>? exitAfterDelivery = null)
     {
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
         _preview = preview ?? throw new ArgumentNullException(nameof(preview));
@@ -957,6 +1068,10 @@ public sealed class CaptureWorkflowSession<TImage>
         _export = export ?? throw new ArgumentNullException(nameof(export));
         _saveAsDialog = saveAsDialog ?? throw new ArgumentNullException(nameof(saveAsDialog));
         _automaticExport = automaticExport ?? throw new ArgumentNullException(nameof(automaticExport));
+        _launchRecorder = launchRecorder;
+        _delivery = delivery ?? UnconfiguredWorkflowDeliveryAdapter.Instance;
+        _exitRecorder = exitRecorder;
+        _exitAfterDelivery = exitAfterDelivery ?? (static () => false);
     }
 
     /// <summary>
@@ -1269,13 +1384,16 @@ public sealed class CaptureWorkflowSession<TImage>
             var composedFrame = annotationResult.Frame!;
             OwnFrame(composedFrame);
             var automaticReport = await RunAutomaticExportAsync();
+            BeginPendingExit(automaticReport);
+            RecordTriggeredMode(mode);
             return WorkflowResultFor(label, WorkflowStatus.Succeeded,
                 frame: composedFrame,
                 dimensions: $"{composedFrame.Width}×{composedFrame.Height}",
                 captureMs: captureResult.ElapsedMs,
                 displayMs: annotationResult.ElapsedMs,
                 totalMs: totalSw.Elapsed.TotalMilliseconds,
-                automaticExport: automaticReport);
+                automaticExport: automaticReport,
+                triggeredCaptureMode: mode);
         }
 
         OwnFrame(frame);
@@ -1292,6 +1410,8 @@ public sealed class CaptureWorkflowSession<TImage>
         }
 
         var previewAutomaticReport = await RunAutomaticExportAsync();
+        BeginPendingExit(previewAutomaticReport);
+        RecordTriggeredMode(mode);
         return WorkflowResultFor(label, WorkflowStatus.Succeeded,
             frame: frame,
             dimensions: captureResult.Dimensions,
@@ -1299,7 +1419,30 @@ public sealed class CaptureWorkflowSession<TImage>
             captureMs: captureResult.ElapsedMs,
             displayMs: previewResult.ElapsedMs,
             totalMs: totalSw.Elapsed.TotalMilliseconds,
-            automaticExport: previewAutomaticReport);
+            automaticExport: previewAutomaticReport,
+            triggeredCaptureMode: mode);
+    }
+
+    /// <summary>
+    /// Records the Capture Mode a successful Trigger actually ran (after any
+    /// Target Selection mode switch) as the last Capture Mode, when the
+    /// launch behavior recording is wired and needs it (issue #53). Failures
+    /// never propagate: a recording that cannot be written must not fail the
+    /// capture that produced it.
+    /// </summary>
+    private void RecordTriggeredMode(CaptureMode mode)
+    {
+        if (_launchRecorder is null)
+            return;
+
+        try
+        {
+            _launchRecorder.Record(mode);
+        }
+        catch
+        {
+            // Recording is best-effort state; never fail a successful capture.
+        }
     }
 
     // ── Configured automatic delivery (issue #47) ────────────────────
@@ -1350,6 +1493,75 @@ public sealed class CaptureWorkflowSession<TImage>
         };
     }
 
+    // ── Exit after confirmed delivery (issue #54) ────────────────────
+
+    /// <summary>
+    /// Marks the delivery evaluation of the current Capture as pending exit
+    /// gating. Called once the Annotation overlay is dismissed and the
+    /// configured automatic delivery has run: the enabled actions become
+    /// the obligation the exit waits on, satisfied immediately when they all
+    /// succeeded (a skipped action is not a failure), unsatisfied while any
+    /// enabled action failed — until a later manual success of each failed
+    /// action completes the configured delivery. With no automatic action
+    /// enabled (a null report) the obligation is empty but unsatisfied:
+    /// only a later manual delivery can complete it.
+    /// </summary>
+    private void BeginPendingExit(AutomaticExportReport? report)
+    {
+        _exitPending = true;
+        _pendingFailedAutomatic.Clear();
+        if (report is null)
+            return;
+
+        foreach (var failure in report.Failures)
+            _pendingFailedAutomatic.Add(failure.Action);
+
+        if (_pendingFailedAutomatic.Count == 0)
+            RequestExit();
+    }
+
+    /// <summary>
+    /// Evaluates the exit condition after a manual Export action completed.
+    /// A successful manual file or clipboard delivery satisfies the exit
+    /// condition when nothing outstanding remains: either no configured
+    /// automatic delivery failed, or this success just completed the last
+    /// failed configured action. Cancellations, failures, and busy
+    /// rejections never satisfy anything — an unfinished action never exits.
+    /// </summary>
+    private void EvaluateManualExit(WorkflowExportResult result)
+    {
+        if (!_exitPending || _exitSatisfied || !result.IsSuccess)
+            return;
+
+        // The configured actions that failed at the automatic run are the
+        // outstanding obligation. This manual success satisfies the exit
+        // only when it completes that obligation: with an empty outstanding
+        // set the manual delivery stands on its own; otherwise the manual
+        // success must be one of the outstanding actions.
+        if (_pendingFailedAutomatic.Contains(result.Action))
+            _pendingFailedAutomatic.Remove(result.Action);
+
+        if (_pendingFailedAutomatic.Count > 0)
+            return;
+
+        RequestExit();
+    }
+
+    /// <summary>
+    /// Raises the exit request exactly once per Capture, and only while the
+    /// Behavior Setting enables it. The recorder is the WinUI shutdown
+    /// seam; in-session nothing aborts — the request observes the finished
+    /// delivery state.
+    /// </summary>
+    private void RequestExit()
+    {
+        if (!_exitAfterDelivery() || _exitSatisfied)
+            return;
+
+        _exitSatisfied = true;
+        _exitRecorder?.Invoke(WorkflowExitReason.DeliveryCompleted);
+    }
+
     // ── Export workflow actions (issue #44) ──────────────────────────
 
     /// <summary>
@@ -1364,18 +1576,29 @@ public sealed class CaptureWorkflowSession<TImage>
         _lastFrame = frame;
         _defaultSavedFilePath = null;
         _lastSavedFilePath = null;
+        // The exit decision is per-Capture: a new Frame clears both the
+        // pending automatic-delivery obligation and any satisfied exit, so
+        // the next Capture must be delivered again before another exit.
+        _exitPending = false;
+        _exitSatisfied = false;
+        _pendingFailedAutomatic.Clear();
     }
 
     /// <summary>
     /// Adopts a Frame captured outside the session (the remaining legacy
     /// capture routes) as the session's current exportable Frame, resetting
     /// the saved-file identity. Export actions act on this Frame until the
-    /// next Capture or adoption replaces it.
+    /// next Capture or adoption replaces it. The adopted Capture arms the
+    /// same exit evaluation with no automatic obligation — a legacy route
+    /// runs no configured automatic delivery — so a successful manual
+    /// delivery satisfies the exit exactly like a session Capture with no
+    /// automatic actions enabled.
     /// </summary>
     public void AdoptFrame(ContiguousBitmap frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
         OwnFrame(frame);
+        BeginPendingExit(report: null);
     }
 
     /// <summary>
@@ -1399,7 +1622,9 @@ public sealed class CaptureWorkflowSession<TImage>
         try
         {
             var result = await RunSaveCoreAsync(cancellationToken);
-            return WithResultOverride(result, elapsedMs: sw.Elapsed.TotalMilliseconds);
+            var mapped = WithResultOverride(result, elapsedMs: sw.Elapsed.TotalMilliseconds);
+            EvaluateManualExit(mapped);
+            return mapped;
         }
         finally
         {
@@ -1494,7 +1719,9 @@ public sealed class CaptureWorkflowSession<TImage>
             }
 
             _lastSavedFilePath = save.DestinationPath;
-            return FileExportSucceeded(WorkflowExportAction.SaveAs, save, sw);
+            var savedAs = FileExportSucceeded(WorkflowExportAction.SaveAs, save, sw);
+            EvaluateManualExit(savedAs);
+            return savedAs;
         }
         finally
         {
@@ -1519,7 +1746,9 @@ public sealed class CaptureWorkflowSession<TImage>
         try
         {
             var result = await RunCopyFrameCoreAsync();
-            return WithResultOverride(result, elapsedMs: sw.Elapsed.TotalMilliseconds);
+            var mapped = WithResultOverride(result, elapsedMs: sw.Elapsed.TotalMilliseconds);
+            EvaluateManualExit(mapped);
+            return mapped;
         }
         finally
         {
@@ -1564,12 +1793,119 @@ public sealed class CaptureWorkflowSession<TImage>
         try
         {
             var result = await RunCopyPathCoreAsync();
-            return WithResultOverride(result, elapsedMs: sw.Elapsed.TotalMilliseconds);
+            var mapped = WithResultOverride(result, elapsedMs: sw.Elapsed.TotalMilliseconds);
+            EvaluateManualExit(mapped);
+            return mapped;
         }
         finally
         {
             EndOperation();
         }
+    }
+
+    /// <summary>
+    /// Open With: hands the saved Capture file to Windows application
+    /// association — discovery of the applications Windows registers for the
+    /// file's type, then launch (Windows shows its application picker when no
+    /// single default is registered). Unavailable — <see cref="WorkflowExportStatus.Failed"/>
+    /// with a user-visible error — until a valid saved file exists as workflow
+    /// state for the current Capture, mirroring Copy Path. Cancellation and
+    /// platform failures preserve the composed Frame, Annotation state, and
+    /// saved-file identity for retry. Never throws for expected failures.
+    /// </summary>
+    public async Task<WorkflowExportResult> OpenWithAsync(CancellationToken cancellationToken = default)
+    {
+        if (!TryBeginOperation())
+        {
+            return ExportInProgress(WorkflowExportAction.OpenWith);
+        }
+
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var path = _lastSavedFilePath;
+            if (string.IsNullOrEmpty(path))
+            {
+                return ExportResultFor(WorkflowExportAction.OpenWith, WorkflowExportStatus.Failed,
+                    error: "No saved file to open.");
+            }
+
+            var delivery = await _delivery.OpenWithAsync(path!, cancellationToken);
+            var opened = MapDeliveryResult(WorkflowExportAction.OpenWith, path!, delivery, sw);
+            EvaluateManualExit(opened);
+            return opened;
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    /// <summary>
+    /// Share: invokes the Windows share interface with the delivered Capture
+    /// file in a supported state. Unavailable — <see cref="WorkflowExportStatus.Failed"/>
+    /// with a user-visible error — until a valid saved file exists as workflow
+    /// state for the current Capture, mirroring Copy Path. Cancellation and
+    /// platform failures preserve the composed Frame, Annotation state, and
+    /// saved-file identity for retry. Never throws for expected failures.
+    /// </summary>
+    public async Task<WorkflowExportResult> ShareAsync(CancellationToken cancellationToken = default)
+    {
+        if (!TryBeginOperation())
+        {
+            return ExportInProgress(WorkflowExportAction.Share);
+        }
+
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var path = _lastSavedFilePath;
+            if (string.IsNullOrEmpty(path))
+            {
+                return ExportResultFor(WorkflowExportAction.Share, WorkflowExportStatus.Failed,
+                    error: "No saved file to share.");
+            }
+
+            var delivery = await _delivery.ShareAsync(path!, cancellationToken);
+            var shared = MapDeliveryResult(WorkflowExportAction.Share, path!, delivery, sw);
+            EvaluateManualExit(shared);
+            return shared;
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    /// <summary>
+    /// Maps a platform delivery result onto the Export action surface,
+    /// carrying the delivered path so status text can name the file.
+    /// </summary>
+    private static WorkflowExportResult MapDeliveryResult(
+        WorkflowExportAction action,
+        string path,
+        DeliveryResult delivery,
+        Stopwatch sw)
+    {
+        if (delivery.Status == DeliveryStatus.Succeeded)
+        {
+            return new WorkflowExportResult
+            {
+                Action = action,
+                Status = WorkflowExportStatus.Succeeded,
+                FilePath = path,
+                ElapsedMs = sw.Elapsed.TotalMilliseconds,
+            };
+        }
+
+        if (delivery.Status == DeliveryStatus.Cancelled)
+        {
+            return ExportResultFor(action, WorkflowExportStatus.Cancelled,
+                error: delivery.Error ?? $"{action} cancelled.");
+        }
+
+        return ExportResultFor(action, WorkflowExportStatus.Failed,
+            error: delivery.Error ?? $"{action} failed.");
     }
 
     /// <summary>
@@ -1767,7 +2103,8 @@ public sealed class CaptureWorkflowSession<TImage>
         double captureMs = 0,
         double displayMs = 0,
         double totalMs = 0,
-        AutomaticExportReport? automaticExport = null) =>
+        AutomaticExportReport? automaticExport = null,
+        CaptureMode? triggeredCaptureMode = null) =>
         new()
         {
             Status = status,
@@ -1780,5 +2117,6 @@ public sealed class CaptureWorkflowSession<TImage>
             DisplayMs = displayMs,
             TotalMs = totalMs,
             AutomaticExport = automaticExport,
+            TriggeredCaptureMode = triggeredCaptureMode,
         };
 }
