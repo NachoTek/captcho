@@ -586,6 +586,96 @@ public class AnnotationRenderingTests
             }
     }
 
+    // spec #43: annotation shadows
+
+    [Fact]
+    public void Render_Shadow_PlacesTheShadowBelowTheStrokeWithoutMutatingTheSource()
+    {
+        // White source with a mid-gray background makes the 3/8 black shadow
+        // directly observable below a red stroke.
+        var source = SolidFrame(9, 7, new AnnotationColor(255, 255, 255));
+        var stroke = new AnnotationStroke(
+            AnnotationTool.Pen,
+            new AnnotationColor(255, 0, 0),
+            1,
+            new[] { new AnnotationPoint(2, 2), new AnnotationPoint(6, 2) },
+            shadow: AnnotationShadowStyle.Drop);
+
+        var rendered = AnnotationRenderer.Render(source, new[] { stroke });
+
+        Assert.Equal(new AnnotationColor(159, 159, 159), Pixel(rendered, 4, 3));
+        Assert.Equal(new AnnotationColor(255, 0, 0), Pixel(rendered, 4, 2));
+        Assert.Equal(new AnnotationColor(255, 255, 255), Pixel(rendered, 4, 1));
+        Assert.Equal(new AnnotationColor(255, 255, 255), Pixel(rendered, 4, 4));
+        // The source Frame is never mutated by shadow composition.
+        Assert.Equal(new AnnotationColor(255, 255, 255), Pixel(source, 4, 3));
+    }
+
+    [Fact]
+    public void Render_ShadowDisabled_MatchesTheUnshadowedComposition()
+    {
+        var source = SolidFrame(9, 7, new AnnotationColor(255, 255, 255));
+        var points = new[] { new AnnotationPoint(2, 2), new AnnotationPoint(6, 2) };
+        var unshadowed = new AnnotationStroke(
+            AnnotationTool.Pen,
+            new AnnotationColor(255, 0, 0),
+            1,
+            points);
+        var disabled = new AnnotationStroke(
+            AnnotationTool.Pen,
+            new AnnotationColor(255, 0, 0),
+            1,
+            points,
+            shadow: AnnotationShadowStyle.None);
+
+        var plain = AnnotationRenderer.Render(source, new[] { unshadowed });
+        var none = AnnotationRenderer.Render(source, new[] { disabled });
+
+        Assert.Equal(plain.Pixels, none.Pixels);
+    }
+
+    [Fact]
+    public void Render_Shadow_ClipsAtTheFrameEdgesWithoutThrowing()
+    {
+        var source = SolidFrame(9, 7, new AnnotationColor(255, 255, 255));
+        var stroke = new AnnotationStroke(
+            AnnotationTool.Line,
+            new AnnotationColor(255, 0, 0),
+            1,
+            new[] { new AnnotationPoint(0, 6), new AnnotationPoint(8, 6) },
+            shadow: AnnotationShadowStyle.Drop);
+
+        var rendered = AnnotationRenderer.Render(source, new[] { stroke });
+
+        // The shadow offset lands outside the Frame: only the stroke itself shows,
+        // every other row is untouched.
+        for (int x = 0; x < 9; x++)
+        {
+            Assert.Equal(new AnnotationColor(255, 0, 0), Pixel(rendered, x, 6));
+            for (int y = 0; y < 6; y++)
+                Assert.Equal(new AnnotationColor(255, 255, 255), Pixel(rendered, x, y));
+        }
+    }
+
+    [Fact]
+    public void Render_Shadow_BlackOnWhiteContrastsWithAWhiteStroke()
+    {
+        // A white stroke is invisible on white until its darker shadow surrounds it.
+        var source = SolidFrame(11, 7, new AnnotationColor(255, 255, 255));
+        var stroke = new AnnotationStroke(
+            AnnotationTool.Pen,
+            new AnnotationColor(255, 255, 255),
+            1,
+            new[] { new AnnotationPoint(2, 2), new AnnotationPoint(8, 2) },
+            shadow: AnnotationShadowStyle.Drop);
+
+        var rendered = AnnotationRenderer.Render(source, new[] { stroke });
+
+        // The stroke stays white while its shadow row below is strictly darker.
+        Assert.Equal(new AnnotationColor(255, 255, 255), Pixel(rendered, 5, 2));
+        Assert.True(Pixel(rendered, 5, 3).Green < 255);
+    }
+
     private static ContiguousBitmap CheckerboardFrame(int width, int height)
     {
         var pixels = new byte[width * height * 4];

@@ -276,7 +276,7 @@ public sealed partial class SettingsWindow : Window
     {
         try
         {
-            var effective = engine ?? new WindowsOcrEngine();
+            var effective = engine ?? FallbackOcrEngine.WindowsWithTesseract();
             return effective.GetAvailableLanguages();
         }
         catch
