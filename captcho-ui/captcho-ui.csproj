@@ -13,6 +13,18 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.0.1" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
+    <PackageReference Include="System.Drawing.Common" Version="10.0.7" />
+    <PackageReference Include="TesseractOCR" Version="5.2.16" />
+    <PackageReference Include="ZXing.Net" Version="0.16.11" />
+  </ItemGroup>
+  <!--
+    Packaged Tesseract fallback language data (issue #50): the tessdata_fast
+    trained data shipped beside the app. The TesseractOCR NuGet targets copy
+    the native runtime (tesseract52/leptonica) into x64/; the engine adapter
+    resolves this tessdata directory next to the executable.
+  -->
+  <ItemGroup>
+    <Content Include="tessdata\*.traineddata" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\captcho-capture\captcho-capture.csproj" />

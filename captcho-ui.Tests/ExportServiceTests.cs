@@ -30,6 +30,15 @@ internal static class ExportTestHelpers
             pixels[i] = (byte)(i % 256);
         }
 
+        return CreateTestBitmap(width, height, pixels);
+    }
+
+    /// <summary>
+    /// Creates a synthetic ContiguousBitmap with explicit pixel content via
+    /// the internal constructor.
+    /// </summary>
+    public static ContiguousBitmap CreateTestBitmap(int width, int height, byte[] pixels)
+    {
         var constructor = typeof(ContiguousBitmap).GetConstructor(
             BindingFlags.Instance | BindingFlags.NonPublic,
             null,
@@ -52,6 +61,13 @@ internal static class ExportTestHelpers
         Assert.NotNull(field);
         field.SetValue(service, bitmap);
     }
+
+    /// <summary>
+    /// Creates a synthetic fully transparent ContiguousBitmap (alpha 0) via
+    /// the internal constructor, for exercising format alpha handling.
+    /// </summary>
+    public static ContiguousBitmap CreateTransparentBitmap(int width, int height) =>
+        CreateTestBitmap(width, height, new byte[width * height * 4]);
 }
 
 /// <summary>
@@ -64,11 +80,22 @@ internal sealed class FakeClipboardAdapter : IClipboardAdapter
     public int CallCount { get; private set; }
     public bool ShouldSucceed { get; set; } = true;
 
+    public string? LastText { get; private set; }
+    public int TextCallCount { get; private set; }
+    public bool TextShouldSucceed { get; set; } = true;
+
     public bool SetPngImage(byte[] pngBytes)
     {
         CallCount++;
         LastPngBytes = pngBytes;
         return ShouldSucceed;
+    }
+
+    public bool SetText(string text)
+    {
+        TextCallCount++;
+        LastText = text;
+        return TextShouldSucceed;
     }
 }
 
@@ -81,6 +108,8 @@ internal sealed class ThrowingClipboardAdapter : IClipboardAdapter
     public string Message { get; set; } = "Clipboard exploded";
 
     public bool SetPngImage(byte[] pngBytes) => throw new InvalidOperationException(Message);
+
+    public bool SetText(string text) => throw new InvalidOperationException(Message);
 }
 
 public class ClipboardExportServiceTests
@@ -257,93 +286,6 @@ public class ClipboardExportServiceTests
     }
 }
 
-public class ClipboardExportViaCapturePreviewServiceTests
-{
-    [Fact]
-    public void CreateClipboardExporter_NullAdapter_Throws()
-    {
-        var service = new CapturePreviewService();
-        Assert.Throws<ArgumentNullException>(() => service.CreateClipboardExporter(null!));
-    }
-
-    [Fact]
-    public void CreateClipboardExporter_NoCapture_CopyFails()
-    {
-        var service = new CapturePreviewService();
-        var fake = new FakeClipboardAdapter();
-        var exporter = service.CreateClipboardExporter(fake);
-
-        var result = exporter.CopyToClipboard();
-
-        Assert.False(result.Success);
-        Assert.Contains("No capture to copy", result.Message);
-    }
-
-    [Fact]
-    public void CreateClipboardExporter_WithCachedBitmap_CopySucceeds()
-    {
-        var service = new CapturePreviewService();
-        var bitmap = ExportTestHelpers.CreateTestBitmap(16, 16);
-        ExportTestHelpers.SetLastCapture(service, bitmap);
-
-        var fake = new FakeClipboardAdapter();
-        var exporter = service.CreateClipboardExporter(fake);
-
-        var result = exporter.CopyToClipboard();
-
-        Assert.True(result.Success);
-        Assert.Equal(16, result.Width);
-        Assert.Equal(16, result.Height);
-        Assert.Equal(1, fake.CallCount);
-    }
-
-    [Fact]
-    public void CreateClipboardExporter_AfterClearCopy_Fails()
-    {
-        var service = new CapturePreviewService();
-        var bitmap = ExportTestHelpers.CreateTestBitmap(16, 16);
-        ExportTestHelpers.SetLastCapture(service, bitmap);
-
-        service.ClearLastCapture();
-
-        var fake = new FakeClipboardAdapter();
-        var exporter = service.CreateClipboardExporter(fake);
-        var result = exporter.CopyToClipboard();
-
-        Assert.False(result.Success);
-        Assert.Contains("No capture to copy", result.Message);
-    }
-
-    // ── Integration: save + clipboard from same cache ─────────────────
-
-    [Fact]
-    public void SaveAndCopy_BothUseSameCachedBitmap()
-    {
-        var service = new CapturePreviewService();
-        var bitmap = ExportTestHelpers.CreateTestBitmap(10, 10);
-        ExportTestHelpers.SetLastCapture(service, bitmap);
-
-        var tempDir = Path.Combine(Path.GetTempPath(), $"captcho_both_test_{Guid.NewGuid():N}");
-        try
-        {
-            // Save to file
-            var destPath = Path.Combine(tempDir, "both_test.png");
-            var saveResult = service.SaveLastCaptureToFileAsync(destPath);
-            Assert.True(saveResult.Success);
-
-            // Copy to clipboard
-            var fake = new FakeClipboardAdapter();
-            var exporter = service.CreateClipboardExporter(fake);
-            var copyResult = exporter.CopyToClipboard();
-            Assert.True(copyResult.Success);
-
-            // Both report same dimensions
-            Assert.Equal(saveResult.Width, copyResult.Width);
-            Assert.Equal(saveResult.Height, copyResult.Height);
-        }
-        finally
-        {
-            try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-}
+// ── Integration: export adapter against real files ─────────────────
+// (The save+copy integration from the same Frame is covered by
+// WorkflowExportTests — the runtime session is now the export owner.)

@@ -11,7 +11,11 @@
 //   2. Draw selection rectangle (dim scrim everywhere, clear inside selection)
 //   3. User draws/adjusts/moves selection, presses Enter to confirm
 //   4. Destroy the overlay window
-//   5. Call native capture_region to capture the live desktop at those coordinates
+//   5. Return the confirmed geometry (or null for cancellation) to the caller
+//
+// Per spec #27, the overlay does NOT perform Capture and does NOT own any
+// post-capture state. The runtime CaptureWorkflowSession owns Capture of the
+// returned geometry, the resulting Frame, and the preview transition.
 //
 // Supports: drag to draw, arrow keys to nudge (10px coarse, 1px fine with Shift),
 // Alt+Arrow to resize from top-left anchor, Enter/double-click confirm, Escape cancel.
@@ -22,19 +26,8 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
-using Windows.Foundation;
-using captcho.Capture;
 
 namespace captcho.UI;
-
-/// <summary>
-/// Result of a region selection: the captured bitmap and its virtual-desktop coordinates.
-/// </summary>
-public sealed class RegionSelectionResult
-{
-    public ContiguousBitmap Bitmap { get; init; } = null!;
-    public Rect Region { get; init; }
-}
 
 /// <summary>
 /// Transparent overlay for rectangular region selection using a raw Win32 layered window.
@@ -59,6 +52,9 @@ public sealed partial class RegionOverlayWindow : IDisposable
     private const int WM_LBUTTONUP    = 0x0202;
     private const int WM_MOUSEMOVE    = 0x0200;
     private const int WM_LBUTTONDBLCLK = 0x0203;
+    private const int WM_SETCURSOR    = 0x0020;
+
+    private const int HTCLIENT        = 1;
 
     private const int VK_ESCAPE = 0x1B;
     private const int VK_RETURN = 0x0D;
@@ -80,6 +76,11 @@ public sealed partial class RegionOverlayWindow : IDisposable
     private const int SW_SHOW       = 5;
 
     private const int IDC_CROSS     = 32515;
+    private const int IDC_SIZEALL   = 32646;
+    private const int IDC_SIZENWSE  = 32642;
+    private const int IDC_SIZENESW  = 32643;
+    private const int IDC_SIZENS    = 32645;
+    private const int IDC_SIZEWE    = 32644;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int X, Y; }
@@ -134,6 +135,14 @@ public sealed partial class RegionOverlayWindow : IDisposable
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern IntPtr LoadCursor(IntPtr hInstance, int lpCursorName);
+    [DllImport("user32.dll")] private static extern IntPtr SetCursor(IntPtr hCursor);
+    [DllImport("user32.dll")] private static extern bool GetCursorPos(out POINT lpPoint);
+    [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+    [DllImport("shcore.dll")] private static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
+
+    private const uint MONITOR_DEFAULTTONEAREST = 0x00000002;
+    private const int MDT_EFFECTIVE_DPI = 0;
     [DllImport("user32.dll")] private static extern bool UpdateLayeredWindow(IntPtr hWnd, IntPtr hdcDst, ref POINT pptDst, ref SIZE psize, IntPtr hdcSrc, ref POINT pptSrc, int crKey, ref BLENDFUNCTION pblend, int dwFlags);
     [DllImport("user32.dll")] private static extern bool GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
     [DllImport("user32.dll")] private static extern bool TranslateMessage(ref MSG lpMsg);
@@ -148,9 +157,18 @@ public sealed partial class RegionOverlayWindow : IDisposable
     [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(IntPtr lpModuleName);
     [DllImport("gdi32.dll")] private static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFOHEADER pbmi, uint iUsage, out IntPtr ppvBits, IntPtr hSection, uint dwOffset);
 
+    // ── Magnifier backdrop snapshot ────────────────────────────────────
+    // The magnifier samples a frozen snapshot of the desktop taken when the
+    // overlay opens, so the zoomed view shows clean desktop pixels instead of
+    // this overlay's own dim scrim. Snapshotted before the first render so the
+    // not-yet-composited layered window cannot appear in its own magnifier.
+    [DllImport("gdi32.dll")] private static extern bool BitBlt(IntPtr hdcDest, int nXDest, int nYDest, int nWidth, int nHeight, IntPtr hdcSrc, int nXSrc, int nYSrc, uint dwRop);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int nWidth, int nHeight);
+    private const uint SRCCOPY = 0x00CC0020;
+
     #endregion
 
-    private readonly TaskCompletionSource<RegionSelectionResult?> _tcs = new();
+    private readonly TaskCompletionSource<TargetSelectionResult<SelectionGeometry>?> _tcs = new();
     private IntPtr _hwnd;
     private WndProc? _wndProc; // prevent GC
     private static readonly string _className = "captchoRegion_" + Guid.NewGuid().ToString("N");
@@ -160,17 +178,39 @@ public sealed partial class RegionOverlayWindow : IDisposable
     private IntPtr _bitmapDC;
     private IntPtr _bits; // pointer to DIB pixel memory
 
+    // Frozen desktop snapshot sampled by the adaptive magnifier. null when the
+    // snapshot failed or the Virtual Desktop was empty, in which case the
+    // magnifier is silently skipped and the rest of the overlay still works.
+    private System.Drawing.Bitmap? _backdrop;
+
     private RegionSelection? _currentSelection;
-    private bool _isDragging;
+    private readonly SelectionGeometry? _initialGeometry;
     private int _dragStartX, _dragStartY;
     private int _vdx, _vdy, _vdw, _vdh;
+
+    // Pointer interaction state. A click resolves (via SelectionHandleResolver)
+    // to one of: start a brand-new drag, grab a resize handle, or grab the body
+    // to move. Keyboard nudging (Alt+Arrows) keeps using the delta-based Resize.
+    private DragMode _dragMode = DragMode.None;
+    private SelectionHandleKind _activeHandle = SelectionHandleKind.None;
+    private int _moveStartCursorX, _moveStartCursorY;
+    private RegionSelection? _moveStartSelection;
+    // Window-wide DPI fallback; per-cursor-position DPI is resolved on demand so
+    // forgiving hit zones track the monitor the pointer is actually on.
+    private double _dpiFactor = 1.0;
+
+    private enum DragMode { None, NewSelection, MoveBody, ResizeHandle }
 
     private const int CoarseNudge = 10;
     private const int FineNudge = 1;
 
-    public RegionOverlayWindow() { InitializeComponent(); }
+    public RegionOverlayWindow(SelectionGeometry? initialGeometry = null)
+    {
+        _initialGeometry = initialGeometry;
+        InitializeComponent();
+    }
 
-    public Task<RegionSelectionResult?> ShowAndWaitAsync()
+    public Task<TargetSelectionResult<SelectionGeometry>?> ShowAndWaitAsync()
     {
         _vdx = GetSystemMetrics(SM_XVIRTUALSCREEN);
         _vdy = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -181,6 +221,19 @@ public sealed partial class RegionOverlayWindow : IDisposable
         {
             _tcs.TrySetResult(null);
             return _tcs.Task;
+        }
+
+        if (_initialGeometry is not null
+            && _initialGeometry.Width <= int.MaxValue
+            && _initialGeometry.Height <= int.MaxValue)
+        {
+            _currentSelection = new RegionSelection
+            {
+                X = _initialGeometry.X,
+                Y = _initialGeometry.Y,
+                Width = (int)_initialGeometry.Width,
+                Height = (int)_initialGeometry.Height,
+            };
         }
 
         var thread = new System.Threading.Thread(RunMessageLoop);
@@ -203,6 +256,16 @@ public sealed partial class RegionOverlayWindow : IDisposable
                 _tcs.TrySetResult(null);
                 return;
             }
+
+            // Per-monitor DPI scales the forgiving handle hit zones so the
+            // always-visible 8px handles stay practical on high-DPI monitors.
+            _dpiFactor = Math.Max(1.0, GetDpiForWindow(_hwnd) / 96.0);
+
+            // Snapshot the desktop before this layered window is composited so
+            // the adaptive magnifier can zoom clean desktop pixels instead of
+            // its own dim scrim. A failed snapshot leaves _backdrop null and the
+            // overlay simply skips the magnifier.
+            SnapshotBackdrop();
 
             ShowWindow(_hwnd, SW_SHOW);
             SetForegroundWindow(_hwnd);
@@ -262,34 +325,100 @@ public sealed partial class RegionOverlayWindow : IDisposable
             case WM_LBUTTONUP:    OnMouseUp();         return IntPtr.Zero;
             case WM_LBUTTONDBLCLK: Confirm();          return IntPtr.Zero;
             case WM_KEYDOWN:      OnKey(wParam);       return IntPtr.Zero;
+            case WM_SETCURSOR:    return OnSetCursor(lParam);
         }
         return DefWindowProcW(hWnd, msg, wParam, lParam);
     }
 
     // ── Input ────────────────────────────────────────────────────────
+    //
+    // A left-button down event is resolved against the existing selection
+    // (if any) via the pure SelectionHandleResolver: grabbing a corner/edge
+    // handle starts a pointer-driven resize, grabbing the body starts a move,
+    // and anything else starts a brand-new drag-to-draw selection. While a
+    // drag is in progress WM_MOUSEMOVE routes to the matching geometry update.
 
     private void OnMouseDown(IntPtr lParam)
     {
-        _dragStartX = LoWord(lParam) + _vdx;
-        _dragStartY = HiWord(lParam) + _vdy;
-        _isDragging = true;
+        int vx = LoWord(lParam) + _vdx;
+        int vy = HiWord(lParam) + _vdy;
+        var requestedMode = TargetSelectionModeControls.HitTest(
+            vx, vy, new Rectangle(_vdx, _vdy, _vdw, _vdh));
+        if (requestedMode is captcho.Capture.CaptureMode mode)
+        {
+            if (mode != captcho.Capture.CaptureMode.Selection)
+            {
+                DestroyWindow(_hwnd);
+                _tcs.TrySetResult(TargetSelectionResult<SelectionGeometry>.RouteTo(mode));
+            }
+            return;
+        }
+
+        if (_currentSelection != null && _currentSelection.MeetsMinimumSize)
+        {
+            var handle = SelectionHandleResolver.Resolve(_currentSelection, vx, vy, DpiFactorForPoint(vx, vy));
+            if (handle == SelectionHandleKind.Body)
+            {
+                _dragMode = DragMode.MoveBody;
+                _moveStartCursorX = vx;
+                _moveStartCursorY = vy;
+                _moveStartSelection = _currentSelection;
+                return;
+            }
+            if (handle != SelectionHandleKind.None)
+            {
+                _dragMode = DragMode.ResizeHandle;
+                _activeHandle = handle;
+                return;
+            }
+        }
+
+        // No existing selection, or the click missed every forgiving handle —
+        // discard the current selection and start a brand-new drag.
+        _dragMode = DragMode.NewSelection;
+        _dragStartX = vx;
+        _dragStartY = vy;
         _currentSelection = null;
         Render();
     }
 
     private void OnMouseMove(IntPtr lParam)
     {
-        if (!_isDragging) return;
         int vx = LoWord(lParam) + _vdx;
         int vy = HiWord(lParam) + _vdy;
 
-        var raw = RegionSelection.FromDragPoints(_dragStartX, _dragStartY, vx, vy);
-        var clamped = raw.ClampToBounds(_vdx, _vdy, _vdw, _vdh);
-        _currentSelection = (clamped != null && clamped.MeetsMinimumSize) ? clamped : null;
-        Render();
+        switch (_dragMode)
+        {
+            case DragMode.NewSelection:
+            {
+                var raw = RegionSelection.FromDragPoints(_dragStartX, _dragStartY, vx, vy);
+                var clamped = raw.ClampToBounds(_vdx, _vdy, _vdw, _vdh);
+                _currentSelection = (clamped != null && clamped.MeetsMinimumSize) ? clamped : null;
+                Render();
+                break;
+            }
+            case DragMode.MoveBody:
+            {
+                if (_moveStartSelection == null) break;
+                // Delta from the press position against the snapshot so the
+                // rectangle follows the pointer without accumulating drift.
+                int dx = vx - _moveStartCursorX;
+                int dy = vy - _moveStartCursorY;
+                var moved = _moveStartSelection.Move(dx, dy, _vdx, _vdy, _vdw, _vdh);
+                if (moved != null) { _currentSelection = moved; Render(); }
+                break;
+            }
+            case DragMode.ResizeHandle:
+            {
+                var resized = _currentSelection?.ResizeHandle(
+                    _activeHandle, vx, vy, _vdx, _vdy, _vdw, _vdh);
+                if (resized != null) { _currentSelection = resized; Render(); }
+                break;
+            }
+        }
     }
 
-    private void OnMouseUp() => _isDragging = false;
+    private void OnMouseUp() => _dragMode = DragMode.None;
 
     private void OnKey(IntPtr wParam)
     {
@@ -320,6 +449,79 @@ public sealed partial class RegionOverlayWindow : IDisposable
     private static int LoWord(IntPtr p) => (short)(p.ToInt32() & 0xFFFF);
     private static int HiWord(IntPtr p) => (short)((p.ToInt32() >> 16) & 0xFFFF);
 
+    // ── Cursor ───────────────────────────────────────────────────────
+    //
+    // Directional resize cursors follow the hovered handle. The overlay covers
+    // the entire Virtual Desktop, so screen coordinates returned by GetCursorPos
+    // are already Virtual Desktop coordinates and need no translation.
+
+    private IntPtr OnSetCursor(IntPtr lParam)
+    {
+        // Low word of lParam is the hit-test code; only set the cursor inside
+        // the client area, otherwise defer to DefWindowProc.
+        if ((lParam.ToInt32() & 0xFFFF) != HTCLIENT)
+            return DefWindowProcW(_hwnd, WM_SETCURSOR, IntPtr.Zero, lParam);
+
+        var kind = ResolveCursorKind();
+        SetCursor(LoadCursor(IntPtr.Zero, Win32CursorId(kind)));
+        return (IntPtr)1;
+    }
+
+    private SelectionCursorKind ResolveCursorKind()
+    {
+        if (_currentSelection == null || !_currentSelection.MeetsMinimumSize)
+            return SelectionCursorKind.Cross;
+
+        // Lock the cursor to the grabbed handle/body while a drag is in progress
+        // so it does not flicker as the pointer crosses other handles' hit zones.
+        SelectionHandleKind handle;
+        if (_dragMode == DragMode.ResizeHandle)
+            handle = _activeHandle;
+        else if (_dragMode == DragMode.MoveBody)
+            handle = SelectionHandleKind.Body;
+        else
+        {
+            GetCursorPos(out POINT p);
+            handle = SelectionHandleResolver.Resolve(_currentSelection, p.X, p.Y, DpiFactorForPoint(p.X, p.Y));
+        }
+        return SelectionHandleResolver.GetCursor(handle);
+    }
+
+    private static int Win32CursorId(SelectionCursorKind kind) => kind switch
+    {
+        SelectionCursorKind.SizeAll  => IDC_SIZEALL,
+        SelectionCursorKind.SizeNwse => IDC_SIZENWSE,
+        SelectionCursorKind.SizeNesw => IDC_SIZENESW,
+        SelectionCursorKind.SizeNs   => IDC_SIZENS,
+        SelectionCursorKind.SizeWe   => IDC_SIZEWE,
+        _ => IDC_CROSS,
+    };
+
+    /// <summary>
+    /// Resolves the DPI factor for the monitor containing the given Virtual
+    /// Desktop point, so forgiving hit zones scale with the monitor the pointer
+    /// is actually on in mixed-DPI multi-monitor layouts. Falls back to the
+    /// cached window-wide DPI if the per-monitor query is unavailable.
+    /// </summary>
+    private double DpiFactorForPoint(int x, int y)
+    {
+        try
+        {
+            IntPtr hmon = MonitorFromPoint(new POINT { X = x, Y = y }, MONITOR_DEFAULTTONEAREST);
+            if (hmon != IntPtr.Zero
+                && GetDpiForMonitor(hmon, MDT_EFFECTIVE_DPI, out uint dpiX, out _) == 0
+                && dpiX > 0)
+            {
+                return Math.Max(1.0, dpiX / 96.0);
+            }
+        }
+        catch
+        {
+            // shcore.dll / GetDpiForMonitor unavailable — fall back below.
+        }
+        return _dpiFactor;
+    }
+
     // ── Confirm / Cancel ─────────────────────────────────────────────
 
     private void Confirm()
@@ -328,22 +530,17 @@ public sealed partial class RegionOverlayWindow : IDisposable
         var sel = _currentSelection;
         DestroyWindow(_hwnd);
 
-        try
-        {
-            using var r = SafeCaptureResult.CaptureRegion(sel.X, sel.Y, (uint)sel.Width, (uint)sel.Height);
-            if (r.IsSuccess)
+        // Per spec #27, the overlay returns confirmed geometry and does NOT
+        // perform Capture. The runtime CaptureWorkflowSession owns Capture of
+        // this geometry, the resulting Frame, and the preview transition.
+        _tcs.TrySetResult(TargetSelectionResult<SelectionGeometry>.Confirmed(
+            new SelectionGeometry
             {
-                var bmp = BitmapBufferConverter.StripPadding(r.Pixels!, (int)r.Width, (int)r.Height, (int)r.Stride);
-                _tcs.TrySetResult(new RegionSelectionResult
-                {
-                    Bitmap = bmp,
-                    Region = new Rect(sel.X, sel.Y, sel.Width, sel.Height),
-                });
-                return;
-            }
-        }
-        catch { /* fall through to null */ }
-        _tcs.TrySetResult(null);
+                X = sel.X,
+                Y = sel.Y,
+                Width = (uint)sel.Width,
+                Height = (uint)sel.Height,
+            }));
     }
 
     private void Cancel()
@@ -420,8 +617,13 @@ public sealed partial class RegionOverlayWindow : IDisposable
             g.FillRectangle(new SolidBrush(Color.FromArgb(180, 0, 0, 0)),
                 lx - 6, ly - 2, sz.Width + 12, sz.Height + 4);
             g.DrawString(label, font, brush, lx, ly);
+
+            // Always-visible 8×8 resize handles on every edge and corner so the
+            // user can see how to refine the selection. White fill with the
+            // selection's cyan outline stays legible on light and dark desktops.
+            DrawHandles(g, sx, sy, sw, sh);
         }
-        else if (!_isDragging)
+        else if (_dragMode != DragMode.NewSelection)
         {
             string hint = "Drag to select · Enter confirm · Esc cancel · Arrows adjust";
             using var font = new Font("Segoe UI", 13f);
@@ -432,6 +634,17 @@ public sealed partial class RegionOverlayWindow : IDisposable
                 cx - 12, 18, sz.Width + 24, sz.Height + 12);
             g.DrawString(hint, font, brush, cx, 24);
         }
+
+        // The adaptive magnifier serves precision boundary placement, so it is
+        // shown only while the user is drawing a new selection or dragging a
+        // resize handle — the two interactions that adjust a boundary. A body
+        // move is coarse (the cursor is in the interior, not on a boundary), so
+        // it needs no magnifier; an idle overlay is unobstructed.
+        if (_dragMode == DragMode.NewSelection || _dragMode == DragMode.ResizeHandle)
+            DrawMagnifier(g);
+
+        TargetSelectionModeControls.Draw(
+            g, captcho.Capture.CaptureMode.Selection, new Rectangle(_vdx, _vdy, _vdw, _vdh));
 
         // Do NOT dispose bmp — it wraps _bits, not an owned HBITMAP.
         // Disposing would try to free memory we don't own.
@@ -453,10 +666,138 @@ public sealed partial class RegionOverlayWindow : IDisposable
             0, ref blend, ULW_ALPHA);
     }
 
+    /// <summary>
+    /// Draws the always-visible 8×8 resize handles at the four corners and four
+    /// edge midpoints of the selection (coordinates already in overlay space).
+    /// </summary>
+    private static void DrawHandles(System.Drawing.Graphics g, int sx, int sy, int sw, int sh)
+    {
+        int hs = SelectionHandleResolver.VisibleHandleSize;
+        using var fill = new SolidBrush(Color.FromArgb(255, 255, 255, 255));
+        using var edge = new Pen(Color.FromArgb(255, 79, 195, 247), 1f);
+
+        void Draw(float cx, float cy)
+        {
+            float hx = cx - hs / 2f;
+            float hy = cy - hs / 2f;
+            g.FillRectangle(fill, hx, hy, hs, hs);
+            g.DrawRectangle(edge, hx, hy, hs, hs);
+        }
+
+        // Corners
+        Draw(sx, sy);
+        Draw(sx + sw, sy);
+        Draw(sx, sy + sh);
+        Draw(sx + sw, sy + sh);
+        // Edge midpoints
+        Draw(sx + sw / 2f, sy);
+        Draw(sx + sw, sy + sh / 2f);
+        Draw(sx + sw / 2f, sy + sh);
+        Draw(sx, sy + sh / 2f);
+    }
+
+    // ── Adaptive magnifier ───────────────────────────────────────────
+    //
+    // A 200×200 viewport at 4× zoom that follows the active boundary point
+    // (the cursor) while a drag is in progress. The pure
+    // SelectionMagnifierPlacement resolver decides what to sample and where to
+    // place the box; this method performs the backdrop read (DrawImage from the
+    // frozen snapshot) and draws the border and focus crosshair. Sampling the
+    // frozen backdrop — not the live, scrimmed overlay — keeps the zoomed pixels
+    // truthful, and works across mixed-DPI, cross-monitor, and negative-
+    // coordinate layouts because every coordinate stays in Virtual Desktop
+    // space (the screen DC BitBlt covers the whole virtual screen).
+
+    private void SnapshotBackdrop()
+    {
+        try
+        {
+            IntPtr screenDC = GetDC(IntPtr.Zero);
+            if (screenDC == IntPtr.Zero) return;
+            IntPtr compatDC = CreateCompatibleDC(screenDC);
+            IntPtr hbm = CreateCompatibleBitmap(screenDC, _vdw, _vdh);
+            if (hbm == IntPtr.Zero)
+            {
+                ReleaseDC(IntPtr.Zero, screenDC);
+                DeleteDC(compatDC);
+                return;
+            }
+            SelectObject(compatDC, hbm);
+            // Source origin is the signed Virtual Desktop origin so monitors at
+            // negative coordinates are captured too.
+            BitBlt(compatDC, 0, 0, _vdw, _vdh, screenDC, _vdx, _vdy, SRCCOPY);
+            ReleaseDC(IntPtr.Zero, screenDC);
+            _backdrop = (System.Drawing.Bitmap)Image.FromHbitmap(hbm);
+            DeleteObject(hbm);
+            DeleteDC(compatDC);
+        }
+        catch
+        {
+            // Backdrop unavailable — the overlay skips the magnifier and the
+            // rest of the selection interaction is unaffected.
+            _backdrop = null;
+        }
+    }
+
+    private void DrawMagnifier(System.Drawing.Graphics g)
+    {
+        if (_backdrop == null) return;
+        if (!GetCursorPos(out POINT p)) return;
+
+        var placement = SelectionMagnifierPlacement.Resolve(p.X, p.Y, _vdx, _vdy, _vdw, _vdh);
+        if (placement == null) return;
+
+        // Both the destination viewport and the source sample are stored in
+        // Virtual Desktop coordinates; the overlay DIB and the frozen backdrop
+        // share the VD origin, so subtracting (_vdx, _vdy) lands in both.
+        int dx = placement.DestinationX - _vdx;
+        int dy = placement.DestinationY - _vdy;
+        int sx = placement.SourceX - _vdx;
+        int sy = placement.SourceY - _vdy;
+        int size = SelectionMagnifierPlacement.Size;
+        int srcSize = SelectionMagnifierPlacement.SourceSize;
+        int zoom = SelectionMagnifierPlacement.Zoom;
+
+        // Nearest-neighbour scaling keeps individual desktop pixels crisp so the
+        // user can place a boundary on an exact pixel — bicubic would blur them.
+        var prevInterp = g.InterpolationMode;
+        var prevOffset = g.PixelOffsetMode;
+        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        g.PixelOffsetMode = PixelOffsetMode.Half;
+        g.DrawImage(_backdrop,
+            new Rectangle(dx, dy, size, size),
+            sx, sy, srcSize, srcSize,
+            GraphicsUnit.Pixel);
+        g.InterpolationMode = prevInterp;
+        g.PixelOffsetMode = prevOffset;
+
+        // Border in the selection's cyan so the magnifier reads as part of the
+        // overlay's affordance set.
+        using var border = new Pen(Color.FromArgb(255, 79, 195, 247), 2f);
+        g.DrawRectangle(border, dx + 1, dy + 1, size - 2, size - 2);
+
+        // Crosshair marking the active boundary point inside the magnified view.
+        // Mapping the focus through the source rectangle (rather than assuming
+        // centre) keeps the crosshair under the correct pixel when the source is
+        // clamped at a Virtual Desktop edge; the focus offset within the 50px
+        // source stays in [0,50], so the mapped position always lands inside the
+        // 200px viewport.
+        int fx = dx + (p.X - placement.SourceX) * zoom;
+        int fy = dy + (p.Y - placement.SourceY) * zoom;
+        using var shadow = new Pen(Color.FromArgb(200, 0, 0, 0), 3f);
+        using var core = new Pen(Color.FromArgb(255, 255, 255, 255), 1f);
+        g.DrawLine(shadow, fx, dy, fx, dy + size);
+        g.DrawLine(shadow, dx, fy, dx + size, fy);
+        g.DrawLine(core, fx, dy, fx, dy + size);
+        g.DrawLine(core, dx, fy, dx + size, fy);
+    }
+
     // ── Cleanup ──────────────────────────────────────────────────────
 
     private void Cleanup()
     {
+        _backdrop?.Dispose();
+        _backdrop = null;
         if (_hBitmap != IntPtr.Zero) { DeleteObject(_hBitmap); _hBitmap = IntPtr.Zero; }
         if (_bitmapDC != IntPtr.Zero) { DeleteDC(_bitmapDC); _bitmapDC = IntPtr.Zero; }
         _bits = IntPtr.Zero;

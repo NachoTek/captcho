@@ -136,6 +136,76 @@ public sealed record RegionSelection
     }
 
     /// <summary>
+    /// Pointer-driven resize: moves the edge(s) belonging to <paramref name="handle"/>
+    /// to the cursor position while the opposite edge(s) stay fixed, then enforces
+    /// the minimum size and keeps the rectangle inside the Virtual Desktop bounds.
+    /// Used by the always-visible resize handles (issue #30). The cursor position
+    /// is absolute (Virtual Desktop pixels, may be negative), so each moving edge
+    /// is clamped to its valid range — a leading edge to
+    /// [<paramref name="boundsX"/>/<paramref name="boundsY"/>, opposite − MinimumSize]
+    /// and a trailing edge to [opposite + MinimumSize, bound right/bottom].
+    /// <see cref="SelectionHandleKind.None"/> and <see cref="SelectionHandleKind.Body"/>
+    /// are not resize handles and return null (the overlay moves or redraws instead).
+    /// </summary>
+    public RegionSelection? ResizeHandle(
+        SelectionHandleKind handle, int cursorX, int cursorY,
+        int boundsX, int boundsY, int boundsWidth, int boundsHeight)
+    {
+        if (boundsWidth < MinimumSize || boundsHeight < MinimumSize)
+            return null;
+
+        int left = X, top = Y, right = Right, bottom = Bottom;
+        int boundsRight = boundsX + boundsWidth;
+        int boundsBottom = boundsY + boundsHeight;
+
+        switch (handle)
+        {
+            case SelectionHandleKind.TopLeft:
+                left = Math.Clamp(cursorX, boundsX, right - MinimumSize);
+                top = Math.Clamp(cursorY, boundsY, bottom - MinimumSize);
+                break;
+            case SelectionHandleKind.Top:
+                top = Math.Clamp(cursorY, boundsY, bottom - MinimumSize);
+                break;
+            case SelectionHandleKind.TopRight:
+                right = Math.Clamp(cursorX, left + MinimumSize, boundsRight);
+                top = Math.Clamp(cursorY, boundsY, bottom - MinimumSize);
+                break;
+            case SelectionHandleKind.Right:
+                right = Math.Clamp(cursorX, left + MinimumSize, boundsRight);
+                break;
+            case SelectionHandleKind.BottomRight:
+                right = Math.Clamp(cursorX, left + MinimumSize, boundsRight);
+                bottom = Math.Clamp(cursorY, top + MinimumSize, boundsBottom);
+                break;
+            case SelectionHandleKind.Bottom:
+                bottom = Math.Clamp(cursorY, top + MinimumSize, boundsBottom);
+                break;
+            case SelectionHandleKind.BottomLeft:
+                left = Math.Clamp(cursorX, boundsX, right - MinimumSize);
+                bottom = Math.Clamp(cursorY, top + MinimumSize, boundsBottom);
+                break;
+            case SelectionHandleKind.Left:
+                left = Math.Clamp(cursorX, boundsX, right - MinimumSize);
+                break;
+            default:
+                // None / Body are not resize operations.
+                return null;
+        }
+
+        int w = right - left;
+        int h = bottom - top;
+        // The per-edge clamps above already keep each moving edge on the valid
+        // side of its opposite (± MinimumSize), so for bounds ≥ MinimumSize the
+        // result always satisfies the minimum. This is a safety net for any
+        // degenerate caller state, not an expected path.
+        if (w < MinimumSize || h < MinimumSize)
+            return null;
+
+        return new RegionSelection { X = left, Y = top, Width = w, Height = h };
+    }
+
+    /// <summary>
     /// Returns a new region clamped to the given bounds. Returns null if
     /// the region is entirely outside bounds or has zero area after clamping.
     /// </summary>

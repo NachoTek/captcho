@@ -37,7 +37,7 @@ An optional interactive step where the user picks what to capture. Skipped for F
 _Avoid_: Target picking, source selection
 
 **Annotation**:
-Pre-capture markup on a live screen overlay. The user draws, marks, or annotates the screen before the capture is taken. Available when enabled in settings.
+Post-capture markup on a full-screen overlay that displays the captured Frame. The user draws, marks, or annotates the frozen Frame before Export. V1 keeps one global Annotation tool state and one source-plus-strokes composite; the pen and the shape tools (rectangle, ellipse, line, arrow) render both in-progress and committed strokes without mutating the source Frame, sharing one color and stroke width, with fill available to the closed shapes. The text tool places an editable entry whose committed content, position, color, and size stay reversible document entries; empty or cancelled input never becomes one. The marker tool places sequential numbered entries whose committed number, position, and style stay reversible document entries; the next number follows one past the highest still-committed marker, so undo never renumbers the survivors. The blur tool defines rectangular regions whose committed geometry stays a reversible document entry; composition samples the source Frame pixels in the region and rasterizes an obscured version clipped to the region, without mutating the source Frame or adopting the shared color and width. Committed annotations form a document history: Undo removes the latest committed annotation, Redo restores the most recently undone one, and committing a new annotation after Undo clears the redo branch. Available when enabled in Settings; if disabled, the existing preview workflow is retained.
 _Avoid_: Markup, drawing, annotation overlay
 
 **Capture**:
@@ -52,6 +52,20 @@ _Avoid_: Screenshot, image, bitmap, capture data
 Post-capture processing — saving a frame to file or copying it to the clipboard.
 _Avoid_: Output, save, deliver
 
+### Workflow
+
+**Workflow Session**:
+The WinUI-free runtime component that owns Capture Mode routing, operation state, the captured Frame, the post-capture Annotation gate, Recognize Text — OCR over the in-memory Frame through an engine adapter, with distinct Recognized-text, no-text, and retryable failure outcomes — Scan QR — multi-value QR decoding over the in-memory Frame through a scanner adapter, with distinct found, no-code, and retryable failure outcomes — and the Export actions (Save, Save As, Copy Frame, Copy Path, Open With, Share) with the one default saved-file identity per Capture. Open With and Share hand the saved file to Windows application association and the Windows share interface, so they are gated on the same saved-file identity as Copy Path. The Full Desktop, Active Window, Selection, Selected Monitor, and Selected Window routes are wired through it today; Annotation tools, OCR language fallback engines, and the exit decision will move behind it as their tickets land. WinUI windows and Win32 layered windows are thin event/rendering adapters over the Workflow Session and must not duplicate workflow rules.
+_Avoid_: Mediator, controller, view model
+
+**Capture Mode Routing**:
+The Workflow Session's responsibility for dispatching a Trigger to the right Capture path based on the active Capture Mode. Full Desktop and Active Window skip Target Selection; Selected Window, Selected Monitor, and Selection use interactive overlays before Capture. For Selection, the overlay returns confirmed geometry (or cancellation) to the session, which then owns Capture of that geometry, the resulting Frame, and the preview transition — the overlay itself never performs Capture.
+_Avoid_: Mode switch, dispatch table
+
+**Operation State**:
+The Workflow Session's guard against concurrent operations. A Trigger that arrives while another operation is in flight is rejected with an OperationInProgress outcome rather than queuing or interrupting the in-flight operation.
+_Avoid_: Lock, mutex, busy flag
+
 ### Virtual Desktop
 
 **Virtual Desktop**:
@@ -61,7 +75,7 @@ _Avoid_: Desktop bounds, screen area, combined display
 ### User Interface
 
 **Settings**:
-User-facing preferences configurable through the UI — hotkeys, export behavior, annotation toggles, theme.
+User-facing preferences configurable through the UI — hotkeys, export behavior, Annotation defaults and toggles, theme, and launch behavior (what captcho does on startup: Do nothing, Last Capture Mode, or a configured Capture Mode).
 _Avoid_: Preferences, options, config
 
 **Configuration**:

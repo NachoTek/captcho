@@ -57,7 +57,7 @@ public class SettingsSessionTests
         Assert.Equal(@"D:\Captures", view.SaveLocation);
         Assert.Equal("custom-<title>", view.FilenameTemplate);
         Assert.Equal("custom-Screenshot.png", view.FilenameTemplatePreview);
-        Assert.Equal(4, view.GlobalHotkeyRows.Count);
+        Assert.Equal(6, view.GlobalHotkeyRows.Count);
         Assert.Null(view.StatusMessage);
         Assert.False(view.ShouldClose);
     }
@@ -80,8 +80,7 @@ public class SettingsSessionTests
         var session = NewSession(new AppSettings());
 
         var view = session.View;
-        Assert.Equal("Export format", view.Export.Heading);
-        Assert.False(string.IsNullOrEmpty(view.Export.FormatName));
+        Assert.Equal(ExportImageFormat.Png, view.Export.Format);
         Assert.Equal("Interface settings", view.Interface.Heading);
         Assert.False(string.IsNullOrEmpty(view.Interface.Message));
     }
@@ -219,6 +218,136 @@ public class SettingsSessionTests
         Assert.Equal(0, recorder.CallCount);
         Assert.True(view.StatusIsError);
         Assert.Contains("absolute", view.StatusMessage);
+    }
+
+    // ── Export tab edits (issue #45) ────────────────────────────────────
+
+    [Fact]
+    public void View_OnOpen_ReflectsPersistedExportFormat()
+    {
+        var runtime = new AppSettings
+        {
+            ExportSettings = new ExportSettings(ExportImageFormat.Jpeg, 73),
+        };
+        var session = NewSession(runtime);
+
+        var view = session.View;
+        Assert.Equal(ExportImageFormat.Jpeg, view.Export.Format);
+        Assert.Equal(73, view.Export.JpegQuality);
+        Assert.True(view.Export.JpegQualityAvailable);
+        Assert.Equal(".jpg", view.Export.FileExtension);
+    }
+
+    [Fact]
+    public void EditExportFormat_UpdatesView()
+    {
+        var session = NewSession(AppSettings.WithDefaults());
+
+        var view = session.EditExportFormat(ExportImageFormat.Jpeg);
+
+        Assert.Equal(ExportImageFormat.Jpeg, view.Export.Format);
+        Assert.True(view.Export.JpegQualityAvailable);
+        Assert.Equal(".jpg", view.Export.FileExtension);
+    }
+
+    [Fact]
+    public void EditExportJpegQuality_UpdatesView()
+    {
+        var session = NewSession(AppSettings.WithDefaults());
+
+        var view = session.EditExportFormat(ExportImageFormat.Jpeg);
+        view = session.EditExportJpegQuality(42);
+
+        Assert.Equal(42, view.Export.JpegQuality);
+    }
+
+    [Fact]
+    public void EditExportJpegQuality_OutOfRange_DisablesApplyAndConfirm()
+    {
+        var session = NewSession(AppSettings.WithDefaults());
+
+        session.EditExportFormat(ExportImageFormat.Jpeg);
+        var view = session.EditExportJpegQuality(101);
+
+        Assert.False(view.CanApply);
+        Assert.False(view.CanConfirm);
+        Assert.NotNull(view.Export.JpegQualityError);
+
+        var recovered = session.EditExportJpegQuality(100);
+
+        Assert.True(recovered.CanApply);
+        Assert.True(recovered.CanConfirm);
+        Assert.Null(recovered.Export.JpegQualityError);
+    }
+
+    [Fact]
+    public void Apply_PersistsExportFormatAndQualityAtomicallyAndWritesBackRuntime()
+    {
+        var recorder = new FakeConfiguration();
+        var runtime = AppSettings.WithDefaults();
+        var session = new SettingsSession(runtime, recorder, new RecordingGlobalHotkeyAdapter());
+
+        session.EditExportFormat(ExportImageFormat.Jpeg);
+        session.EditExportJpegQuality(67);
+        var view = session.Apply();
+
+        Assert.Equal(SettingsSession.SavedMessage, view.StatusMessage);
+        // The persisted merged settings carry the export slice.
+        Assert.Equal(ExportImageFormat.Jpeg, recorder.LastSaved!.ExportSettings!.Format);
+        Assert.Equal(67, recorder.LastSaved.ExportSettings.JpegQuality);
+        // The runtime reflects the committed values without a restart — the
+        // export flow reads these.
+        Assert.Equal(ExportImageFormat.Jpeg, runtime.ExportSettings.Format);
+        Assert.Equal(67, runtime.ExportSettings.JpegQuality);
+    }
+
+    [Fact]
+    public void Cancel_AfterExportEdits_DiscardsThem()
+    {
+        var runtime = new AppSettings
+        {
+            ExportSettings = new ExportSettings(ExportImageFormat.Png, 80),
+        };
+        var session = NewSession(runtime);
+
+        session.EditExportFormat(ExportImageFormat.Jpeg);
+        session.EditExportJpegQuality(30);
+        var view = session.Cancel();
+
+        Assert.Equal(ExportImageFormat.Png, view.Export.Format);
+        Assert.False(view.Export.JpegQualityAvailable);
+        Assert.Equal(ExportImageFormat.Png, runtime.ExportSettings.Format);
+    }
+
+    [Fact]
+    public void Reset_RestoresPngDefaultsOnExportTab()
+    {
+        var runtime = new AppSettings
+        {
+            ExportSettings = new ExportSettings(ExportImageFormat.Jpeg, 73),
+        };
+        var session = NewSession(runtime);
+
+        var view = session.Reset();
+
+        Assert.Equal(ExportImageFormat.Png, view.Export.Format);
+        Assert.Equal(ExportSettings.DefaultJpegQuality, view.Export.JpegQuality);
+        Assert.False(view.Export.JpegQualityAvailable);
+    }
+
+    [Fact]
+    public void Apply_InvalidExportQuality_BlocksPersistence()
+    {
+        var recorder = new FakeConfiguration();
+        var session = new SettingsSession(AppSettings.WithDefaults(), recorder, new RecordingGlobalHotkeyAdapter());
+
+        session.EditExportFormat(ExportImageFormat.Jpeg);
+        session.EditExportJpegQuality(-1);
+        var view = session.Apply();
+
+        Assert.Equal(0, recorder.CallCount);
+        Assert.True(view.StatusIsError);
+        Assert.NotNull(view.Export.JpegQualityError);
     }
 
     // ── Edits return a refreshed view ──────────────────────────────────
@@ -739,9 +868,11 @@ public class SettingsSessionTests
     }
 
     /// <summary>
-    /// Fake Global Hotkey adapter that records ApplyEnabledStates calls and serves
-    /// configurable registration results, so display and reconcile behavior can be
-    /// verified without a Win32 Global Hotkey manager.
+    /// Fake Global Hotkey adapter that records ApplySettings calls and serves
+    /// configurable registration results, so display and reconcile behavior can
+    /// be verified without a Win32 Global Hotkey manager. Reconciles against the
+    /// settings' effective bindings (like the production manager) so remapped
+    /// combinations flow through Apply.
     /// </summary>
     private sealed class RecordingGlobalHotkeyAdapter : IGlobalHotkeyAdapter
     {
@@ -750,6 +881,7 @@ public class SettingsSessionTests
 
         public int ApplyCallsCount { get; private set; }
         public IReadOnlySet<int>? LastAppliedEnabledIds { get; private set; }
+        public AppSettings? LastAppliedSettings { get; private set; }
 
         public IReadOnlyList<GlobalHotkeyRegistrationResult> RegistrationResults => _results;
 
@@ -760,15 +892,17 @@ public class SettingsSessionTests
                 _applyFailingIds.Add(id);
         }
 
-        public IReadOnlyList<GlobalHotkeyRegistrationResult> ApplyEnabledStates(IReadOnlySet<int> enabledIds)
+        public IReadOnlyList<GlobalHotkeyRegistrationResult> ApplySettings(AppSettings settings)
         {
             ApplyCallsCount++;
-            LastAppliedEnabledIds = enabledIds;
+            LastAppliedSettings = settings;
+            LastAppliedEnabledIds = GlobalHotkeyRouteMap.EnabledGlobalHotkeyIds(settings);
             _results.Clear();
-            foreach (var id in enabledIds)
+            foreach (var spec in GlobalHotkeyRouteMap.SpecsFor(settings))
             {
-                var spec = GlobalHotkeyRouteMap.AllSpecs.Single(s => s.Id == id);
-                _results.Add(_applyFailingIds.Contains(id)
+                if (!settings.IsGlobalHotkeyEnabled(spec.Route))
+                    continue;
+                _results.Add(_applyFailingIds.Contains(spec.Id)
                     ? GlobalHotkeyRegistrationResult.Fail(spec, "RegisterHotKey", "Win32 error 1409")
                     : GlobalHotkeyRegistrationResult.Success(spec));
             }

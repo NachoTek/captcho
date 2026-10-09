@@ -22,11 +22,17 @@ public class WindowCaptureInteropTests
     [Fact]
     public void NativeMethods_CaptureActiveWindow_ExportExists()
     {
+        // Active Window carries all three Capture-option flags across the FFI
+        // contract (spec #34): pointer, decorations, and shadow are each
+        // applicable to a window Capture.
         var method = typeof(NativeMethods).GetMethod("captcho_capture_active_window",
             BindingFlags.Public | BindingFlags.Static);
         Assert.NotNull(method);
         Assert.Equal(typeof(NativeCaptureResult), method!.ReturnType);
-        Assert.Empty(method.GetParameters());
+
+        var parameters = method!.GetParameters();
+        Assert.Equal(3, parameters.Length);
+        Assert.All(parameters, p => Assert.Equal(typeof(bool), p.ParameterType));
     }
 
     [Fact]
@@ -42,14 +48,19 @@ public class WindowCaptureInteropTests
     [Fact]
     public void NativeMethods_CaptureWindowByHandle_ExportExists()
     {
+        // Window-by-handle carries the three Capture-option flags across the FFI
+        // contract: pointer, decorations, and shadow are each applicable to a
+        // window Capture (the Selected Window route threads the effective
+        // options here).
         var method = typeof(NativeMethods).GetMethod("captcho_capture_window_by_handle",
             BindingFlags.Public | BindingFlags.Static);
         Assert.NotNull(method);
         Assert.Equal(typeof(NativeCaptureResult), method!.ReturnType);
 
         var parameters = method!.GetParameters();
-        Assert.Single(parameters);
+        Assert.Equal(4, parameters.Length);
         Assert.Equal(typeof(ulong), parameters[0].ParameterType);
+        Assert.All(parameters.Skip(1), p => Assert.Equal(typeof(bool), p.ParameterType));
     }
 
     [Fact]
@@ -75,11 +86,29 @@ public class WindowCaptureInteropTests
     [Fact]
     public void SafeCaptureResult_CaptureActiveWindow_MethodExists()
     {
-        var method = typeof(SafeCaptureResult).GetMethod("CaptureActiveWindow",
-            BindingFlags.Public | BindingFlags.Static);
-        Assert.NotNull(method);
-        Assert.Equal(typeof(SafeCaptureResult), method!.ReturnType);
-        Assert.Empty(method.GetParameters());
+        // The parameterless factory is retained as the defaults-preserving entry
+        // point (used by the CLI/cs-tester paths that do not participate in the
+        // workflow's Capture-options composition). It delegates to the
+        // CaptureOptions overload with CaptureOptions.WithDefaults().
+        var method = typeof(SafeCaptureResult)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Single(m => m.Name == nameof(SafeCaptureResult.CaptureActiveWindow)
+                         && m.GetParameters().Length == 0);
+        Assert.Equal(typeof(SafeCaptureResult), method.ReturnType);
+    }
+
+    [Fact]
+    public void SafeCaptureResult_CaptureActiveWindow_WithOptions_Exists()
+    {
+        // The workflow-facing entry point (spec #34): Active Window Capture
+        // composes the effective CaptureOptions and threads them through the
+        // managed/native contract into the Rust capture engine.
+        var method = typeof(SafeCaptureResult)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Single(m => m.Name == nameof(SafeCaptureResult.CaptureActiveWindow)
+                         && m.GetParameters().Length == 1
+                         && m.GetParameters()[0].ParameterType == typeof(CaptureOptions));
+        Assert.Equal(typeof(SafeCaptureResult), method.ReturnType);
     }
 
     [Fact]
@@ -93,16 +122,24 @@ public class WindowCaptureInteropTests
     }
 
     [Fact]
-    public void SafeCaptureResult_CaptureWindowByHandle_MethodExists()
+    public void SafeCaptureResult_CaptureWindowByHandle_WithOptions_Exists()
     {
-        var method = typeof(SafeCaptureResult).GetMethod("CaptureWindowByHandle",
-            BindingFlags.Public | BindingFlags.Static);
-        Assert.NotNull(method);
-        Assert.Equal(typeof(SafeCaptureResult), method!.ReturnType);
+        // The workflow-facing entry point: Selected Window Capture composes the
+        // effective CaptureOptions and threads them through the managed/native
+        // contract into the Rust capture engine.
+        var method = typeof(SafeCaptureResult)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Single(m => m.Name == nameof(SafeCaptureResult.CaptureWindowByHandle)
+                         && m.GetParameters().Length == 2
+                         && m.GetParameters()[1].ParameterType == typeof(CaptureOptions));
+        Assert.Equal(typeof(SafeCaptureResult), method.ReturnType);
+    }
 
-        var parameters = method!.GetParameters();
-        Assert.Single(parameters);
-        Assert.Equal(typeof(IntPtr), parameters[0].ParameterType);
+    [Fact]
+    public void SafeCaptureResult_CaptureWindowByHandle_NullOptions_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(
+            () => SafeCaptureResult.CaptureWindowByHandle(new IntPtr(1), null!));
     }
 
     // ── Negative Tests ───────────────────────────────────────────────────

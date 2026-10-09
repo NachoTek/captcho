@@ -2,7 +2,7 @@
 //
 // Verifies the pure C# GlobalHotkeyTabSettings collaborator: it loads the persisted
 // per-Global-Hotkey enabled states into a working snapshot (never mutating the source),
-// lists all four Global Hotkeys with their bindings, behavior descriptions, and
+// lists all six Global Hotkeys with their bindings, behavior descriptions, and
 // current registration status (read live from the adapter), and lets the user
 // enable/disable each Global Hotkey independently. Persistence and runtime reconcile are
 // no longer this tab's job — it writes its working slice via WriteInto and advances
@@ -36,17 +36,17 @@ public class GlobalHotkeyTabSettingsTests
             new GlobalHotkeyTabSettings(new AppSettings(), null!));
     }
 
-    // ── Display: all four global hotkeys with bindings and behavior ────────────
+    // ── Display: all six global hotkeys with bindings and behavior ────────────
 
     [Fact]
-    public void GetRows_ListsAllFourGlobalHotkeysInStableIdOrder()
+    public void GetRows_ListsAllSixGlobalHotkeysInStableIdOrder()
     {
         var tab = NewTab(new AppSettings());
 
         var rows = tab.GetRows();
 
-        Assert.Equal(4, rows.Count);
-        Assert.Equal(new[] { 1, 2, 3, 4 }, rows.Select(r => r.Id).ToArray());
+        Assert.Equal(6, rows.Count);
+        Assert.Equal(new[] { 1, 2, 3, 4, 5, 6 }, rows.Select(r => r.Id).ToArray());
     }
 
     [Fact]
@@ -76,6 +76,8 @@ public class GlobalHotkeyTabSettingsTests
     [InlineData(GlobalHotkeyRoute.ActiveWindow, "active")]
     [InlineData(GlobalHotkeyRoute.FullDesktop, "full virtual desktop")]
     [InlineData(GlobalHotkeyRoute.RectangularRegion, "Selection")]
+    [InlineData(GlobalHotkeyRoute.SelectedWindow, "window picker")]
+    [InlineData(GlobalHotkeyRoute.SelectedMonitor, "monitor picker")]
     public void GetRows_BehaviorDescribesTheCaptureMode(GlobalHotkeyRoute route, string expectedFragment)
     {
         var tab = NewTab(new AppSettings());
@@ -545,7 +547,7 @@ public class GlobalHotkeyTabSettingsTests
             _results.AddRange(results);
         }
 
-        public IReadOnlyList<GlobalHotkeyRegistrationResult> ApplyEnabledStates(IReadOnlySet<int> enabledIds)
+        public IReadOnlyList<GlobalHotkeyRegistrationResult> ApplySettings(AppSettings settings)
             => RegistrationResults;
     }
 }

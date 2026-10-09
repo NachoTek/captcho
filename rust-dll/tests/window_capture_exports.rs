@@ -19,7 +19,10 @@ use captcho_capture::*;
 
 #[test]
 fn captcho_capture_active_window_exists_with_correct_signature() {
-    let _fn_ptr: extern "C" fn() -> CaptureResult = captcho_capture_active_window;
+    // Active Window carries the three Capture-option flags across the FFI
+    // contract (spec #34): pointer, decorations, and shadow are each applicable
+    // to a window Capture and each marshalled as a 4-byte i32 (C# bool).
+    let _fn_ptr: extern "C" fn(i32, i32, i32) -> CaptureResult = captcho_capture_active_window;
 }
 
 #[test]
@@ -29,7 +32,11 @@ fn captcho_capture_window_under_cursor_exists_with_correct_signature() {
 
 #[test]
 fn captcho_capture_window_by_handle_exists_with_correct_signature() {
-    let _fn_ptr: extern "C" fn(u64) -> CaptureResult = captcho_capture_window_by_handle;
+    // Window-by-handle carries the three Capture-option flags across the FFI
+    // contract (the Selected Window route threads the effective options here):
+    // pointer, decorations, and shadow, each marshalled as a 4-byte i32
+    // (C# bool).
+    let _fn_ptr: extern "C" fn(u64, i32, i32, i32) -> CaptureResult = captcho_capture_window_by_handle;
 }
 
 // ---------------------------------------------------------------------------
@@ -38,7 +45,7 @@ fn captcho_capture_window_by_handle_exists_with_correct_signature() {
 
 #[test]
 fn capture_window_by_handle_zero_returns_error() {
-    let result = captcho_capture_window_by_handle(0);
+    let result = captcho_capture_window_by_handle(0, 0, 1, 0);
     assert_ne!(
         result.status,
         CaptureStatus::Ok,
@@ -57,7 +64,7 @@ fn capture_window_by_handle_zero_returns_error() {
 
 #[test]
 fn capture_window_by_handle_zero_has_select_window_phase() {
-    let result = captcho_capture_window_by_handle(0);
+    let result = captcho_capture_window_by_handle(0, 0, 1, 0);
     let msg = unsafe { std::ffi::CStr::from_ptr(result.error_message) };
     let msg_str = msg.to_str().unwrap_or("");
     assert!(
@@ -70,7 +77,7 @@ fn capture_window_by_handle_zero_has_select_window_phase() {
 
 #[test]
 fn capture_window_by_handle_zero_has_zero_metadata() {
-    let result = captcho_capture_window_by_handle(0);
+    let result = captcho_capture_window_by_handle(0, 0, 1, 0);
     assert_eq!(result.width, 0);
     assert_eq!(result.height, 0);
     assert_eq!(result.stride, 0);
@@ -81,7 +88,7 @@ fn capture_window_by_handle_zero_has_zero_metadata() {
 #[test]
 fn capture_window_by_handle_clearly_invalid_returns_error() {
     // Use a pointer-like value that is very unlikely to be a valid window
-    let result = captcho_capture_window_by_handle(0xDEADBEEFu64);
+    let result = captcho_capture_window_by_handle(0xDEADBEEFu64, 0, 1, 0);
     assert_ne!(result.status, CaptureStatus::Ok);
     assert!(result.frame_data.is_null());
     assert!(!result.error_message.is_null());
@@ -91,7 +98,7 @@ fn capture_window_by_handle_clearly_invalid_returns_error() {
 #[test]
 fn capture_window_by_handle_small_nonzero_returns_error() {
     // Small nonzero values are not valid HWNDs
-    let result = captcho_capture_window_by_handle(1);
+    let result = captcho_capture_window_by_handle(1, 0, 1, 0);
     assert_ne!(result.status, CaptureStatus::Ok);
     assert!(result.frame_data.is_null());
     unsafe { captcho_free_capture_result(result) };
@@ -99,7 +106,7 @@ fn capture_window_by_handle_small_nonzero_returns_error() {
 
 #[test]
 fn capture_window_by_handle_max_u64_returns_error() {
-    let result = captcho_capture_window_by_handle(u64::MAX);
+    let result = captcho_capture_window_by_handle(u64::MAX, 0, 1, 0);
     assert_ne!(result.status, CaptureStatus::Ok);
     assert!(result.frame_data.is_null());
     unsafe { captcho_free_capture_result(result) };
@@ -111,7 +118,9 @@ fn capture_window_by_handle_max_u64_returns_error() {
 
 #[test]
 fn capture_active_window_returns_valid_structure() {
-    let result = captcho_capture_active_window();
+    // Defaults (cursor off, decorations/shadow on) preserve prior behavior;
+    // only the FFI signature changed (spec #34).
+    let result = captcho_capture_active_window(0, 1, 1);
     if result.status == CaptureStatus::Ok {
         // WGC available — validate frame invariants
         assert!(!result.frame_data.is_null());
@@ -152,7 +161,7 @@ fn capture_window_under_cursor_returns_valid_structure() {
 #[test]
 fn window_error_messages_contain_phase_labels() {
     // Test with invalid handle — error should reference select_window or validate_window
-    let result = captcho_capture_window_by_handle(0);
+    let result = captcho_capture_window_by_handle(0, 0, 1, 0);
     let msg = unsafe { std::ffi::CStr::from_ptr(result.error_message) };
     let msg_str = msg.to_str().unwrap_or("");
     // Phase labels from our implementation
@@ -170,7 +179,7 @@ fn window_error_messages_contain_phase_labels() {
 
 #[test]
 fn window_error_messages_are_sanitized() {
-    let result = captcho_capture_window_by_handle(999);
+    let result = captcho_capture_window_by_handle(999, 0, 1, 0);
     if !result.error_message.is_null() {
         let msg = unsafe { std::ffi::CStr::from_ptr(result.error_message) };
         let msg_str = msg.to_str().unwrap_or("");
@@ -196,14 +205,14 @@ fn window_error_messages_are_sanitized() {
 
 #[test]
 fn free_error_result_from_window_capture_is_safe() {
-    let result = captcho_capture_window_by_handle(0);
+    let result = captcho_capture_window_by_handle(0, 0, 1, 0);
     // Should not panic
     unsafe { captcho_free_capture_result(result) };
 }
 
 #[test]
 fn double_free_error_from_window_capture_is_safe() {
-    let result = captcho_capture_window_by_handle(0);
+    let result = captcho_capture_window_by_handle(0, 0, 1, 0);
     // Free frame (null) and error message separately
     unsafe {
         captcho_free_frame(result.frame_data);
@@ -220,7 +229,8 @@ fn double_free_error_from_window_capture_is_safe() {
 fn existing_monitor_exports_still_exist() {
     let _fn_ptr: extern "C" fn() -> CaptureResult = captcho_capture_frame;
     let _fn_ptr: extern "C" fn(u32) -> CaptureResult = captcho_capture_monitor_by_index;
-    let _fn_ptr: extern "C" fn() -> CaptureResult = captcho_capture_all_monitors;
+    // captcho_capture_all_monitors now carries the mouse-pointer flag (spec #34).
+    let _fn_ptr: extern "C" fn(i32) -> CaptureResult = captcho_capture_all_monitors;
 }
 
 #[test]

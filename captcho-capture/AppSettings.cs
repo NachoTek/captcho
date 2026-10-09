@@ -22,6 +22,16 @@ public enum SettingsField
     FilenameTemplate,
     /// <summary>The <see cref="AppSettings.GlobalHotkeyEnabledStates"/> field.</summary>
     GlobalHotkeyEnabledStates,
+    /// <summary>The <see cref="AppSettings.GlobalHotkeyBindings"/> field.</summary>
+    GlobalHotkeyBindings,
+    /// <summary>The <see cref="AppSettings.CaptureOptions"/> field.</summary>
+    CaptureOptions,
+    /// <summary>The <see cref="AppSettings.AnnotationSettings"/> field.</summary>
+    AnnotationSettings,
+    /// <summary>The <see cref="AppSettings.ExportSettings"/> field.</summary>
+    ExportSettings,
+    /// <summary>The <see cref="AppSettings.LaunchBehavior"/> field.</summary>
+    LaunchBehavior,
 }
 
 /// <summary>
@@ -73,6 +83,149 @@ public sealed class AppSettings
     [JsonConverter(typeof(GlobalHotkeyEnabledStatesConverter))]
     public Dictionary<GlobalHotkeyRoute, bool>? GlobalHotkeyEnabledStates { get; set; }
 
+    /// <summary>
+    /// Per-Global-Hotkey key bindings, keyed by the capture route each Global
+    /// Hotkey triggers (<see cref="GlobalHotkeyRoute"/>). Null (or an absent
+    /// route) means the route's default combination from
+    /// <see cref="GlobalHotkeyBindingDefaults"/> — the legacy hardcoded binding,
+    /// which is how settings written before remapping migrated: nothing moves,
+    /// behavior is preserved. When non-null, a recorded combination overrides
+    /// the default for that route.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Keying by <see cref="GlobalHotkeyRoute"/> keeps this model free of UI and
+    /// Win32-id dependencies, mirroring <see cref="GlobalHotkeyEnabledStates"/>.
+    /// The UI layer resolves route bindings into Win32 specs at registration
+    /// time; this layer never needs the UI map to interpret persisted state.
+    /// </para>
+    /// <para>
+    /// The JSON property name is pinned to <c>hotkeyBindings</c>; on-disk keys
+    /// are the route names (e.g. <c>fullDesktop</c>) with nested
+    /// <c>modifiers</c>/<c>virtualKey</c> objects, matching the enabled-states
+    /// scheme so settings.json stays uniform.
+    /// </para>
+    /// </remarks>
+    [JsonPropertyName("hotkeyBindings")]
+    [JsonConverter(typeof(GlobalHotkeyBindingsConverter))]
+    public Dictionary<GlobalHotkeyRoute, HotkeyBinding>? GlobalHotkeyBindings { get; set; }
+
+    /// <summary>
+    /// Persistent Capture-option defaults (mouse pointer, window decorations, window
+    /// shadow) carried through the workflow into the managed/native Capture contract
+    /// (spec user stories 27–30). The decoration/shadow dependency is enforced on
+    /// read via <see cref="EffectiveCaptureOptions"/>, so a persisted inconsistent
+    /// combination is silently reconciled rather than blocking Apply/OK.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Defaults to <see cref="CaptureOptions.WithDefaults"/> and is never null on a
+    /// fresh instance. The JSON property name is pinned to <c>captureOptions</c>;
+    /// older settings files written before this field shipped load with defaults
+    /// (the JSON deserializer leaves the property at its initialized value).
+    /// </para>
+    /// <para>
+    /// A nested object is used (rather than three flat boolean properties) so the
+    /// three flags travel together as one unit and the dependency rule has a single
+    /// owner (<see cref="CaptureOptions.Normalized"/>).
+    /// </para>
+    /// </remarks>
+    [JsonPropertyName("captureOptions")]
+    public CaptureOptions CaptureOptions { get; set; } = CaptureOptions.WithDefaults();
+
+    /// <summary>
+    /// Persistent defaults for the post-capture Annotation toolbar. Older settings files
+    /// omit this object and retain the pen defaults through the property initializer and
+    /// <see cref="EffectiveAnnotationSettings"/>.
+    /// </summary>
+    [JsonPropertyName("annotationSettings")]
+    public AnnotationSettings AnnotationSettings { get; set; } = AnnotationSettings.WithDefaults();
+
+    /// <summary>
+    /// Persisted export format (PNG or JPEG) and JPEG quality (issue #45).
+    /// Older settings files written before this field shipped load with the
+    /// PNG defaults through the property initializer and
+    /// <see cref="EffectiveExportSettings"/> — a safe upgrade, never a load
+    /// failure.
+    /// </summary>
+    [JsonPropertyName("exportSettings")]
+    public ExportSettings ExportSettings { get; set; } = ExportSettings.WithDefaults();
+
+    /// <summary>How long confirmed Selection geometry is retained.</summary>
+    public RememberSelectionLifetime RememberSelection { get; set; } = RememberSelectionLifetime.Never;
+
+    /// <summary>
+    /// Geometry retained for <see cref="RememberSelectionLifetime.Always"/>. Session
+    /// geometry is process state and is never written to Configuration.
+    /// </summary>
+    public RememberedSelectionGeometry? RememberedSelection { get; set; }
+
+    /// <summary>
+    /// Whether a captured Frame must pass through Annotation before Export.
+    /// Older Configuration files omit this property and therefore retain the
+    /// enabled-by-default post-capture workflow.
+    /// </summary>
+    public bool AnnotationEnabled { get; set; } = true;
+
+    /// <summary>
+    /// BCP-47 tag of the language Windows OCR recognizes with (e.g.,
+    /// "en-US"), or null/empty to use the user's default OCR language. The
+    /// tag is a selection, not a guarantee: at recognition time it is matched
+    /// against the installed OCR language packs, and a tag whose pack was
+    /// removed resolves to a retryable unsupported-language outcome rather
+    /// than a silent fallback (spec #49).
+    /// </summary>
+    /// <remarks>
+    /// The JSON property name is pinned to <c>ocrLanguageTag</c>; older
+    /// settings files written before OCR shipped load with the null default
+    /// (engine default language), matching the pre-OCR behavior.
+    /// </remarks>
+    [JsonPropertyName("ocrLanguageTag")]
+    public string? OcrLanguageTag { get; set; }
+
+    /// <summary>
+    /// Persisted defaults for the configured automatic delivery actions that
+    /// run after Annotation confirmation (issue #47): automatic save, Copy
+    /// Frame, and Copy Path, each independently toggled. Older Configuration
+    /// files omit this object and retain the disabled (manual-only) defaults
+    /// through the property initializer and <see cref="EffectiveAutomaticExport"/>.
+    /// </summary>
+    [JsonPropertyName("automaticExport")]
+    public AutomaticExportSettings AutomaticExport { get; set; } = AutomaticExportSettings.WithDefaults();
+
+    /// <summary>
+    /// Persisted launch behavior: what captcho does on startup (issue #53) —
+    /// Do nothing (the safe default), trigger the last Capture Mode used, or
+    /// trigger a configured Capture Mode. Older Configuration files omit this
+    /// object and retain the Do-nothing default through the property
+    /// initializer and <see cref="EffectiveLaunchBehavior"/>.
+    /// </summary>
+    [JsonPropertyName("launchBehavior")]
+    public LaunchBehaviorSettings LaunchBehavior { get; set; } = LaunchBehaviorSettings.WithDefaults();
+
+    /// <summary>
+    /// Whether captcho exits automatically after a confirmed Capture's
+    /// delivery completes (issue #54). The exit fires only after the
+    /// Annotation overlay is dismissed and every configured delivery
+    /// action — manual or automatic — finished successfully; cancellation,
+    /// failure, and unfinished actions keep the application running.
+    /// Older Configuration files omit this property and therefore retain
+    /// the never-exit default.
+    /// </summary>
+    [JsonPropertyName("exitAfterDelivery")]
+    public bool ExitAfterDelivery { get; set; }
+
+    /// <summary>
+    /// The last Capture Mode used, recorded at runtime so the
+    /// <see cref="LaunchAction.LastCaptureMode"/> launch behavior can restore
+    /// it on the next run. Recording is owned by the workflow session's
+    /// launch state (only while that action needs it); this property is pure
+    /// persisted state. Null until a capture happens, and for older
+    /// Configuration files.
+    /// </summary>
+    [JsonPropertyName("lastCaptureMode")]
+    public CaptureMode? LastCaptureMode { get; set; }
+
     // Future properties can be added here. System.Text.Json will ignore
     // unknown properties on read and only serialize declared ones.
 
@@ -84,6 +237,17 @@ public sealed class AppSettings
     {
         SaveLocation = ExportDefaults.DefaultSaveDirectory,
         FilenameTemplate = ExportDefaults.DefaultFilenameTemplate,
+        CaptureOptions = CaptureOptions.WithDefaults(),
+        AnnotationSettings = AnnotationSettings.WithDefaults(),
+        ExportSettings = ExportSettings.WithDefaults(),
+        RememberSelection = RememberSelectionLifetime.Never,
+        RememberedSelection = null,
+        AnnotationEnabled = true,
+        AutomaticExport = AutomaticExportSettings.WithDefaults(),
+        OcrLanguageTag = null,
+        LaunchBehavior = LaunchBehaviorSettings.WithDefaults(),
+        ExitAfterDelivery = false,
+        LastCaptureMode = null,
     };
 
     /// <summary>
@@ -105,6 +269,74 @@ public sealed class AppSettings
             : FilenameTemplate;
 
     /// <summary>
+    /// Resolves the effective Capture options, falling back to <see cref="CaptureOptions.WithDefaults"/>
+    /// when the backing field is null (defensive — it is initialized non-null, but a
+    /// future JSON shape or hand-edited settings file could leave it null on read)
+    /// and reconciling the decoration/shadow dependency through
+    /// <see cref="CaptureOptions.Normalized"/>. This is the value the workflow reads
+    /// when composing Capture flags — there is no path where it observes an
+    /// impossible combination (shadow on while decorations are off).
+    /// </summary>
+    [JsonIgnore]
+    public CaptureOptions EffectiveCaptureOptions =>
+        (CaptureOptions ?? CaptureOptions.WithDefaults()).Normalized();
+
+    /// <summary>Resolves safe Annotation defaults for runtime use.</summary>
+    [JsonIgnore]
+    public AnnotationSettings EffectiveAnnotationSettings =>
+        (AnnotationSettings ?? AnnotationSettings.WithDefaults()).Normalized();
+
+    /// <summary>
+    /// Resolves safe export format settings for runtime use: falls back to
+    /// PNG defaults when the backing field is null (defensive — hand-edited
+    /// settings files) and reconciles out-of-range quality through
+    /// <see cref="ExportSettings.Normalized"/>. This is the value the Export
+    /// workflow reads when writing a Frame; there is no path where it observes
+    /// an out-of-range quality.
+    /// </summary>
+    [JsonIgnore]
+    public ExportSettings EffectiveExportSettings =>
+        (ExportSettings ?? ExportSettings.WithDefaults()).Normalized();
+
+    /// <summary>
+    /// Resolves the automatic Export settings for runtime use, falling back to
+    /// the disabled defaults when the backing field is null (defensive — it is
+    /// initialized non-null, but a hand-edited settings file could leave it
+    /// null on read).
+    /// </summary>
+    [JsonIgnore]
+    public AutomaticExportSettings EffectiveAutomaticExport =>
+        AutomaticExport ?? AutomaticExportSettings.WithDefaults();
+
+    /// <summary>
+    /// Resolves the launch behavior for runtime use, falling back to the
+    /// Do-nothing defaults when the backing field is null (defensive — it is
+    /// initialized non-null, but a hand-edited settings file could leave it
+    /// null on read).
+    /// </summary>
+    [JsonIgnore]
+    public LaunchBehaviorSettings EffectiveLaunchBehavior =>
+        LaunchBehavior ?? LaunchBehaviorSettings.WithDefaults();
+
+    /// <summary>
+    /// Resolves the recorded last Capture Mode for runtime use, falling back
+    /// to null when the persisted value is absent or an out-of-range enum
+    /// (a hand-edited settings file).
+    /// </summary>
+    [JsonIgnore]
+    public CaptureMode? EffectiveLastCaptureMode =>
+        LastCaptureMode is not null && Enum.IsDefined(LastCaptureMode.Value)
+            ? LastCaptureMode
+            : null;
+
+    /// <summary>Returns a valid remembered-Selection lifetime for runtime use.</summary>
+    [JsonIgnore]
+    public RememberSelectionLifetime EffectiveRememberSelection =>
+        Enum.IsDefined(RememberSelection)
+            ? RememberSelection
+            : RememberSelectionLifetime.Never;
+
+    /// <summary>
     /// Resolves whether the Global Hotkey for the given capture route is enabled.
     /// A null states map (settings file predates per-Global-Hotkey toggles) or a missing
     /// entry means enabled, matching the pre-existing "every global hotkey on"
@@ -114,6 +346,19 @@ public sealed class AppSettings
         GlobalHotkeyEnabledStates is null
         || !GlobalHotkeyEnabledStates.TryGetValue(route, out bool enabled)
         || enabled;
+
+    /// <summary>
+    /// Resolves the effective key combination for the Global Hotkey of the given
+    /// capture route. A null bindings map (settings written before remapping) or
+    /// a missing entry resolves to the route's legacy default combination from
+    /// <see cref="GlobalHotkeyBindingDefaults"/> — the pre-remap hardcoded
+    /// binding — so existing Configuration migrates without losing behavior.
+    /// </summary>
+    public HotkeyBinding EffectiveGlobalHotkeyBinding(GlobalHotkeyRoute route) =>
+        GlobalHotkeyBindings is not null
+        && GlobalHotkeyBindings.TryGetValue(route, out var binding)
+            ? binding
+            : GlobalHotkeyBindingDefaults.For(route);
 
     /// <summary>
     /// Validates the settings, returning a list of field-attributed issues found.
@@ -169,13 +414,69 @@ public sealed class AppSettings
             }
         }
 
+        // GlobalHotkeyBindings: remapped combinations. A binding with no virtual
+        // key cannot be registered or pressed — reject it at the persistence
+        // boundary so Apply/OK gate on a real combination. The typed API and the
+        // recorder cannot produce this through normal use (defensive rule).
+        if (GlobalHotkeyBindings is not null)
+        {
+            foreach (var (route, binding) in GlobalHotkeyBindings)
+            {
+                if (!Enum.IsDefined(typeof(GlobalHotkeyRoute), route)
+                    || binding.VirtualKey <= 0
+                    || binding.Modifiers < 0)
+                {
+                    issues.Add(new SettingsIssue(
+                        SettingsField.GlobalHotkeyBindings,
+                        "Global Hotkey bindings must use a known route and a real key combination."));
+                    break;
+                }
+            }
+        }
+
+        if (AnnotationSettings is null
+            || !Enum.IsDefined(AnnotationSettings.DefaultTool)
+            || AnnotationSettings.StrokeWidth < AnnotationSettings.MinimumStrokeWidth
+            || AnnotationSettings.StrokeWidth > AnnotationSettings.MaximumStrokeWidth)
+        {
+            issues.Add(new SettingsIssue(
+                SettingsField.AnnotationSettings,
+                "Annotation defaults must use a supported tool and a stroke width from 1 through 64."));
+        }
+
+        // LaunchBehavior: the Configured Capture Mode action must carry a
+        // known Capture Mode. The Behavior tab's typed edits always supply
+        // one, so this gates the persistence boundary (a hand-edited or
+        // partially-written settings file cannot configure "capture nothing").
+        if (LaunchBehavior is null || !LaunchBehavior.IsValid)
+        {
+            issues.Add(new SettingsIssue(
+                SettingsField.LaunchBehavior,
+                "Launch behavior must use a supported action, and a configured launch must select a Capture Mode."));
+        }
+
+        // ExportSettings: format must be a defined ExportImageFormat and JPEG
+        // quality must lie in the inclusive 0–100 range. Blocks Apply/OK so an
+        // invalid Configuration is rejected atomically rather than persisted.
+        if (ExportSettings is null
+            || !Enum.IsDefined(ExportSettings.Format)
+            || ExportSettings.JpegQuality < ExportSettings.MinimumJpegQuality
+            || ExportSettings.JpegQuality > ExportSettings.MaximumJpegQuality)
+        {
+            issues.Add(new SettingsIssue(
+                SettingsField.ExportSettings,
+                "Export format must be PNG or JPEG, and JPEG quality must be from 0 through 100."));
+        }
+
         return issues;
     }
 
     /// <summary>
     /// Returns a sanitized copy with null/empty/whitespace fields replaced by defaults.
-    /// The Global Hotkey enabled-states dictionary is deep-copied (or kept null) so the
-    /// returned copy is fully independent of this instance.
+    /// The Global Hotkey enabled-states dictionary is deep-copied (or kept null) and
+    /// CaptureOptions is reconciled through its own Normalized (so the decoration/shadow
+    /// dependency is enforced at this boundary), so the returned copy is fully
+    /// independent of this instance.
     /// </summary>
     public AppSettings Normalized() => new()
     {
@@ -184,5 +485,21 @@ public sealed class AppSettings
         GlobalHotkeyEnabledStates = GlobalHotkeyEnabledStates is null
             ? null
             : new Dictionary<GlobalHotkeyRoute, bool>(GlobalHotkeyEnabledStates),
+        GlobalHotkeyBindings = GlobalHotkeyBindings is null
+            ? null
+            : new Dictionary<GlobalHotkeyRoute, HotkeyBinding>(GlobalHotkeyBindings),
+        CaptureOptions = EffectiveCaptureOptions,
+        AnnotationSettings = EffectiveAnnotationSettings,
+        ExportSettings = EffectiveExportSettings,
+        RememberSelection = EffectiveRememberSelection,
+        RememberedSelection = EffectiveRememberSelection == RememberSelectionLifetime.Always
+            ? RememberedSelection?.Normalized()
+            : null,
+        AnnotationEnabled = AnnotationEnabled,
+        AutomaticExport = EffectiveAutomaticExport,
+        OcrLanguageTag = string.IsNullOrWhiteSpace(OcrLanguageTag) ? null : OcrLanguageTag.Trim(),
+        LaunchBehavior = EffectiveLaunchBehavior,
+        ExitAfterDelivery = ExitAfterDelivery,
+        LastCaptureMode = EffectiveLastCaptureMode,
     };
 }

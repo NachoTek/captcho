@@ -3,11 +3,12 @@
 // Runs the native capture off the UI thread, converts to a WriteableBitmap,
 // and returns structured results with timing for all phases.
 // Surfaces errors as user-readable strings rather than exceptions.
-// Caches the last successful ContiguousBitmap for export workflows.
+// Caches the last successful ContiguousBitmap so the legacy capture routes
+// can hand their Frame to the runtime Workflow Session, which owns the
+// Export actions (Save, Save As, Copy Frame, Copy Path) since issue #44.
 
 using System;
 using System.Diagnostics;
-using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI.Xaml.Media.Imaging;
 using captcho.Capture;
@@ -40,7 +41,9 @@ public sealed class CapturePreviewResult
 /// <summary>
 /// Orchestrates the capture→convert→display pipeline asynchronously.
 /// Does not touch UI elements directly — returns a result for the caller to apply.
-/// Caches the last successful ContiguousBitmap for save/copy export workflows.
+/// Caches the last successful ContiguousBitmap; the runtime Workflow Session
+/// adopts it (AdoptFrame) so the session remains the single Frame owner for
+/// the Export actions.
 /// </summary>
 public sealed class CapturePreviewService
 {
@@ -48,84 +51,12 @@ public sealed class CapturePreviewService
 
     /// <summary>
     /// The most recent successfully captured bitmap, or null if no capture has succeeded.
-    /// Thread-safe read via volatile; written only under lock in CaptureCoreAsync.
+    /// Thread-safe read via volatile. Written by the legacy capture routes
+    /// (under CaptureRaw/BuildDisplayResultAsync on this class); MainWindow
+    /// hands it to <see cref="CaptureWorkflowSession{TImage}.AdoptFrame"/> so
+    /// the workflow session owns the Frame for Export.
     /// </summary>
     public ContiguousBitmap? LastCapturedBitmap => _lastCapturedBitmap;
-
-    /// <summary>
-    /// Saves the last captured bitmap to a specific file path as PNG.
-    /// Returns a structured ExportResult — never throws for expected failures.
-    /// </summary>
-    /// <param name="destinationPath">Full file path for the output PNG.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>ExportResult with success/failure, diagnostics, and timing.</returns>
-    public ExportResult SaveLastCaptureToFileAsync(string destinationPath,
-        CancellationToken cancellationToken = default)
-    {
-        var bitmap = _lastCapturedBitmap;
-        if (bitmap == null)
-        {
-            return ExportResult.Fail(ExportPhase.Validation,
-                "No capture to export",
-                TimeSpan.Zero);
-        }
-
-        return PngExportService.SaveAsPng(bitmap, destinationPath, cancellationToken);
-    }
-
-    /// <summary>
-    /// Saves the last captured bitmap using the provided settings for directory and template.
-    /// Resolves filename collisions automatically.
-    /// Returns a structured ExportResult — never throws for expected failures.
-    /// </summary>
-    /// <param name="settings">Application settings providing save location and filename template.</param>
-    /// <param name="title">Optional title for the filename template.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>ExportResult with success/failure, diagnostics, and timing.</returns>
-    public ExportResult SaveLastCaptureWithSettingsAsync(
-        AppSettings settings,
-        string? title = null,
-        CancellationToken cancellationToken = default)
-    {
-        var bitmap = _lastCapturedBitmap;
-        if (bitmap == null)
-        {
-            return ExportResult.Fail(ExportPhase.Validation,
-                "No capture to export",
-                TimeSpan.Zero);
-        }
-
-        string path = ExportFilenameTemplate.GetExportPath(settings, DateTime.Now, title);
-        path = ExportFilenameTemplate.ResolveCollision(path);
-
-        return PngExportService.SaveAsPng(bitmap, path, cancellationToken);
-    }
-
-    /// <summary>
-    /// Saves the last captured bitmap to the default location using the standard template.
-    /// Resolves filename collisions automatically.
-    /// Returns a structured ExportResult — never throws for expected failures.
-    /// </summary>
-    /// <param name="title">Optional title for the filename template.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>ExportResult with success/failure, diagnostics, and timing.</returns>
-    public ExportResult SaveLastCaptureToDefaultLocationAsync(
-        string? title = null,
-        CancellationToken cancellationToken = default)
-    {
-        return SaveLastCaptureWithSettingsAsync(AppSettings.WithDefaults(), title, cancellationToken);
-    }
-
-    /// <summary>
-    /// Creates a ClipboardExportService wired to this instance's last capture cache.
-    /// </summary>
-    /// <param name="clipboardAdapter">Platform clipboard adapter.</param>
-    /// <returns>A ClipboardExportService that reads from this service's cache.</returns>
-    public ClipboardExportService CreateClipboardExporter(IClipboardAdapter clipboardAdapter)
-    {
-        ArgumentNullException.ThrowIfNull(clipboardAdapter);
-        return new ClipboardExportService(clipboardAdapter, () => _lastCapturedBitmap);
-    }
 
     /// <summary>
     /// Clears the cached last capture. Useful for testing or explicit reset.
@@ -133,16 +64,6 @@ public sealed class CapturePreviewService
     public void ClearLastCapture()
     {
         _lastCapturedBitmap = null;
-    }
-
-    /// <summary>
-    /// Captures the full virtual desktop (all monitors stitched) and converts to displayable form.
-    /// Native capture runs on a background thread; WriteableBitmap is created on the calling (UI) thread.
-    /// </summary>
-    public async Task<CapturePreviewResult> CaptureFullDesktopAsync()
-    {
-        var raw = await Task.Run(() => CaptureRaw("Full Desktop", SafeCaptureResult.CaptureAllMonitors));
-        return await BuildDisplayResultAsync(raw);
     }
 
     /// <summary>
@@ -159,18 +80,6 @@ public sealed class CapturePreviewService
     }
 
     /// <summary>
-    /// Captures the currently active (foreground) window and converts to displayable form.
-    /// Uses WindowResolver for a descriptive mode label with title and handle.
-    /// Native capture runs on a background thread; WriteableBitmap is created on the calling (UI) thread.
-    /// </summary>
-    public async Task<CapturePreviewResult> CaptureActiveWindowAsync()
-    {
-        string mode = WindowResolver.BuildActiveWindowLabel();
-        var raw = await Task.Run(() => CaptureRaw(mode, SafeCaptureResult.CaptureActiveWindow));
-        return await BuildDisplayResultAsync(raw);
-    }
-
-    /// <summary>
     /// Captures the top-level window under the mouse cursor and converts to displayable form.
     /// Uses WindowResolver for a descriptive mode label with title and handle.
     /// Native capture runs on a background thread; WriteableBitmap is created on the calling (UI) thread.
@@ -179,78 +88,6 @@ public sealed class CapturePreviewService
     {
         string mode = WindowResolver.BuildWindowUnderCursorLabel();
         var raw = await Task.Run(() => CaptureRaw(mode, SafeCaptureResult.CaptureWindowUnderCursor));
-        return await BuildDisplayResultAsync(raw);
-    }
-
-    /// <summary>
-    /// Captures a rectangular region of the virtual desktop and converts to displayable form.
-    /// Rounds fractional coordinates intentionally; rejects zero-dimension regions.
-    /// The mode label includes signed coordinates and dimensions for diagnostics.
-    /// Native capture runs on a background thread; WriteableBitmap is created on the calling (UI) thread.
-    /// </summary>
-    /// <param name="region">The region rectangle in virtual-desktop coordinates (WinUI Rect).</param>
-    /// <returns>A capture result with "Rectangular Region (...)" mode label, timings, and error info.</returns>
-    public async Task<CapturePreviewResult> CaptureRegionAsync(Windows.Foundation.Rect region)
-    {
-        // Round/cast coordinates intentionally: X/Y are signed (virtual-desktop can have negative origin),
-        // Width/Height are unsigned (must be positive). Clamp near-zero dimensions to zero.
-        int x = (int)Math.Round(region.X);
-        int y = (int)Math.Round(region.Y);
-        uint width = (uint)Math.Max(0, (int)Math.Round(region.Width));
-        uint height = (uint)Math.Max(0, (int)Math.Round(region.Height));
-
-        string mode = $"Rectangular Region (X={x}, Y={y}, {width}×{height})";
-
-        if (width == 0 || height == 0)
-        {
-            return new CapturePreviewResult
-            {
-                Mode = mode,
-                Error = $"Region has zero dimensions after rounding: {width}×{height}.",
-            };
-        }
-
-        var raw = await Task.Run(() => CaptureRaw(mode, () => SafeCaptureResult.CaptureRegion(x, y, width, height)));
-        return await BuildDisplayResultAsync(raw);
-    }
-
-    /// <summary>
-    /// Captures the full virtual desktop and returns the raw ContiguousBitmap.
-    /// Used by the region selection overlay to pre-capture the desktop before the user selects.
-    /// Returns null with an error message if capture fails.
-    /// </summary>
-    /// <returns>Tuple with the ContiguousBitmap (or null) and an error message (or null).</returns>
-    public async Task<(ContiguousBitmap? Bitmap, string? Error)> CaptureFullDesktopRawAsync()
-    {
-        var raw = await Task.Run(() => CaptureRaw("Full Desktop", SafeCaptureResult.CaptureAllMonitors));
-        return (raw.Bitmap, raw.Error);
-    }
-
-    /// <summary>
-    /// Converts an already-cropped bitmap into a displayable CapturePreviewResult.
-    /// Used after region selection to avoid re-capturing the screen.
-    /// Caches the cropped bitmap for export workflows.
-    /// </summary>
-    /// <param name="croppedBitmap">Pre-cropped region bitmap.</param>
-    /// <param name="region">The selected region rectangle for mode/dimension labels.</param>
-    /// <returns>A CapturePreviewResult ready for display.</returns>
-    public async Task<CapturePreviewResult> BuildResultFromCroppedBitmapAsync(
-        ContiguousBitmap croppedBitmap, Windows.Foundation.Rect region)
-    {
-        int x = (int)Math.Round(region.X);
-        int y = (int)Math.Round(region.Y);
-        string mode = $"Rectangular Region (X={x}, Y={y}, {croppedBitmap.Width}×{croppedBitmap.Height})";
-        string dimensions = $"{croppedBitmap.Width}×{croppedBitmap.Height}";
-
-        var raw = new RawCaptureResult
-        {
-            Mode = mode,
-            Dimensions = dimensions,
-            CaptureMs = 0,
-            Bitmap = croppedBitmap,
-            Error = null,
-        };
-
         return await BuildDisplayResultAsync(raw);
     }
 

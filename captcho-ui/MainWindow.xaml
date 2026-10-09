@@ -33,7 +33,17 @@ Layout:
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
@@ -83,16 +93,66 @@ Layout:
                     Click="RegionCapture_Click"
                     CornerRadius="6"/>
 
+            <Button x:Name="SelectedMonitorButton"
+                    Grid.Column="5"
+                    Content="Selected Monitor"
+                    MinWidth="140" MinHeight="40"
+                    Margin="0,0,8,0"
+                    HorizontalAlignment="Left"
+                    Click="SelectedMonitor_Click"
+                    CornerRadius="6"
+                    ToolTipService.ToolTip="Pick a monitor by clicking it"/>
+
+            <Button x:Name="SelectedWindowButton"
+                    Grid.Column="6"
+                    Content="Selected Window"
+                    MinWidth="140" MinHeight="40"
+                    Margin="0,0,8,0"
+                    HorizontalAlignment="Left"
+                    Click="SelectedWindow_Click"
+                    CornerRadius="6"
+                    ToolTipService.ToolTip="Pick a window by clicking it"/>
+
             <!-- Export separator -->
             <Border x:Name="ExportSeparator"
-                    Grid.Column="5"
+                    Grid.Column="7"
+                    Width="1" Margin="4,4"
+                    VerticalAlignment="Stretch"
+                    Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+            <!-- Recognize Text + Scan QR: disabled until a capture succeeds -->
+            <StackPanel Grid.Column="8" Orientation="Horizontal">
+                <Button x:Name="RecognizeTextButton"
+                        Content="Recognize Text"
+                        MinWidth="120" MinHeight="40"
+                        Margin="8,0,0,0"
+                        VerticalAlignment="Stretch"
+                        IsEnabled="False"
+                        Click="RecognizeText_Click"
+                        CornerRadius="6"
+                        ToolTipService.ToolTip="Recognize text in the captured Frame with Windows OCR"/>
+
+                <Button x:Name="ScanQrButton"
+                        Content="Scan QR"
+                        MinWidth="90" MinHeight="40"
+                        Margin="8,0,8,0"
+                        VerticalAlignment="Stretch"
+                        IsEnabled="False"
+                        Click="ScanQr_Click"
+                        CornerRadius="6"
+                        ToolTipService.ToolTip="Scan QR codes in the captured Frame"/>
+            </StackPanel>
+
+            <!-- Menu separator -->
+            <Border x:Name="MenuSeparator"
+                    Grid.Column="9"
                     Width="1" Margin="4,4"
                     VerticalAlignment="Stretch"
                     Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
 
             <!-- Settings button -->
             <Button x:Name="SettingsButton"
-                    Grid.Column="6"
+                    Grid.Column="10"
                     Content="Settings…"
                     MinWidth="90" MinHeight="40"
                     Margin="8,0,8,0"
@@ -100,16 +160,9 @@ Layout:
                     CornerRadius="6"
                     ToolTipService.ToolTip="Open settings (F4 or Ctrl+,)"/>
 
-            <!-- Menu separator -->
-            <Border x:Name="MenuSeparator"
-                    Grid.Column="7"
-                    Width="1" Margin="4,4"
-                    VerticalAlignment="Stretch"
-                    Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
-
             <!-- About button -->
             <Button x:Name="AboutButton"
-                    Grid.Column="8"
+                    Grid.Column="11"
                     Content="About"
                     MinWidth="80" MinHeight="40"
                     Margin="8,0,8,0"
@@ -118,7 +171,7 @@ Layout:
 
             <!-- Exit button -->
             <Button x:Name="ExitButton"
-                    Grid.Column="9"
+                    Grid.Column="12"
                     Content="Exit"
                     MinWidth="80" MinHeight="40"
                     Margin="8,0,8,0"
@@ -127,7 +180,7 @@ Layout:
 
             <!-- Export buttons: disabled until a capture succeeds -->
             <Button x:Name="SaveButton"
-                    Grid.Column="10"
+                    Grid.Column="13"
                     Content="Save"
                     MinWidth="80" MinHeight="40"
                     Margin="0,0,6,0"
@@ -137,7 +190,7 @@ Layout:
                     ToolTipService.ToolTip="Save to default location"/>
 
             <Button x:Name="SaveAsButton"
-                    Grid.Column="11"
+                    Grid.Column="14"
                     Content="Save As…"
                     MinWidth="90" MinHeight="40"
                     Margin="0,0,6,0"
@@ -147,18 +200,48 @@ Layout:
                     ToolTipService.ToolTip="Choose location and filename"/>
 
             <Button x:Name="CopyToClipboardButton"
-                    Grid.Column="12"
+                    Grid.Column="15"
                     Content="Copy"
                     MinWidth="80" MinHeight="40"
-                    Margin="0,0,8,0"
+                    Margin="0,0,6,0"
                     IsEnabled="False"
                     Click="CopyToClipboard_Click"
                     CornerRadius="6"
                     ToolTipService.ToolTip="Copy screenshot to clipboard"/>
 
+            <Button x:Name="CopyPathButton"
+                    Grid.Column="15"
+                    Content="Copy Path"
+                    MinWidth="90" MinHeight="40"
+                    Margin="0,0,6,0"
+                    IsEnabled="False"
+                    Click="CopyPath_Click"
+                    CornerRadius="6"
+                    ToolTipService.ToolTip="Copy the saved file's path (available after a save)"/>
+
+            <Button x:Name="OpenWithButton"
+                    Grid.Column="16"
+                    Content="Open With…"
+                    MinWidth="95" MinHeight="40"
+                    Margin="0,0,6,0"
+                    IsEnabled="False"
+                    Click="OpenWith_Click"
+                    CornerRadius="6"
+                    ToolTipService.ToolTip="Open the saved capture with a Windows-registered application (available after a save)"/>
+
+            <Button x:Name="ShareButton"
+                    Grid.Column="17"
+                    Content="Share…"
+                    MinWidth="85" MinHeight="40"
+                    Margin="0,0,8,0"
+                    IsEnabled="False"
+                    Click="Share_Click"
+                    CornerRadius="6"
+                    ToolTipService.ToolTip="Share the saved capture through Windows (available after a save)"/>
+
             <!-- Delay input: compact NumberBox for 0–60 second countdown -->
             <NumberBox x:Name="DelaySecondsInput"
-                       Grid.Column="13"
+                       Grid.Column="18"
                        Header="Delay (s)"
                        Minimum="0" Maximum="60"
                        SmallChange="1" LargeChange="5"
@@ -171,7 +254,7 @@ Layout:
 
             <!-- Countdown progress: determinate bar hidden when idle -->
             <ProgressBar x:Name="CountdownProgress"
-                         Grid.Column="14"
+                         Grid.Column="19"
                          Width="120" MinHeight="6"
                          Margin="8,0,4,0"
                          VerticalAlignment="Center"
@@ -181,7 +264,7 @@ Layout:
 
             <!-- Cancel countdown button: hidden when idle -->
             <Button x:Name="CancelDelayButton"
-                    Grid.Column="15"
+                    Grid.Column="20"
                     Content="Cancel"
                     MinWidth="70" MinHeight="40"
                     Margin="4,0,0,0"
@@ -190,7 +273,7 @@ Layout:
                     CornerRadius="6"/>
 
             <ProgressRing x:Name="CaptureProgress"
-                          Grid.Column="15"
+                          Grid.Column="21"
                           Width="28" Height="28"
                           Margin="4,0,0,0"
                           Visibility="Collapsed"

@@ -64,18 +64,18 @@ public class GlobalHotkeyManagerTests
         var manager = new GlobalHotkeyManager(_fake);
         var results = manager.RegisterAll(IntPtr.Zero);
 
-        Assert.Equal(4, results.Count);
+        Assert.Equal(6, results.Count);
         Assert.All(results, r => Assert.True(r.Succeeded));
         Assert.True(manager.AllRegistered);
     }
 
     [Fact]
-    public void RegisterAll_AllSucceed_RegistrarReceivedFourCalls()
+    public void RegisterAll_AllSucceed_RegistrarReceivedSixCalls()
     {
         var manager = new GlobalHotkeyManager(_fake);
         manager.RegisterAll(IntPtr.Zero);
 
-        Assert.Equal(4, _fake.RegisterCalls.Count);
+        Assert.Equal(6, _fake.RegisterCalls.Count);
     }
 
     [Fact]
@@ -103,8 +103,8 @@ public class GlobalHotkeyManagerTests
         var manager = new GlobalHotkeyManager(_fake);
         var results = manager.RegisterAll(IntPtr.Zero);
 
-        Assert.Equal(4, results.Count);
-        Assert.Equal(3, results.Count(r => r.Succeeded));
+        Assert.Equal(6, results.Count);
+        Assert.Equal(5, results.Count(r => r.Succeeded));
         Assert.Equal(1, results.Count(r => !r.Succeeded));
         Assert.False(manager.AllRegistered);
     }
@@ -125,11 +125,11 @@ public class GlobalHotkeyManagerTests
     [Fact]
     public void RegisterAll_AllFail_NoneRegistered()
     {
-        _fake.SetFailingIds(1, 2, 3, 4);
+        _fake.SetFailingIds(1, 2, 3, 4, 5, 6);
         var manager = new GlobalHotkeyManager(_fake);
         var results = manager.RegisterAll(IntPtr.Zero);
 
-        Assert.Equal(4, results.Count);
+        Assert.Equal(6, results.Count);
         Assert.All(results, r => Assert.False(r.Succeeded));
         Assert.False(manager.AllRegistered);
     }
@@ -137,14 +137,14 @@ public class GlobalHotkeyManagerTests
     // ── Cleanup ─────────────────────────────────────────────────────────
 
     [Fact]
-    public void UnregisterAll_AfterSuccess_UnregistersAllFour()
+    public void UnregisterAll_AfterSuccess_UnregistersAllSix()
     {
         var manager = new GlobalHotkeyManager(_fake);
         manager.RegisterAll(IntPtr.Zero);
         manager.UnregisterAll();
 
-        Assert.Equal(4, _fake.UnregisterCalls.Count);
-        Assert.Equal(4, _fake.UnregisterCalls.Distinct().Count());
+        Assert.Equal(6, _fake.UnregisterCalls.Count);
+        Assert.Equal(6, _fake.UnregisterCalls.Distinct().Count());
     }
 
     [Fact]
@@ -155,8 +155,8 @@ public class GlobalHotkeyManagerTests
         manager.UnregisterAll();
         manager.UnregisterAll(); // second call should be safe
 
-        // First unregister sends 4, second sends 0 (set was cleared)
-        Assert.Equal(4, _fake.UnregisterCalls.Count);
+        // First unregister sends 6, second sends 0 (set was cleared)
+        Assert.Equal(6, _fake.UnregisterCalls.Count);
     }
 
     [Fact]
@@ -167,8 +167,8 @@ public class GlobalHotkeyManagerTests
         manager.RegisterAll(IntPtr.Zero);
         manager.UnregisterAll();
 
-        // Only 3 were successfully registered, so only 3 should be unregistered
-        Assert.Equal(3, _fake.UnregisterCalls.Count);
+        // Only 5 were successfully registered, so only 5 should be unregistered
+        Assert.Equal(5, _fake.UnregisterCalls.Count);
         Assert.DoesNotContain(GlobalHotkeyRouteMap.IdWinPrintScreen, _fake.UnregisterCalls);
     }
 
@@ -183,9 +183,9 @@ public class GlobalHotkeyManagerTests
 
         // Second call should report success for all (already registered)
         Assert.All(secondResults, r => Assert.True(r.Succeeded));
-        // Registrar still receives 4 calls from the first batch only;
+        // Registrar still receives 6 calls from the first batch only;
         // the second batch skips already-registered ids
-        Assert.Equal(4, _fake.RegisterCalls.Count);
+        Assert.Equal(6, _fake.RegisterCalls.Count);
     }
 
     // ── Route resolution ────────────────────────────────────────────────
@@ -195,6 +195,8 @@ public class GlobalHotkeyManagerTests
     [InlineData(GlobalHotkeyRouteMap.IdWinPrintScreen, GlobalHotkeyRoute.ActiveWindow)]
     [InlineData(GlobalHotkeyRouteMap.IdShiftPrintScreen, GlobalHotkeyRoute.FullDesktop)]
     [InlineData(GlobalHotkeyRouteMap.IdWinShiftPrintScreen, GlobalHotkeyRoute.RectangularRegion)]
+    [InlineData(GlobalHotkeyRouteMap.IdAltPrintScreen, GlobalHotkeyRoute.SelectedWindow)]
+    [InlineData(GlobalHotkeyRouteMap.IdCtrlPrintScreen, GlobalHotkeyRoute.SelectedMonitor)]
     public void TryResolveRoute_ReturnsCorrectRoute(int id, GlobalHotkeyRoute expected)
     {
         var manager = new GlobalHotkeyManager(_fake);
@@ -205,7 +207,7 @@ public class GlobalHotkeyManagerTests
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
-    [InlineData(5)]
+    [InlineData(7)]
     [InlineData(999)]
     public void TryResolveRoute_UnknownId_ReturnsFalse(int unknownId)
     {
@@ -230,7 +232,7 @@ public class GlobalHotkeyManagerTests
         var manager = new GlobalHotkeyManager(_fake);
         manager.RegisterAll(IntPtr.Zero);
         var summary = manager.GetRegistrationSummary();
-        Assert.Contains("All 4 global hotkeys registered", summary);
+        Assert.Contains("All 6 global hotkeys registered", summary);
     }
 
     [Fact]
@@ -241,7 +243,7 @@ public class GlobalHotkeyManagerTests
         manager.RegisterAll(IntPtr.Zero);
         var summary = manager.GetRegistrationSummary();
 
-        Assert.Contains("3/4", summary);
+        Assert.Contains("5/6", summary);
         Assert.Contains("Conflicts", summary);
         Assert.Contains("Win + Print Screen", summary);
     }
@@ -302,16 +304,16 @@ public class GlobalHotkeyManagerTests
     // ── Reconcile (register enabled / unregister disabled) ──────────────
 
     [Fact]
-    public void Reconcile_AllEnabledOnFreshManager_RegistersAllFour()
+    public void Reconcile_AllEnabledOnFreshManager_RegistersAllSix()
     {
         var manager = new GlobalHotkeyManager(_fake);
-        var enabled = new HashSet<int> { 1, 2, 3, 4 };
+        var enabled = new HashSet<int> { 1, 2, 3, 4, 5, 6 };
 
         var results = manager.Reconcile(IntPtr.Zero, enabled);
 
-        Assert.Equal(4, results.Count);
+        Assert.Equal(6, results.Count);
         Assert.All(results, r => Assert.True(r.Succeeded));
-        Assert.Equal(4, _fake.RegisterCalls.Count);
+        Assert.Equal(6, _fake.RegisterCalls.Count);
         Assert.Empty(_fake.UnregisterCalls);
     }
 
@@ -335,16 +337,17 @@ public class GlobalHotkeyManagerTests
     public void Reconcile_OnActiveManager_UnregistersNewlyDisabled()
     {
         var manager = new GlobalHotkeyManager(_fake);
-        manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2, 3, 4 });
+        manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2, 3, 4, 5, 6 });
 
-        var results = manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 3 });
+        var results = manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 3, 5 });
 
-        // Id 2 and 4 should be unregistered.
+        // Ids 2, 4, and 6 should be unregistered.
         Assert.Contains(2, _fake.UnregisterCalls);
         Assert.Contains(4, _fake.UnregisterCalls);
+        Assert.Contains(6, _fake.UnregisterCalls);
         // Remaining results cover only the still-enabled ids.
-        Assert.Equal(2, results.Count);
-        Assert.DoesNotContain(results, r => r.Spec.Id == 2 || r.Spec.Id == 4);
+        Assert.Equal(3, results.Count);
+        Assert.DoesNotContain(results, r => r.Spec.Id == 2 || r.Spec.Id == 4 || r.Spec.Id == 6);
     }
 
     [Fact]
@@ -354,17 +357,17 @@ public class GlobalHotkeyManagerTests
         manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2 });
         int registerCountAfterFirst = _fake.RegisterCalls.Count;
 
-        manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2, 3, 4 });
+        manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2, 3, 4, 5, 6 });
 
-        // Only the two newly-enabled ids (3, 4) should be newly registered;
+        // Only the four newly-enabled ids (3–6) should be newly registered;
         // already-registered ids (1, 2) must not be registered again.
         int newRegistrations = _fake.RegisterCalls.Count - registerCountAfterFirst;
-        Assert.Equal(2, newRegistrations);
+        Assert.Equal(4, newRegistrations);
         var newlyRegistered = _fake.RegisterCalls
             .Skip(registerCountAfterFirst)
             .Select(c => c.id)
             .ToHashSet();
-        Assert.Equal(new HashSet<int> { 3, 4 }, newlyRegistered);
+        Assert.Equal(new HashSet<int> { 3, 4, 5, 6 }, newlyRegistered);
     }
 
     [Fact]
@@ -373,10 +376,10 @@ public class GlobalHotkeyManagerTests
         _fake.SetFailingIds(GlobalHotkeyRouteMap.IdWinPrintScreen);
         var manager = new GlobalHotkeyManager(_fake);
 
-        var results = manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2, 3, 4 });
+        var results = manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2, 3, 4, 5, 6 });
 
-        Assert.Equal(4, results.Count);
-        Assert.Equal(3, results.Count(r => r.Succeeded));
+        Assert.Equal(6, results.Count);
+        Assert.Equal(5, results.Count(r => r.Succeeded));
         var failure = results.Single(r => !r.Succeeded);
         Assert.Equal(GlobalHotkeyRouteMap.IdWinPrintScreen, failure.Spec.Id);
         Assert.Equal("RegisterHotKey", failure.Phase);
@@ -386,19 +389,19 @@ public class GlobalHotkeyManagerTests
     public void Reconcile_EmptyEnabledSet_UnregistersEverythingAndReportsNone()
     {
         var manager = new GlobalHotkeyManager(_fake);
-        manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2, 3, 4 });
+        manager.Reconcile(IntPtr.Zero, new HashSet<int> { 1, 2, 3, 4, 5, 6 });
 
         var results = manager.Reconcile(IntPtr.Zero, new HashSet<int>());
 
         Assert.Empty(results);
-        Assert.Equal(4, _fake.UnregisterCalls.Count);
+        Assert.Equal(6, _fake.UnregisterCalls.Count);
     }
 
     [Fact]
     public void Reconcile_NullEnabledIds_Throws()
     {
         var manager = new GlobalHotkeyManager(_fake);
-        Assert.Throws<ArgumentNullException>(() => manager.Reconcile(IntPtr.Zero, null!));
+        Assert.Throws<ArgumentNullException>(() => manager.Reconcile(IntPtr.Zero, (IReadOnlySet<int>)null!));
     }
 
     [Fact]

@@ -6,6 +6,8 @@
 // updating the preview image, status, and timing text.
 // Export buttons (Save, Save As…, Copy) are wired to the export service methods
 // and disabled until a capture succeeds and while export/capture/countdown is running.
+// Saved-file-gated actions (Copy Path, Open With, Share) additionally require a
+// valid saved file to exist as workflow state for the current Capture.
 // Global hotkeys (Print Screen, Win+Print, Shift+Print, Win+Shift+Print) are registered
 // on startup via RegisterHotKey and routed through WM_HOTKEY to the same capture workflows.
 
@@ -15,6 +17,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Foundation;
 using captcho.Capture;
@@ -54,10 +57,27 @@ public sealed partial class MainWindow : Window
     private readonly CapturePreviewService _captureService = new();
 
     /// <summary>
+    /// Production runtime workflow session. Owns Capture Mode routing (Full
+    /// Desktop, Active Window, and Selection today), operation state, the
+    /// captured Frame, and the preview transition. WinUI keeps an
+    /// event/rendering role only — workflow rules live in the session so they
+    /// can be covered by headless tests.
+    /// </summary>
+    private readonly CaptureWorkflowSession<WriteableBitmap> _workflowSession;
+
+    /// <summary>
     /// Coordinates singleton settings window lifecycle.
     /// Ensures only one settings dialog is open at a time.
     /// </summary>
     private SettingsWindowCoordinator? _settingsCoordinator;
+
+    /// <summary>
+    /// Routes the configured launch behavior at startup: resolves the
+    /// chosen action through the settings and dispatches the resolved
+    /// Capture Mode to the same five production workflow routes the buttons
+    /// and Global Hotkeys use (issue #53). Never bespoke capture code.
+    /// </summary>
+    private readonly LaunchTriggerRouter _launchRouter;
 
     /// <summary>
     /// Tracks whether a capture has succeeded and the cached bitmap is available for export.
@@ -80,7 +100,7 @@ public sealed partial class MainWindow : Window
     // ── Global Hotkey fields ─────────────────────────────────────────────────
 
     /// <summary>
-    /// Manages registration and cleanup of all four Global Hotkeys.
+    /// Manages registration and cleanup of every Global Hotkey.
     /// Null before initialization or after disposal.
     /// </summary>
     private GlobalHotkeyManager? _globalHotkeyManager;
@@ -163,9 +183,74 @@ public sealed partial class MainWindow : Window
         var appWindow = this.AppWindow;
         appWindow.Resize(new Windows.Graphics.SizeInt32(1100, 700));
 
+        // Construct the runtime workflow session with all production
+        // adapters: native pixel acquisition, the Selection overlay, the
+        // Selected Monitor picker overlay, the Selected Window picker overlay,
+        // the preview transition, the Export actions (Save, Save As,
+        // Copy Frame, Copy Path), and the Windows-first OCR chain with the
+        // packaged Tesseract fallback for Recognize Text (issue #50). The
+        // session owns Capture Mode routing and the post-capture workflow —
+        // including the one default saved-file identity per Capture — from
+        // here. The SessionCaptureOptions is bound to the live runtime
+        // AppSettings so committed-default changes (applied through Settings)
+        // are observable, and so per-Capture-Mode session overrides flow into
+        // the effective options each route forwards (spec #34). The
+        // LaunchBehaviorState records the last Capture Mode of every
+        // successful capture — persisting it only while the launch behavior
+        // needs it (issue #53).
+        var launchState = new LaunchBehaviorState(
+            _settings,
+            _configurationService is null
+                ? null
+                : new ConfigurationLaunchBehaviorPersistence(_settings, _configurationService));
+        _workflowSession = new CaptureWorkflowSession<WriteableBitmap>(
+            new WindowsCaptureAdapter(),
+            new WriteableBitmapPreviewAdapter(),
+            new RegionSelectionOverlayAdapter(),
+            new MonitorPickerOverlayAdapter(),
+            new WindowPickerOverlayAdapter(),
+            new SessionCaptureOptions(_settings),
+            new RememberedSelectionState(
+                _settings,
+                new NativeVirtualDesktopTopologyProvider(),
+                _configurationService is null
+                    ? null
+                    : new ConfigurationRememberedSelectionPersistence(
+                        _settings,
+                        _configurationService)),
+            new AnnotationOverlayAdapter(),
+            () => _settings.AnnotationEnabled,
+            () => _settings.EffectiveAnnotationSettings.ToToolState(),
+            FallbackOcrEngine.WindowsWithTesseract(),
+            () => _settings.OcrLanguageTag,
+            new ZxingQrScanner(),
+            new WorkflowExportAdapter(_settings, new WindowsClipboardAdapter()),
+            new FileSavePickerDialogAdapter(
+                () => _hwnd != IntPtr.Zero ? _hwnd : WinRT.Interop.WindowNative.GetWindowHandle(this),
+                () => _settings),
+            () => _settings.EffectiveAutomaticExport,
+            launchState,
+            new WindowsDeliveryAdapter(
+                () => _hwnd != IntPtr.Zero ? _hwnd : WinRT.Interop.WindowNative.GetWindowHandle(this)),
+            OnWorkflowExitRequested,
+            () => _settings.ExitAfterDelivery);
+
         // Initialize Global Hotkeys after the window has an HWND.
         // In WinUI 3, the HWND is available immediately after construction.
         InitializeGlobalHotkeys();
+
+        // Apply the configured launch behavior (issue #53): dispatch the
+        // resolved Capture Mode through the same production workflow routes
+        // the buttons and Global Hotkeys use. Runs asynchronously after the
+        // window is shown (see OnActivated first-run) so the interactive
+        // overlays appear over a fully activated window.
+        _launchRouter = new LaunchTriggerRouter(new ProductionWorkflowRoutes(
+            RunFullDesktopWorkflowAsync,
+            RunActiveWindowWorkflowAsync,
+            RunSelectionWorkflowAsync,
+            RunSelectedMonitorWorkflowAsync,
+            RunSelectedWindowWorkflowAsync));
+        Activated += OnFirstActivatedApplyLaunchBehavior;
 
         // Initialize settings coordinator with production delegates
         if (_configurationService != null)
@@ -181,10 +266,90 @@ public sealed partial class MainWindow : Window
         this.Closed += OnWindowClosed;
     }
 
+    // ── Exit after confirmed delivery (issue #54) ───────────────────────
+
+    /// <summary>
+    /// Guards the automatic-exit request so the window closes (and the app
+    /// exits through App's Closed handler) exactly once even if a second
+    /// request races the shutdown.
+    /// </summary>
+    private bool _exitRequested;
+
+    /// <summary>
+    /// Workflow exit request receiver (issue #54): the session raised it
+    /// after the Annotation overlay was dismissed and every configured
+    /// delivery action finished successfully. The WinUI layer stays a thin
+    /// adapter — it schedules the shutdown on the UI thread; the exit
+    /// decision itself is workflow-owned. Failures never crash: an exit
+    /// request that cannot be scheduled is ignored (the user can still close
+    /// manually).
+    /// </summary>
+    private void OnWorkflowExitRequested(WorkflowExitReason reason)
+    {
+        if (_exitRequested)
+            return;
+        _exitRequested = true;
+
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_isOperationRunning)
+            {
+                // The request observed finished delivery state, but a new
+                // operation is in flight on the UI thread — defer to the
+                // user rather than yanking the window mid-operation.
+                _exitRequested = false;
+                return;
+            }
+
+            Close();
+        });
+    }
+
     // ── Global Hotkey initialization and cleanup ─────────────────────────────
 
     /// <summary>
-    /// Registers all four global hotkeys and installs a WndProc subclass for WM_HOTKEY.
+    /// Whether the configured launch behavior has been applied. The Trigger
+    /// runs once, on the first Activated event, so the interactive overlays
+    /// and the preview window appear over a fully activated window.
+    /// </summary>
+    private bool _hasAppliedLaunchBehavior;
+
+    /// <summary>
+    /// Applies the configured launch behavior on the first activation.
+    /// Failures never crash startup: an unroutable launch behavior leaves the
+    /// window idle with a status message, matching how hotkey registration
+    /// failures surface.
+    /// </summary>
+    private void OnFirstActivatedApplyLaunchBehavior(object sender, WindowActivatedEventArgs args)
+    {
+        if (_hasAppliedLaunchBehavior)
+            return;
+
+        _hasAppliedLaunchBehavior = true;
+        Activated -= OnFirstActivatedApplyLaunchBehavior;
+        _ = RunLaunchBehaviorAsync();
+    }
+
+    /// <summary>
+    /// Runs the configured launch behavior through the production workflow
+    /// routes. Startup stays idle (no dispatch, no status change) for Do
+    /// nothing, a missing last Capture Mode, or invalid persisted values —
+    /// the safe fallbacks resolved in AppSettings.ResolveStartupMode.
+    /// </summary>
+    private async Task RunLaunchBehaviorAsync()
+    {
+        try
+        {
+            await _launchRouter.RunStartupAsync(_settings);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Launch behavior failed: {SanitizeException(ex)}";
+        }
+    }
+
+    /// <summary>
+    /// Registers every global hotkey and installs a WndProc subclass for WM_HOTKEY.
     /// Reports partial registration conflicts in status text without throwing.
     /// </summary>
     private void InitializeGlobalHotkeys()
@@ -205,10 +370,11 @@ public sealed partial class MainWindow : Window
             }
 
             _globalHotkeyManager = new GlobalHotkeyManager(new WindowsGlobalHotkeyRegistrar());
-            // Register only the Global Hotkeys the user has enabled, so disabled
-            // Global Hotkeys are not active on launch. Global Hotkeys disabled in settings are
-            // skipped; the rest register just like RegisterAll would.
-            var results = _globalHotkeyManager.Reconcile(_hwnd, GlobalHotkeyRouteMap.EnabledGlobalHotkeyIds(_settings));
+            // Register only the Global Hotkeys the user has enabled, each with its
+            // effective binding from Configuration (recorded combination or legacy
+            // default), so disabled Global Hotkeys are not active on launch and a
+            // remapped combination registers without waiting for Settings.
+            var results = _globalHotkeyManager.Reconcile(_hwnd, _settings);
 
             // Install WndProc subclass to intercept WM_HOTKEY messages.
             // Keep the delegate alive to prevent GC collection while subclassed.
@@ -253,7 +419,7 @@ public sealed partial class MainWindow : Window
                 if (!_isSettingsAcceleratorPressed)
                 {
                     _isSettingsAcceleratorPressed = true;
-                    DispatcherQueue.TryEnqueue(() => Settings_Click(null, null!));
+                    DispatcherQueue.TryEnqueue(OpenSettings);
                 }
                 return IntPtr.Zero;
             }
@@ -295,13 +461,19 @@ public sealed partial class MainWindow : Window
                 _ = RunDelayedCaptureAsync(_captureService.CaptureCurrentMonitorAsync);
                 break;
             case GlobalHotkeyRoute.ActiveWindow:
-                _ = RunDelayedCaptureAsync(_captureService.CaptureActiveWindowAsync);
+                _ = RunActiveWindowWorkflowAsync();
                 break;
             case GlobalHotkeyRoute.FullDesktop:
-                _ = RunDelayedCaptureAsync(_captureService.CaptureFullDesktopAsync);
+                _ = RunFullDesktopWorkflowAsync();
                 break;
             case GlobalHotkeyRoute.RectangularRegion:
-                _ = RunDelayedRegionCaptureAsync();
+                _ = RunSelectionWorkflowAsync();
+                break;
+            case GlobalHotkeyRoute.SelectedWindow:
+                _ = RunSelectedWindowWorkflowAsync();
+                break;
+            case GlobalHotkeyRoute.SelectedMonitor:
+                _ = RunSelectedMonitorWorkflowAsync();
                 break;
         }
     }
@@ -362,10 +534,10 @@ public sealed partial class MainWindow : Window
 
     // ── Capture button click handlers ────────────────────────────────
 
-    /// <summary>Handles "Full Desktop" click.</summary>
+    /// <summary>Handles "Full Desktop" click — routes through the production workflow session.</summary>
     private async void FullDesktop_Click(object sender, RoutedEventArgs e)
     {
-        await RunDelayedCaptureAsync(_captureService.CaptureFullDesktopAsync);
+        await RunFullDesktopWorkflowAsync();
     }
 
     /// <summary>Handles "Current Monitor" click.</summary>
@@ -374,10 +546,10 @@ public sealed partial class MainWindow : Window
         await RunDelayedCaptureAsync(_captureService.CaptureCurrentMonitorAsync);
     }
 
-    /// <summary>Handles "Active Window" click.</summary>
+    /// <summary>Handles "Active Window" click — routes through the production workflow session.</summary>
     private async void ActiveWindow_Click(object sender, RoutedEventArgs e)
     {
-        await RunDelayedCaptureAsync(_captureService.CaptureActiveWindowAsync);
+        await RunActiveWindowWorkflowAsync();
     }
 
     /// <summary>Handles "Window Under Cursor" click.</summary>
@@ -386,10 +558,22 @@ public sealed partial class MainWindow : Window
         await RunDelayedCaptureAsync(_captureService.CaptureWindowUnderCursorAsync);
     }
 
-    /// <summary>Handles "Rectangular Region" click.</summary>
+    /// <summary>Handles "Rectangular Region" click — routes through the production workflow session.</summary>
     private async void RegionCapture_Click(object sender, RoutedEventArgs e)
     {
-        await RunDelayedRegionCaptureAsync();
+        await RunSelectionWorkflowAsync();
+    }
+
+    /// <summary>Handles "Selected Monitor" click — routes through the production workflow session.</summary>
+    private async void SelectedMonitor_Click(object sender, RoutedEventArgs e)
+    {
+        await RunSelectedMonitorWorkflowAsync();
+    }
+
+    /// <summary>Handles "Selected Window" click — routes through the production workflow session.</summary>
+    private async void SelectedWindow_Click(object sender, RoutedEventArgs e)
+    {
+        await RunSelectedWindowWorkflowAsync();
     }
 
     /// <summary>Handles "Cancel" button click during countdown.</summary>
@@ -401,9 +585,11 @@ public sealed partial class MainWindow : Window
     // ── Export button click handlers ─────────────────────────────────
 
     /// <summary>
-    /// Handles "Save" click — saves to the configured save location using the
-    /// configured filename template. Falls back to defaults if not configured.
-    /// Disables all controls during save.
+    /// Handles "Save" click — routes the Save Export action through the
+    /// workflow session, which writes a PNG to the configured save location
+    /// using the configured Filename Template and keeps the one default
+    /// saved-file identity so repeats never duplicate it. Disables all
+    /// controls during the save.
     /// </summary>
     private async void Save_Click(object sender, RoutedEventArgs e)
     {
@@ -418,10 +604,8 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            var result = await Task.Run(() =>
-                _captureService.SaveLastCaptureWithSettingsAsync(_settings));
-            StatusText.Text = ExportStatusFormatter.FormatStatus(result);
-            TimingText.Text = FormatTimingWithExport(result, null);
+            var result = await _workflowSession.SaveAsync();
+            ApplyWorkflowExportResult(result);
         }
         catch (Exception ex)
         {
@@ -435,11 +619,12 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Handles "Save As…" click — opens a FileSavePicker initialized with
-    /// the configured filename template, then saves to the selected path.
-    /// After successful save, persists the selected directory as the new
-    /// default save location. Does not persist on cancel or failure.
-    /// Uses WinRT.Interop.InitializeWithWindow for desktop HWND initialization.
+    /// Handles "Save As…" click — routes the Save As Export action through
+    /// the workflow session, which shows the file picker (initialized with
+    /// the configured Filename Template) and saves to the chosen path
+    /// without replacing the Capture's default saved-file identity. After a
+    /// successful save, persists the selected directory as the new default
+    /// save location; does not persist on cancel or failure.
     /// </summary>
     private async void SaveAs_Click(object sender, RoutedEventArgs e)
     {
@@ -454,39 +639,13 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            var picker = new Windows.Storage.Pickers.FileSavePicker();
-
-            // Initialize the picker with the window's HWND for WinUI desktop
-            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
-
-            picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.PicturesLibrary;
-            picker.FileTypeChoices.Add("PNG Image", new List<string> { ".png" });
-            picker.DefaultFileExtension = ".png";
-            picker.SuggestedFileName = ExportFilenameTemplate.Expand(
-                _settings.EffectiveFilenameTemplate, DateTime.Now);
-
-            var file = await picker.PickSaveFileAsync();
-
-            if (file == null)
-            {
-                // User cancelled the picker — not an error, do NOT persist settings
-                StatusText.Text = ExportStatusFormatter.FormatPickerCancelled();
-                TimingText.Text = "";
-                return;
-            }
-
-            StatusText.Text = "Saving…";
-            var result = await Task.Run(() =>
-                _captureService.SaveLastCaptureToFileAsync(file.Path));
-
-            StatusText.Text = ExportStatusFormatter.FormatStatus(result);
-            TimingText.Text = FormatTimingWithExport(result, null);
+            var result = await _workflowSession.SaveAsAsync();
+            ApplyWorkflowExportResult(result);
 
             // Persist the selected directory after successful save only
-            if (result.Success && _configurationService != null)
+            if (result.IsSuccess && _configurationService != null)
             {
-                PersistSaveAsDirectory(Path.GetDirectoryName(file.Path));
+                PersistSaveAsDirectory(Path.GetDirectoryName(result.FilePath ?? ""));
             }
         }
         catch (Exception ex)
@@ -535,8 +694,9 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Handles "Copy" click — copies the last capture to the clipboard.
-    /// Uses the ClipboardExportService wired to the capture service cache.
+    /// Handles "Copy" click — routes the Copy Frame Export action through
+    /// the workflow session, which places image content on the clipboard
+    /// without creating a file.
     /// </summary>
     private async void CopyToClipboard_Click(object sender, RoutedEventArgs e)
     {
@@ -551,14 +711,8 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            var clipboardAdapter = new WindowsClipboardAdapter();
-            var exporter = _captureService.CreateClipboardExporter(clipboardAdapter);
-
-            // ClipboardExportService.CopyToClipboard is synchronous — offload to avoid UI jank
-            var result = await Task.Run(() => exporter.CopyToClipboard());
-
-            StatusText.Text = ExportStatusFormatter.FormatStatus(result);
-            TimingText.Text = FormatTimingWithExport(null, result);
+            var result = await _workflowSession.CopyFrameAsync();
+            ApplyWorkflowExportResult(result);
         }
         catch (Exception ex)
         {
@@ -569,6 +723,128 @@ public sealed partial class MainWindow : Window
         {
             ExitExportState();
         }
+    }
+
+    /// <summary>
+    /// Handles "Copy Path" click — routes the Copy Path Export action
+    /// through the workflow session, which copies the saved file's path to
+    /// the clipboard. Unavailable until a valid saved file exists.
+    /// </summary>
+    private async void CopyPath_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isOperationRunning || !_hasCapture)
+        {
+            StatusText.Text = ExportStatusFormatter.FormatNoCapture();
+            return;
+        }
+
+        EnterExportState();
+        StatusText.Text = "Copying path…";
+
+        try
+        {
+            var result = await _workflowSession.CopyPathAsync();
+            ApplyWorkflowExportResult(result);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Copy path failed: {SanitizeException(ex)}";
+            TimingText.Text = "";
+        }
+        finally
+        {
+            ExitExportState();
+        }
+    }
+
+    /// <summary>
+    /// Handles "Open With" click — routes the Open With Export action
+    /// through the workflow session, which hands the saved file to Windows
+    /// application association (discovery plus launch). Unavailable until a
+    /// valid saved file exists.
+    /// </summary>
+    private async void OpenWith_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isOperationRunning || !_hasCapture)
+        {
+            StatusText.Text = ExportStatusFormatter.FormatNoCapture();
+            return;
+        }
+
+        EnterExportState();
+        StatusText.Text = "Opening with Windows…";
+
+        try
+        {
+            var result = await _workflowSession.OpenWithAsync();
+            ApplyWorkflowExportResult(result);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Open With failed: {SanitizeException(ex)}";
+            TimingText.Text = "";
+        }
+        finally
+        {
+            ExitExportState();
+        }
+    }
+
+    /// <summary>
+    /// Handles "Share" click — routes the Share Export action through the
+    /// workflow session, which invokes the Windows share interface with the
+    /// delivered Capture file. Unavailable until a valid saved file exists.
+    /// </summary>
+    private async void Share_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isOperationRunning || !_hasCapture)
+        {
+            StatusText.Text = ExportStatusFormatter.FormatNoCapture();
+            return;
+        }
+
+        EnterExportState();
+        StatusText.Text = "Sharing…";
+
+        try
+        {
+            var result = await _workflowSession.ShareAsync();
+            ApplyWorkflowExportResult(result);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Share failed: {SanitizeException(ex)}";
+            TimingText.Text = "";
+        }
+        finally
+        {
+            ExitExportState();
+        }
+    }
+
+    /// <summary>
+    /// Applies a WorkflowExportResult to the status and timing text and
+    /// refreshes saved-file-gated action availability (Copy Path, Open With,
+    /// Share) from the session's saved-file state.
+    /// </summary>
+    private void ApplyWorkflowExportResult(WorkflowExportResult result)
+    {
+        StatusText.Text = ExportStatusFormatter.FormatStatus(result);
+        TimingText.Text = ExportStatusFormatter.FormatTiming(result);
+        RefreshSavedFileActions();
+    }
+
+    /// <summary>
+    /// Refreshes the saved-file-gated toolbar actions — Copy Path, Open
+    /// With, and Share — from the session's current saved-file state, so
+    /// they are visibly disabled until a valid saved Capture exists.
+    /// </summary>
+    private void RefreshSavedFileActions()
+    {
+        var enabled = _workflowSession.HasSavedFile;
+        CopyPathButton.IsEnabled = enabled;
+        OpenWithButton.IsEnabled = enabled;
+        ShareButton.IsEnabled = enabled;
     }
 
     // ── Delayed capture orchestration ────────────────────────────────
@@ -617,12 +893,35 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Runs the region capture flow with optional delay countdown.
-    /// The overlay is a transparent Win32 window over the live desktop —
-    /// no pre-capture needed. After the user confirms, the overlay is removed
-    /// and the region is captured from the live desktop.
+    /// Routes a Full Desktop Trigger through the production workflow session.
+    /// The session owns Capture, the resulting Frame, and the preview
+    /// transition; this method keeps the WinUI layer as a thin event/rendering
+    /// adapter that disables controls during the operation, drives the optional
+    /// delay countdown, and binds the returned WorkflowResult to the preview
+    /// image, status, and timing text. Operation-in-progress and failure
+    /// outcomes surface as user-visible, retryable status text.
     /// </summary>
-    private async Task RunDelayedRegionCaptureAsync()
+    private Task RunFullDesktopWorkflowAsync() =>
+        RunWorkflowWithCountdownAsync(_workflowSession.CaptureFullDesktopAsync, ApplyWorkflowResult);
+
+    /// <summary>
+    /// Routes an Active Window Trigger through the same production workflow
+    /// session as Full Desktop. The WinUI layer keeps the same thin
+    /// event/rendering role — it does not branch on Active Window behavior.
+    /// </summary>
+    private Task RunActiveWindowWorkflowAsync() =>
+        RunWorkflowWithCountdownAsync(_workflowSession.CaptureActiveWindowAsync, ApplyWorkflowResult);
+
+    /// <summary>
+    /// Shared orchestration scaffold for any production workflow route: drives
+    /// the optional delay countdown, runs the supplied workflow, and applies
+    /// the returned WorkflowResult through the supplied binder. All paths
+    /// restore controls in finally. Extracted so the WinUI code-behind does
+    /// not duplicate the countdown/state scaffold per route.
+    /// </summary>
+    private async Task RunWorkflowWithCountdownAsync(
+        Func<Task<WorkflowResult<WriteableBitmap>>> workflowFunc,
+        Action<WorkflowResult<WriteableBitmap>> applyResult)
     {
         int delaySeconds = GetNormalizedDelaySeconds();
 
@@ -631,30 +930,16 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            // Countdown phase (same as standard captures)
             if (delaySeconds > 0)
             {
                 await RunCountdownPhaseAsync(delaySeconds, _activeCts.Token);
             }
 
-            // Show transparent overlay — user selects region on live desktop
-            StatusText.Text = "Select a region on screen…";
+            StatusText.Text = "Capturing…";
             CaptureProgress.Visibility = Visibility.Visible;
 
-            using var overlay = new RegionOverlayWindow();
-            var selection = await overlay.ShowAndWaitAsync();
-
-            if (selection != null)
-            {
-                // Overlay is already destroyed — build display result from the captured bitmap
-                var captureResult = await _captureService.BuildResultFromCroppedBitmapAsync(
-                    selection.Bitmap, selection.Region);
-                ApplyCaptureResult(captureResult);
-            }
-            else
-            {
-                StatusText.Text = RegionSelectionStatusFormatter.FormatCancelled();
-            }
+            var result = await workflowFunc();
+            applyResult(result);
         }
         catch (OperationCanceledException)
         {
@@ -662,13 +947,145 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            StatusText.Text = RegionSelectionStatusFormatter.FormatError(ex);
+            StatusText.Text = $"Error: {SanitizeException(ex)}";
+            TimingText.Text = "";
         }
         finally
         {
             ExitCaptureState();
         }
     }
+
+    /// <summary>
+    /// Applies a WorkflowResult from the runtime session to the WinUI preview
+    /// image, status, and timing text. On success the session already owns
+    /// the Frame (its Export actions read it); this binder only renders the
+    /// result. Copy Path availability refreshes from the session's
+    /// saved-file state — a new Capture resets the saved-file identity.
+    /// </summary>
+    private void ApplyWorkflowResult(WorkflowResult<WriteableBitmap> result)
+    {
+        switch (result.Status)
+        {
+            case WorkflowStatus.Succeeded:
+                PreviewImage.Source = null;
+                if (result.PreviewImage is not null)
+                {
+                    PreviewImage.Source = result.PreviewImage;
+                }
+                StatusText.Text = FormatDeliveredStatus(result);
+                _hasCapture = true;
+                RecognizeTextButton.IsEnabled = true;
+                ScanQrButton.IsEnabled = true;
+                RefreshSavedFileActions();
+                break;
+
+            case WorkflowStatus.OperationInProgress:
+                StatusText.Text = result.Error ?? "A capture is already in progress.";
+                break;
+
+            case WorkflowStatus.Cancelled:
+                // User dismissed the interactive Target Selection overlay
+                // (Selection or Selected Monitor). No Frame was produced and
+                // no delivery side effects occurred; surface the cancellation
+                // as user-visible status text only.
+                StatusText.Text = result.Error ?? "Capture cancelled.";
+                break;
+
+            case WorkflowStatus.CaptureFailed:
+                // Failed capture does NOT overwrite the last successful cache,
+                // so _hasCapture retains its prior value and the user can retry.
+                StatusText.Text = result.Error ?? $"{result.Mode} — capture failed.";
+                break;
+
+            case WorkflowStatus.PreviewFailed:
+                // The session preserves the Frame on the result; the user can
+                // retry the Trigger to re-attempt the preview transition.
+                StatusText.Text = result.Error ?? $"{result.Mode} — preview failed.";
+                break;
+
+            case WorkflowStatus.AnnotationFailed:
+                StatusText.Text = result.Error ?? $"{result.Mode} — Annotation failed.";
+                break;
+        }
+
+        TimingText.Text = FormatWorkflowTiming(result);
+    }
+
+    /// <summary>
+    /// Formats the status for a succeeded workflow result, appending the
+    /// configured automatic delivery outcomes (issue #47). Successful
+    /// automatic actions append their per-action status; failed ones append
+    /// their retryable error so the user can retry manually — the composed
+    /// Frame and any valid saved-file identity are preserved by the session.
+    /// </summary>
+    private static string FormatDeliveredStatus(WorkflowResult<WriteableBitmap> result)
+    {
+        var status = $"{result.Mode} — {result.Dimensions}";
+        var report = result.AutomaticExport;
+        if (report is null)
+            return status;
+
+        var parts = new List<string>();
+        if (report.Save is not null)
+            parts.Add(ExportStatusFormatter.FormatStatus(report.Save));
+        if (report.CopyFrame is not null)
+            parts.Add(ExportStatusFormatter.FormatStatus(report.CopyFrame));
+        if (report.CopyPath is not null)
+            parts.Add(ExportStatusFormatter.FormatStatus(report.CopyPath));
+        return parts.Count > 0 ? $"{status} │ {string.Join(" │ ", parts)}" : status;
+    }
+
+    /// <summary>
+    /// Formats timing from a WorkflowResult into a compact, tabular string.
+    /// Shares the layout with <see cref="FormatTiming"/> so timing text stays
+    /// consistent across the legacy and session routes.
+    /// </summary>
+    private static string FormatWorkflowTiming(WorkflowResult<WriteableBitmap> result) =>
+        FormatTimings(result.CaptureMs, result.DisplayMs, result.TotalMs);
+
+    /// <summary>
+    /// Routes a Selection Trigger through the production workflow session.
+    /// The session owns the entire route: it shows the Selection overlay,
+    /// captures the confirmed geometry, owns the resulting Frame, and drives
+    /// the preview transition. This WinUI method keeps a thin event/rendering
+    /// role — it drives the optional delay countdown and binds the returned
+    /// WorkflowResult to the preview image, status, and timing text. On
+    /// cancellation the session returns <see cref="WorkflowStatus.Cancelled"/>,
+    /// which is surfaced as user-visible status text with no Frame or delivery
+    /// side effects.
+    /// </summary>
+    private Task RunSelectionWorkflowAsync() =>
+        RunWorkflowWithCountdownAsync(_workflowSession.CaptureSelectionAsync, ApplyWorkflowResult);
+
+    /// <summary>
+    /// Routes a Selected Monitor Trigger through the production workflow
+    /// session. The session owns the entire route: it shows the monitor
+    /// picker overlay, captures the confirmed monitor's bounds, owns the
+    /// resulting Frame, and drives the preview transition. This WinUI method
+    /// keeps the same thin event/rendering role as the other routes — it
+    /// drives the optional delay countdown and binds the returned
+    /// WorkflowResult. On cancellation (Escape or a gap-only session) the
+    /// session returns <see cref="WorkflowStatus.Cancelled"/>, surfaced as
+    /// user-visible status text with no Frame or delivery side effects.
+    /// </summary>
+    private Task RunSelectedMonitorWorkflowAsync() =>
+        RunWorkflowWithCountdownAsync(_workflowSession.CaptureSelectedMonitorAsync, ApplyWorkflowResult);
+
+    /// <summary>
+    /// Routes a Selected Window Trigger through the production workflow
+    /// session. The session owns the entire route: it shows the window picker
+    /// overlay, captures the confirmed window by handle (or routes an
+    /// empty-desktop click to a Full Desktop capture), owns the resulting
+    /// Frame, and drives the preview transition. This WinUI method keeps the
+    /// same thin event/rendering role as the other routes — it drives the
+    /// optional delay countdown and binds the returned WorkflowResult. On
+    /// cancellation (Escape) the session returns
+    /// <see cref="WorkflowStatus.Cancelled"/>, surfaced as user-visible status
+    /// text with no Frame or delivery side effects.
+    /// </summary>
+    private Task RunSelectedWindowWorkflowAsync() =>
+        RunWorkflowWithCountdownAsync(_workflowSession.CaptureSelectedWindowAsync, ApplyWorkflowResult);
 
     // ── Countdown phase ──────────────────────────────────────────────
 
@@ -776,21 +1193,34 @@ public sealed partial class MainWindow : Window
         ActiveWindowButton.IsEnabled = enabled;
         WindowUnderCursorButton.IsEnabled = enabled;
         RegionCaptureButton.IsEnabled = enabled;
+        SelectedMonitorButton.IsEnabled = enabled;
+        SelectedWindowButton.IsEnabled = enabled;
+        RecognizeTextButton.IsEnabled = enabled && _hasCapture;
+        ScanQrButton.IsEnabled = enabled && _hasCapture;
     }
 
     /// <summary>
-    /// Enables or disables the export buttons (Save, Save As…, Copy).
+    /// Enables or disables the export buttons (Save, Save As…, Copy, Copy
+    /// Path, Open With, Share). Copy Path, Open With, and Share additionally
+    /// require a saved file to exist as workflow state for the current
+    /// Capture.
     /// </summary>
     private void SetExportButtonsEnabled(bool enabled)
     {
         SaveButton.IsEnabled = enabled;
         SaveAsButton.IsEnabled = enabled;
         CopyToClipboardButton.IsEnabled = enabled;
+        var savedFileActions = enabled && _workflowSession.HasSavedFile;
+        CopyPathButton.IsEnabled = savedFileActions;
+        OpenWithButton.IsEnabled = savedFileActions;
+        ShareButton.IsEnabled = savedFileActions;
     }
 
     /// <summary>
     /// Applies a capture result to the UI (preview image, status, timing).
-    /// Enables export buttons on successful capture.
+    /// Enables export buttons on successful capture. The legacy route's
+    /// Frame is adopted by the workflow session so the Export actions own
+    /// it — one saved-file identity per Capture, reset on each adoption.
     /// </summary>
     private void ApplyCaptureResult(CapturePreviewResult result)
     {
@@ -800,6 +1230,15 @@ public sealed partial class MainWindow : Window
             PreviewImage.Source = result.ImageSource;
             StatusText.Text = $"{result.Mode} — {result.Dimensions}";
             _hasCapture = true;
+            RecognizeTextButton.IsEnabled = true;
+            ScanQrButton.IsEnabled = true;
+
+            var frame = _captureService.LastCapturedBitmap;
+            if (frame is not null)
+            {
+                _workflowSession.AdoptFrame(frame);
+            }
+            RefreshSavedFileActions();
         }
         else
         {
@@ -814,36 +1253,26 @@ public sealed partial class MainWindow : Window
     /// <summary>
     /// Formats timing information into a compact, tabular-friendly string.
     /// </summary>
-    private static string FormatTiming(CapturePreviewResult result)
+    private static string FormatTiming(CapturePreviewResult result) =>
+        FormatTimings(result.CaptureMs, result.DisplayMs, result.TotalMs);
+
+    /// <summary>
+    /// Shared timing formatter for the legacy <see cref="CapturePreviewResult"/>
+    /// route and the <see cref="WorkflowResult{TImage}"/> route. Returns empty
+    /// when no phase recorded any duration.
+    /// </summary>
+    private static string FormatTimings(double captureMs, double displayMs, double totalMs)
     {
-        if (result.CaptureMs == 0 && result.DisplayMs == 0)
+        if (captureMs == 0 && displayMs == 0 && totalMs == 0)
             return "";
 
         var parts = new List<string>();
-        if (result.CaptureMs > 0)
-            parts.Add($"capture {result.CaptureMs:F1}ms");
-        if (result.DisplayMs > 0)
-            parts.Add($"display {result.DisplayMs:F1}ms");
-        if (result.TotalMs > 0)
-            parts.Add($"total {result.TotalMs:F1}ms");
-
-        return string.Join(" │ ", parts);
-    }
-
-    /// <summary>
-    /// Formats timing from either an export result or clipboard result.
-    /// Pass null for either one to format only the non-null result.
-    /// </summary>
-    private static string FormatTimingWithExport(ExportResult? exportResult,
-        ClipboardExportResult? clipboardResult)
-    {
-        var parts = new List<string>();
-
-        if (exportResult != null && exportResult.Elapsed > TimeSpan.Zero)
-            parts.Add($"export {exportResult.Elapsed.TotalMilliseconds:F1}ms");
-
-        if (clipboardResult != null && clipboardResult.Elapsed > TimeSpan.Zero)
-            parts.Add($"clipboard {clipboardResult.Elapsed.TotalMilliseconds:F1}ms");
+        if (captureMs > 0)
+            parts.Add($"capture {captureMs:F1}ms");
+        if (displayMs > 0)
+            parts.Add($"display {displayMs:F1}ms");
+        if (totalMs > 0)
+            parts.Add($"total {totalMs:F1}ms");
 
         return string.Join(" │ ", parts);
     }
@@ -868,7 +1297,14 @@ public sealed partial class MainWindow : Window
     /// Handles Settings button click — opens the settings dialog using the coordinator.
     /// Also invoked by F4 or Ctrl+, keyboard accelerators.
     /// </summary>
-    private void Settings_Click(object sender, RoutedEventArgs e)
+    private void Settings_Click(object sender, RoutedEventArgs e) => OpenSettings();
+
+    /// <summary>
+    /// Opens the settings dialog through the coordinator. Shared by the
+    /// Settings button, the F4/Ctrl+, accelerators, and the subclassed
+    /// WndProc route — no event payload is fabricated for programmatic calls.
+    /// </summary>
+    private void OpenSettings()
     {
         if (_settingsCoordinator == null)
         {
@@ -893,6 +1329,238 @@ public sealed partial class MainWindow : Window
     private void About_Click(object sender, RoutedEventArgs e)
     {
         StatusText.Text = "captcho — Screen Capture Tool v1.0";
+    }
+
+    // ── Recognize Text (OCR) ─────────────────────────────────────────
+
+    /// <summary>
+    /// Handles "Recognize Text" click — routes the Recognize Text Trigger
+    /// through the production workflow session. The session resolves the
+    /// persisted language selection against the installed OCR language packs
+    /// and recognizes text on the in-memory Frame it already owns; no file is
+    /// written and every retryable outcome preserves the Frame. The WinUI
+    /// layer stays a thin event/presentation adapter: it disables controls
+    /// during recognition, then presents the distinct outcomes (recognized
+    /// text in a selectable dialog, no-text as status, retryable errors as
+    /// status).
+    /// </summary>
+    private async void RecognizeText_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isOperationRunning)
+        {
+            StatusText.Text = "A capture is already in progress.";
+            return;
+        }
+
+        if (!_hasCapture)
+        {
+            StatusText.Text = OcrStatusFormatter.FormatNoFrame();
+            return;
+        }
+
+        EnterExportState();
+        StatusText.Text = "Recognizing text…";
+
+        try
+        {
+            var result = await _workflowSession.RecognizeTextAsync();
+            ApplyOcrResult(result);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Text recognition failed: {SanitizeException(ex)}";
+        }
+        finally
+        {
+            ExitExportState();
+        }
+    }
+
+    /// <summary>
+    /// Presents a distinct OCR outcome: Recognized-text opens a selectable
+    /// text dialog (and stages the text on the clipboard-adjacent preview
+    /// path), no-text is a user-visible status, and every retryable condition
+    /// surfaces its error without clearing the captured Frame.
+    /// </summary>
+    private void ApplyOcrResult(OcrResult result)
+    {
+        switch (result.Outcome)
+        {
+            case OcrOutcome.RecognizedText:
+                StatusText.Text = OcrStatusFormatter.FormatRecognized(result);
+                ShowRecognizedTextDialog(result.Text, result.LanguageTag);
+                break;
+
+            case OcrOutcome.NoText:
+                StatusText.Text = OcrStatusFormatter.FormatNoText(result);
+                break;
+
+            case OcrOutcome.NoFrame:
+                // The session owns no Frame (e.g., the only capture so far
+                // ran through a legacy route). Status-only: the legacy
+                // capture cache and its export buttons stay untouched.
+                StatusText.Text = result.Error ?? OcrStatusFormatter.FormatNoFrame();
+                break;
+
+            case OcrOutcome.UnsupportedLanguage:
+            case OcrOutcome.Failed:
+            case OcrOutcome.OperationInProgress:
+            default:
+                StatusText.Text = result.Error ?? "Text recognition failed. Try again.";
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Shows the recognized text in a small selectable dialog so the user can
+    /// read and copy it. Presentation-only — the workflow owns the outcome.
+    /// </summary>
+    private void ShowRecognizedTextDialog(string text, string languageTag)
+    {
+        try
+        {
+            var dialog = new ContentDialog
+            {
+                Title = string.IsNullOrEmpty(languageTag)
+                    ? "Recognized Text"
+                    : $"Recognized Text ({languageTag})",
+                Content = new ScrollViewer
+                {
+                    Content = new TextBlock
+                    {
+                        Text = text,
+                        IsTextSelectionEnabled = true,
+                        TextWrapping = TextWrapping.Wrap,
+                        MaxWidth = 560,
+                        MaxHeight = 360,
+                    },
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                },
+                CloseButtonText = "Close",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = Content.XamlRoot,
+            };
+            _ = dialog.ShowAsync();
+        }
+        catch
+        {
+            // Dialog presentation failure is non-fatal; the status bar still
+            // carries the recognition summary.
+        }
+    }
+
+    // ── Scan QR ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Handles "Scan QR" click — routes the Scan QR Trigger through the
+    /// production workflow session. The session scans the in-memory Frame it
+    /// already owns; no file is written and every retryable outcome preserves
+    /// the Frame. The WinUI layer stays a thin event/presentation adapter: it
+    /// disables controls during the scan, then presents the distinct outcomes
+    /// (decoded values in a selectable dialog, no-code as status, retryable
+    /// errors as status).
+    /// </summary>
+    private async void ScanQr_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isOperationRunning)
+        {
+            StatusText.Text = "A capture is already in progress.";
+            return;
+        }
+
+        if (!_hasCapture)
+        {
+            StatusText.Text = QrStatusFormatter.FormatNoFrame();
+            return;
+        }
+
+        EnterExportState();
+        StatusText.Text = "Scanning for QR codes…";
+
+        try
+        {
+            var result = await _workflowSession.ScanQrAsync();
+            ApplyQrResult(result);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"QR scanning failed: {SanitizeException(ex)}";
+        }
+        finally
+        {
+            ExitExportState();
+        }
+    }
+
+    /// <summary>
+    /// Presents a distinct QR outcome: found opens a selectable values dialog
+    /// (every decoded value included), no-code is a user-visible status, and
+    /// every retryable condition surfaces its error without clearing the
+    /// captured Frame.
+    /// </summary>
+    private void ApplyQrResult(QrScanResult result)
+    {
+        switch (result.Outcome)
+        {
+            case QrOutcome.Found:
+                StatusText.Text = QrStatusFormatter.FormatFound(result);
+                ShowQrValuesDialog(result.Values);
+                break;
+
+            case QrOutcome.NotFound:
+                StatusText.Text = QrStatusFormatter.FormatNotFound();
+                break;
+
+            case QrOutcome.NoFrame:
+                // The session owns no Frame (e.g., the only capture so far
+                // ran through a legacy route). Status-only: the legacy
+                // capture cache and its export buttons stay untouched.
+                StatusText.Text = result.Error ?? QrStatusFormatter.FormatNoFrame();
+                break;
+
+            case QrOutcome.Failed:
+            case QrOutcome.OperationInProgress:
+            default:
+                StatusText.Text = result.Error ?? "QR scanning failed. Try again.";
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Shows the decoded QR values in a small selectable dialog so the user
+    /// can read and copy them. Presentation-only — the workflow owns the
+    /// outcome.
+    /// </summary>
+    private void ShowQrValuesDialog(IReadOnlyList<string> values)
+    {
+        try
+        {
+            var dialog = new ContentDialog
+            {
+                Title = values.Count == 1 ? "QR Code" : $"QR Codes ({values.Count})",
+                Content = new ScrollViewer
+                {
+                    Content = new TextBlock
+                    {
+                        Text = string.Join(Environment.NewLine, values),
+                        IsTextSelectionEnabled = true,
+                        TextWrapping = TextWrapping.Wrap,
+                        MaxWidth = 560,
+                        MaxHeight = 360,
+                    },
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                },
+                CloseButtonText = "Close",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = Content.XamlRoot,
+            };
+            _ = dialog.ShowAsync();
+        }
+        catch
+        {
+            // Dialog presentation failure is non-fatal; the status bar still
+            // carries the scan summary.
+        }
     }
 
     // ── Settings window coordinator delegates ─────────────────────────
@@ -991,6 +1659,23 @@ public sealed class WindowsClipboardAdapter : IClipboardAdapter
 
             var content = new Windows.ApplicationModel.DataTransfer.DataPackage();
             content.SetBitmap(Windows.Storage.Streams.RandomAccessStreamReference.CreateFromStream(stream));
+
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(content);
+            Windows.ApplicationModel.DataTransfer.Clipboard.Flush();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public bool SetText(string text)
+    {
+        try
+        {
+            var content = new Windows.ApplicationModel.DataTransfer.DataPackage();
+            content.SetText(text);
 
             Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(content);
             Windows.ApplicationModel.DataTransfer.Clipboard.Flush();

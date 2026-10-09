@@ -39,6 +39,9 @@ public sealed class SettingsSession
 
     private readonly GeneralTabSettings _general;
     private readonly GlobalHotkeyTabSettings _globalHotkeyTab;
+    private readonly CaptureTabSettings _capture;
+    private readonly AnnotationTabSettings _annotation;
+    private readonly BehaviorTabSettings _behavior;
     private readonly ExportTabSettings _export;
     private readonly InterfaceTabSettings _interface;
 
@@ -71,10 +74,13 @@ public sealed class SettingsSession
 
         _general = new GeneralTabSettings(runtime);
         _globalHotkeyTab = new GlobalHotkeyTabSettings(runtime, globalHotkeys);
-        _export = new ExportTabSettings();
+        _capture = new CaptureTabSettings(runtime);
+        _annotation = new AnnotationTabSettings(runtime);
+        _behavior = new BehaviorTabSettings(runtime);
+        _export = new ExportTabSettings(runtime);
         _interface = new InterfaceTabSettings();
 
-        _editableTabs = new EditableTabSession[] { _general, _globalHotkeyTab };
+        _editableTabs = new EditableTabSession[] { _general, _globalHotkeyTab, _capture, _annotation, _behavior, _export };
     }
 
     // ── View ────────────────────────────────────────────────────────────
@@ -120,6 +126,178 @@ public sealed class SettingsSession
     public SettingsView EditGlobalHotkeyEnabled(int globalHotkeyId, bool enabled)
     {
         _globalHotkeyTab.EditEnabled(globalHotkeyId, enabled);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>
+    /// Records a key combination for one Global Hotkey from inline recorder input and
+    /// returns the refreshed view. Suspected conflicts (the combination already being
+    /// another enabled row's working combination) are surfaced on the row as a warning
+    /// without rejecting the value. Never persists or reconciles runtime registration.
+    /// </summary>
+    public SettingsView RecordGlobalHotkeyBinding(int globalHotkeyId, HotkeyBinding binding)
+    {
+        _globalHotkeyTab.RecordBinding(globalHotkeyId, binding);
+        return ClearTransientStatus();
+    }
+
+    // ── Editable Capture-tab edits ──────────────────────────────────────
+
+    /// <summary>
+    /// Sets the working mouse-pointer Capture default and returns the refreshed view.
+    /// </summary>
+    public SettingsView EditCaptureIncludePointer(bool value)
+    {
+        _capture.EditIncludePointer(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>
+    /// Sets the working window-decorations Capture default and returns the refreshed
+    /// view. The decoration/shadow dependency is reconciled immediately: turning
+    /// decorations off forces shadow off in the returned view.
+    /// </summary>
+    public SettingsView EditCaptureIncludeDecorations(bool value)
+    {
+        _capture.EditIncludeDecorations(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>
+    /// Sets the working window-shadow Capture default and returns the refreshed view.
+    /// Silently refused when decorations are off — shadow is only meaningful when
+    /// decorations are also included (spec #30).
+    /// </summary>
+    public SettingsView EditCaptureIncludeShadow(bool value)
+    {
+        _capture.EditIncludeShadow(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>Sets the working remembered-Selection lifetime.</summary>
+    public SettingsView EditRememberSelection(RememberSelectionLifetime value)
+    {
+        _capture.EditRememberSelection(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>Sets whether captured Frames pass through Annotation.</summary>
+    public SettingsView EditAnnotationEnabled(bool value)
+    {
+        _capture.EditAnnotationEnabled(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>
+    /// Sets the working OCR language selection (BCP-47 tag, or null/empty for
+    /// the user's default OCR language). The tag is a selection, not a
+    /// guarantee — it is resolved against the installed OCR language packs at
+    /// recognition time, so this edit never blocks on pack availability.
+    /// </summary>
+    public SettingsView EditOcrLanguageTag(string? tag)
+    {
+        _capture.EditOcrLanguageTag(tag);
+        return ClearTransientStatus();
+    }
+
+    // ── Editable Annotation-tab edits ───────────────────────────────────
+
+    /// <summary>Sets the default Annotation tool for new sessions.</summary>
+    public SettingsView EditAnnotationDefaultTool(AnnotationTool value)
+    {
+        _annotation.EditDefaultTool(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>Sets the default pen color for new Annotation sessions.</summary>
+    public SettingsView EditAnnotationPenColor(AnnotationColor value)
+    {
+        _annotation.EditPenColor(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>Sets the default pen stroke width for new Annotation sessions.</summary>
+    public SettingsView EditAnnotationStrokeWidth(int value)
+    {
+        _annotation.EditStrokeWidth(value);
+        return ClearTransientStatus();
+    }
+
+    // ── Editable Export-tab edits (issue #45) ───────────────────────────
+
+    /// <summary>
+    /// Sets the working export format (PNG or JPEG) and returns the refreshed
+    /// view. The returned view re-derives the quality control's availability
+    /// and the display extension from the new format.
+    /// </summary>
+    public SettingsView EditExportFormat(ExportImageFormat value)
+    {
+        _export.EditFormat(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>
+    /// Sets the working JPEG quality (inclusive 0–100) and returns the
+    /// refreshed view. An out-of-range value surfaces as an inline error and
+    /// disables Apply/OK through the composed gate.
+    /// </summary>
+    public SettingsView EditExportJpegQuality(int value)
+    {
+        _export.EditJpegQuality(value);
+        return ClearTransientStatus();
+    }
+
+    // ── Editable Behavior-tab edits ─────────────────────────────────────
+
+    /// <summary>Sets the working automatic save toggle and returns the refreshed view.</summary>
+    public SettingsView EditAutomaticSave(bool value)
+    {
+        _behavior.EditAutoSave(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>Sets the working automatic Copy Frame toggle and returns the refreshed view.</summary>
+    public SettingsView EditAutomaticCopyFrame(bool value)
+    {
+        _behavior.EditAutoCopyFrame(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>Sets the working automatic Copy Path toggle and returns the refreshed view.</summary>
+    public SettingsView EditAutomaticCopyPath(bool value)
+    {
+        _behavior.EditAutoCopyPath(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>
+    /// Sets the working exit-after-delivery toggle (issue #54) and returns
+    /// the refreshed view.
+    /// </summary>
+    public SettingsView EditExitAfterDelivery(bool value)
+    {
+        _behavior.EditExitAfterDelivery(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>
+    /// Sets the working launch action (Do nothing, Last Capture Mode, or
+    /// Configured Capture Mode) and returns the refreshed view. Switching
+    /// away from Configured clears the configured Capture Mode selection.
+    /// </summary>
+    public SettingsView EditLaunchAction(LaunchAction value)
+    {
+        _behavior.EditLaunchAction(value);
+        return ClearTransientStatus();
+    }
+
+    /// <summary>
+    /// Sets the working configured Capture Mode for the Configured Capture
+    /// Mode launch action and returns the refreshed view.
+    /// </summary>
+    public SettingsView EditLaunchConfiguredMode(CaptureMode mode)
+    {
+        _behavior.EditLaunchConfiguredMode(mode);
         return ClearTransientStatus();
     }
 
@@ -204,12 +382,13 @@ public sealed class SettingsSession
         foreach (var tab in _editableTabs)
             tab.Commit();
 
-        // Reconcile runtime registration to match the persisted enabled states. The
-        // adapter never throws for expected conflicts; failures surface as Failed rows
-        // (read live from the adapter) and are summarized in the status so a failed
+        // Reconcile runtime registration to match the persisted settings (enabled
+        // states and recorded key combinations — the merged settings just saved,
+        // which equal what was written into the runtime above). The adapter never
+        // throws for expected conflicts; failures surface as Failed rows (read
+        // live from the adapter) and are summarized in the status so a failed
         // binding is visible, not overclaimed as active.
-        var registrationResults = _globalHotkeys.ApplyEnabledStates(
-            GlobalHotkeyRouteMap.EnabledGlobalHotkeyIds(merged));
+        var registrationResults = _globalHotkeys.ApplySettings(merged);
         int failedRegistrations = registrationResults.Count(r => !r.Succeeded);
 
         _statusMessage = failedRegistrations > 0
@@ -265,12 +444,34 @@ public sealed class SettingsSession
 
             GlobalHotkeyRows: _globalHotkeyTab.GetRows(),
 
+            Capture: new CaptureTabContent(
+                IncludePointer: _capture.IncludePointer,
+                IncludeDecorations: _capture.IncludeDecorations,
+                IncludeShadow: _capture.IncludeShadow,
+                RememberSelection: _capture.RememberSelection,
+                AnnotationEnabled: _capture.AnnotationEnabled,
+                OcrLanguageTag: _capture.OcrLanguageTag),
+
+            Annotation: new AnnotationTabContent(
+                DefaultTool: _annotation.DefaultTool,
+                PenColor: _annotation.PenColor,
+                StrokeWidth: _annotation.StrokeWidth,
+                Error: _annotation.FirstError),
+
+            Behavior: new BehaviorTabContent(
+                AutoSave: _behavior.AutoSave,
+                AutoCopyFrame: _behavior.AutoCopyFrame,
+                AutoCopyPath: _behavior.AutoCopyPath,
+                ExitAfterDelivery: _behavior.ExitAfterDelivery,
+                LaunchAction: _behavior.LaunchAction,
+                LaunchConfiguredMode: _behavior.LaunchConfiguredMode),
+
             Export: new ExportTabContent(
-                Heading: _export.Heading,
-                FormatName: _export.FormatName,
+                Format: _export.Format,
+                JpegQuality: _export.JpegQuality,
+                JpegQualityAvailable: _export.JpegQualityAvailable,
                 FileExtension: _export.FileExtension,
-                FormatDescription: _export.FormatDescription,
-                PlannedFormatsNote: _export.PlannedFormatsNote),
+                JpegQualityError: _export.JpegQualityError),
             Interface: new InterfaceTabContent(
                 Heading: _interface.Heading,
                 Message: _interface.Message,
