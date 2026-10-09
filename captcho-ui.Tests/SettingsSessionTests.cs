@@ -288,11 +288,10 @@ public class SettingsSessionTests
         var session = new SettingsSession(runtime, recorder, new RecordingGlobalHotkeyAdapter());
 
         session.EditExportFormat(ExportImageFormat.Jpeg);
-        var view = session.EditExportJpegQuality(67);
-        session.Apply();
-        var after = session.Apply();
+        session.EditExportJpegQuality(67);
+        var view = session.Apply();
 
-        Assert.Equal(SettingsSession.SavedMessage, after.StatusMessage);
+        Assert.Equal(SettingsSession.SavedMessage, view.StatusMessage);
         // The persisted merged settings carry the export slice.
         Assert.Equal(ExportImageFormat.Jpeg, recorder.LastSaved!.ExportSettings!.Format);
         Assert.Equal(67, recorder.LastSaved.ExportSettings.JpegQuality);

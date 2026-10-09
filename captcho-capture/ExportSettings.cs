@@ -9,7 +9,6 @@
 // an out-of-range value degrades to the default instead of blocking startup.
 
 using System;
-using System.Text.Json.Serialization;
 
 namespace captcho.Capture;
 

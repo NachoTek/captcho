@@ -305,6 +305,23 @@ public class FilenameTemplateTests
     }
 
     [Fact]
+    public void GetExportPath_TemplateWithNonImageDotSegment_AppendsFormatExtension()
+    {
+        // A dot-segment that is not an image extension ("my.capture") is
+        // ordinary filename text: the derived extension is appended, not
+        // substituted — preserving the pre-#45 append behavior.
+        var settings = new AppSettings
+        {
+            FilenameTemplate = "my.capture",
+            ExportSettings = new ExportSettings(ExportImageFormat.Png, 90),
+        };
+
+        string path = ExportFilenameTemplate.GetExportPath(settings, new DateTime(2025, 6, 15));
+
+        Assert.EndsWith(".capture.png", path, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void GetDefaultExportPath_IncludescaptchoFolder()
     {
         var ts = DateTime.Now;

@@ -888,13 +888,10 @@ public class WorkflowExportAdapterTests
             // noise-filled frame: proof the configured quality reaches the
             // encoder rather than a hard-coded value.
             var random = new Random(20240607);
-            int stride = 64 * 4;
-            byte[] pixels = new byte[stride * 64];
+            int size = 64;
+            byte[] pixels = new byte[size * size * 4];
             random.NextBytes(pixels);
-            var frame = (ContiguousBitmap)typeof(ContiguousBitmap).GetConstructor(
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
-                null, new[] { typeof(int), typeof(int), typeof(int), typeof(byte[]) }, null)!
-                .Invoke(new object[] { 64, 64, stride, pixels });
+            var frame = ExportTestHelpers.CreateTestBitmap(size, size, pixels);
 
             var lowSettings = SettingsFor(dir, "low");
             lowSettings.ExportSettings = new ExportSettings(ExportImageFormat.Jpeg, 10);

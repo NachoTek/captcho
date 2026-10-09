@@ -1,12 +1,12 @@
 // PngExportService.cs — Encodes ContiguousBitmap to PNG and writes to disk.
 // Returns ExportResult with diagnostics; never throws for expected failures.
+// Shared GDI+ conversion and I/O diagnostics live in GdiExportHelpers.
 
 using System;
 using System.Diagnostics;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Threading;
-using System.Drawing;
-using System.Drawing.Imaging;
 
 namespace captcho.Capture;
 
@@ -54,7 +54,7 @@ public static class PngExportService
         try
         {
             // Encode phase — create GDI+ bitmap from BGRA pixel data
-            using var gdiBitmap = CreateGdiBitmap(bitmap);
+            using var gdiBitmap = GdiExportHelpers.CreateGdiBitmap(bitmap, flattenTransparentPixels: false);
             if (gdiBitmap == null)
                 return ExportResult.Fail(ExportPhase.Encode, "Failed to create bitmap for encoding", sw.Elapsed);
 
@@ -76,7 +76,7 @@ public static class PngExportService
 
             if (cancellationToken.IsCancellationRequested)
             {
-                TryDeleteFile(destinationPath);
+                GdiExportHelpers.TryDeleteFile(destinationPath);
                 return ExportResult.Cancelled(sw.Elapsed);
             }
 
@@ -88,18 +88,18 @@ public static class PngExportService
         catch (OperationCanceledException)
         {
             // Clean up partial file on cancellation
-            TryDeleteFile(destinationPath);
+            GdiExportHelpers.TryDeleteFile(destinationPath);
             return ExportResult.Cancelled(sw.Elapsed);
         }
         catch (UnauthorizedAccessException ex)
         {
             return ExportResult.Fail(ExportPhase.Write,
-                SanitizePathError(ex.Message), sw.Elapsed);
+                GdiExportHelpers.SanitizePathError(ex.Message), sw.Elapsed);
         }
         catch (DirectoryNotFoundException ex)
         {
             return ExportResult.Fail(ExportPhase.Write,
-                SanitizePathError(ex.Message), sw.Elapsed);
+                GdiExportHelpers.SanitizePathError(ex.Message), sw.Elapsed);
         }
         catch (PathTooLongException)
         {
@@ -109,7 +109,7 @@ public static class PngExportService
         catch (IOException ex)
         {
             return ExportResult.Fail(ExportPhase.Write,
-                SanitizePathError(ex.Message), sw.Elapsed);
+                GdiExportHelpers.SanitizePathError(ex.Message), sw.Elapsed);
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
         {
@@ -133,7 +133,7 @@ public static class PngExportService
 
         try
         {
-            using var gdiBitmap = CreateGdiBitmap(bitmap);
+            using var gdiBitmap = GdiExportHelpers.CreateGdiBitmap(bitmap, flattenTransparentPixels: false);
             if (gdiBitmap == null) return null;
 
             using var ms = new MemoryStream();
@@ -143,93 +143,6 @@ public static class PngExportService
         catch
         {
             return null;
-        }
-    }
-
-    /// <summary>
-    /// Creates a System.Drawing.Bitmap from BGRA ContiguousBitmap pixel data.
-    /// </summary>
-    internal static Bitmap? CreateGdiBitmap(ContiguousBitmap bitmap)
-    {
-        try
-        {
-            // Create a Bitmap with 32bpp BGRA pixel format
-            var gdiBitmap = new Bitmap(bitmap.Width, bitmap.Height, PixelFormat.Format32bppArgb);
-
-            // Lock bits for fast pixel copy
-            var rect = new Rectangle(0, 0, bitmap.Width, bitmap.Height);
-            var bmpData = gdiBitmap.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
-
-            try
-            {
-                // Copy row by row to handle stride differences
-                int srcStride = bitmap.Stride; // width * 4 from ContiguousBitmap
-                int dstStride = bmpData.Stride;
-                int rowBytes = bitmap.Width * 4;
-
-                unsafe
-                {
-                    byte* dstPtr = (byte*)bmpData.Scan0;
-                    fixed (byte* srcPtr = bitmap.Pixels)
-                    {
-                        for (int y = 0; y < bitmap.Height; y++)
-                        {
-                            byte* srcRow = srcPtr + (y * srcStride);
-                            byte* dstRow = dstPtr + (y * dstStride);
-
-                            // BGRA in ContiguousBitmap -> BGRA in GDI+ (same format for 32bppArgb)
-                            for (int x = 0; x < rowBytes; x++)
-                            {
-                                dstRow[x] = srcRow[x];
-                            }
-                        }
-                    }
-                }
-            }
-            finally
-            {
-                gdiBitmap.UnlockBits(bmpData);
-            }
-
-            return gdiBitmap;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Sanitizes filesystem error messages — removes full paths, keeps the gist.
-    /// </summary>
-    private static string SanitizePathError(string message)
-    {
-        if (string.IsNullOrEmpty(message)) return "File write failed";
-
-        // Remove any full filesystem paths from the message
-        // Match drive letters and common path patterns
-        var sanitized = System.Text.RegularExpressions.Regex.Replace(
-            message,
-            @"[A-Z]:\\[^\s""]*",
-            "<path>");
-
-        // If message became empty after sanitization, return a generic one
-        if (string.IsNullOrWhiteSpace(sanitized))
-            return "File write failed";
-
-        return sanitized;
-    }
-
-    private static void TryDeleteFile(string path)
-    {
-        try
-        {
-            if (File.Exists(path))
-                File.Delete(path);
-        }
-        catch
-        {
-            // Best effort — don't mask the cancellation
         }
     }
 }

@@ -136,7 +136,16 @@ public static class ExportFilenameTemplate
         string sanitized = SanitizeForFileName(filename);
         string extension = settings.EffectiveExportSettings.Format.Extension();
         if (!sanitized.EndsWith($".{extension}", StringComparison.OrdinalIgnoreCase))
-            sanitized = Path.ChangeExtension(sanitized, extension) ?? sanitized + "." + extension;
+        {
+            // Replace only a stale image-format suffix (.png/.jpg/.jpeg) left
+            // in a legacy template so the derived extension always matches
+            // the encoded bytes; any other trailing dot-segment (for example
+            // "my.capture") is ordinary filename text and is kept, with the
+            // derived extension appended as before.
+            sanitized = HasImageFormatSuffix(sanitized)
+                ? (Path.ChangeExtension(sanitized, extension) ?? sanitized + "." + extension)
+                : sanitized + "." + extension;
+        }
 
         string directory = settings.EffectiveSaveLocation;
         Directory.CreateDirectory(directory);
@@ -158,6 +167,17 @@ public static class ExportFilenameTemplate
     {
         return GetExportPath(AppSettings.WithDefaults(), timestamp, title, sequenceNumber);
     }
+
+    /// <summary>
+    /// Whether the filename ends in a known image-format extension
+    /// (.png/.jpg/.jpeg, case-insensitive) — a stale format suffix a legacy
+    /// template carried before extensions were derived from the configured
+    /// format (issue #45).
+    /// </summary>
+    private static bool HasImageFormatSuffix(string filename) =>
+        filename.EndsWith(".png", StringComparison.OrdinalIgnoreCase)
+        || filename.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase)
+        || filename.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Resolves a collision by incrementing the sequence number or appending one.

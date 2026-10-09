@@ -30,6 +30,15 @@ internal static class ExportTestHelpers
             pixels[i] = (byte)(i % 256);
         }
 
+        return CreateTestBitmap(width, height, pixels);
+    }
+
+    /// <summary>
+    /// Creates a synthetic ContiguousBitmap with explicit pixel content via
+    /// the internal constructor.
+    /// </summary>
+    public static ContiguousBitmap CreateTestBitmap(int width, int height, byte[] pixels)
+    {
         var constructor = typeof(ContiguousBitmap).GetConstructor(
             BindingFlags.Instance | BindingFlags.NonPublic,
             null,
@@ -57,19 +66,8 @@ internal static class ExportTestHelpers
     /// Creates a synthetic fully transparent ContiguousBitmap (alpha 0) via
     /// the internal constructor, for exercising format alpha handling.
     /// </summary>
-    public static ContiguousBitmap CreateTransparentBitmap(int width, int height)
-    {
-        var pixels = new byte[width * height * 4];
-
-        var constructor = typeof(ContiguousBitmap).GetConstructor(
-            BindingFlags.Instance | BindingFlags.NonPublic,
-            null,
-            new[] { typeof(int), typeof(int), typeof(int), typeof(byte[]) },
-            null);
-
-        Assert.NotNull(constructor);
-        return (ContiguousBitmap)constructor.Invoke(new object[] { width, height, width * 4, pixels });
-    }
+    public static ContiguousBitmap CreateTransparentBitmap(int width, int height) =>
+        CreateTestBitmap(width, height, new byte[width * height * 4]);
 }
 
 /// <summary>

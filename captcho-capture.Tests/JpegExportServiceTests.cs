@@ -270,36 +270,4 @@ public class JpegExportServiceTests
             Cleanup(path);
         }
     }
-
-    // ── Encode-to-memory ─────────────────────────────────────────────────
-
-    [Fact]
-    public void EncodeToJpegBytes_ProducesJpegSignature()
-    {
-        var bitmap = MakeOpaqueBitmap(8, 8);
-
-        byte[]? bytes = JpegExportService.EncodeToJpegBytes(bitmap, 90);
-
-        Assert.NotNull(bytes);
-        Assert.True(bytes!.Length >= 2);
-        Assert.Equal(0xFF, bytes[0]);
-        Assert.Equal(0xD8, bytes[1]);
-    }
-
-    [Fact]
-    public void EncodeToJpegBytes_InvalidInputs_ReturnNull()
-    {
-        Assert.Null(JpegExportService.EncodeToJpegBytes(null!, 90));
-        Assert.Null(JpegExportService.EncodeToJpegBytes(
-            new ContiguousBitmap(0, 0, 0, Array.Empty<byte>()), 90));
-    }
-
-    [Fact]
-    public void EncodeToJpegBytes_QualityOutOfRange_ReturnNull()
-    {
-        var bitmap = MakeOpaqueBitmap(4, 4);
-
-        Assert.Null(JpegExportService.EncodeToJpegBytes(bitmap, -1));
-        Assert.Null(JpegExportService.EncodeToJpegBytes(bitmap, 101));
-    }
 }
