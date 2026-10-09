@@ -80,6 +80,25 @@ public class AnnotationSettingsTests : IDisposable
         Assert.Equal(AnnotationTool.Text, loaded.EffectiveAnnotationSettings.DefaultTool);
     }
 
+    // spec #41: the marker tool is a valid persisted default
+
+    [Fact]
+    public void SaveThenLoad_PreservesMarkerToolDefault()
+    {
+        var service = new ConfigurationService(_tempDirectory);
+        var original = AppSettings.WithDefaults();
+        original.AnnotationSettings = new AnnotationSettings(
+            AnnotationTool.Marker,
+            new AnnotationColor(12, 34, 56),
+            9);
+
+        Assert.True(service.Save(original).Success);
+        var loaded = service.Load().Settings;
+
+        Assert.Empty(loaded.Validate());
+        Assert.Equal(AnnotationTool.Marker, loaded.EffectiveAnnotationSettings.DefaultTool);
+    }
+
     [Fact]
     public void Validate_RejectsUnknownToolAndOutOfRangeStrokeWidth()
     {

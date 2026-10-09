@@ -17,6 +17,7 @@ public enum AnnotationTool
     Line,
     Arrow,
     Text,
+    Marker,
 }
 
 /// <summary>
@@ -117,13 +118,22 @@ public sealed class AnnotationStroke
     /// </summary>
     public string? Text { get; }
 
+    /// <summary>
+    /// Sequence number for the marker tool; null for every other tool. Numbers
+    /// follow commit order: the next marker takes one past the highest number
+    /// still committed, so undo never renumbers the survivors and redo restores
+    /// the original number.
+    /// </summary>
+    public int? MarkerNumber { get; }
+
     public AnnotationStroke(
         AnnotationTool tool,
         AnnotationColor color,
         int strokeWidth,
         IReadOnlyList<AnnotationPoint> points,
         AnnotationFillStyle fill = AnnotationFillStyle.None,
-        string? text = null)
+        string? text = null,
+        int? markerNumber = null)
     {
         if (!Enum.IsDefined(tool))
             throw new ArgumentOutOfRangeException(nameof(tool));
@@ -137,6 +147,9 @@ public sealed class AnnotationStroke
         Fill = Enum.IsDefined(fill) ? fill : AnnotationFillStyle.None;
         Points = Array.AsReadOnly(points.ToArray());
         Text = tool == AnnotationTool.Text ? text ?? string.Empty : null;
+        MarkerNumber = tool == AnnotationTool.Marker
+            ? markerNumber is null or < 1 ? 1 : markerNumber
+            : null;
     }
 }
 
@@ -152,6 +165,7 @@ public sealed class AnnotationDocument
     private List<AnnotationPoint>? _inProgressPoints;
     private AnnotationToolState? _inProgressState;
     private string? _inProgressText;
+    private int? _inProgressMarkerNumber;
 
     public AnnotationDocument(ContiguousBitmap sourceFrame) =>
         SourceFrame = sourceFrame ?? throw new ArgumentNullException(nameof(sourceFrame));
@@ -185,7 +199,8 @@ public sealed class AnnotationDocument
                 _inProgressState.PenColor,
                 _inProgressState.StrokeWidth,
                 _inProgressPoints,
-                EffectiveFill(_inProgressState));
+                EffectiveFill(_inProgressState),
+                markerNumber: _inProgressMarkerNumber);
         }
     }
 
@@ -205,11 +220,28 @@ public sealed class AnnotationDocument
         _inProgressState = state;
         // Shapes drag from a fixed anchor to a moving current point, so they begin with
         // the anchor duplicated and the drag replaces the duplicate. Pen begins with a
-        // single point and grows by appending.
+        // single point and grows by appending. Markers are placed at the click alone.
         _inProgressPoints = state.Tool == AnnotationTool.Pen
             ? new List<AnnotationPoint> { point }
-            : new List<AnnotationPoint> { point, point };
+            : state.Tool == AnnotationTool.Marker
+                ? new List<AnnotationPoint> { point }
+                : new List<AnnotationPoint> { point, point };
         _inProgressText = null;
+        _inProgressMarkerNumber = state.Tool == AnnotationTool.Marker ? NextMarkerNumber() : null;
+    }
+
+    /// <summary>
+    /// The number the next committed marker will carry: one past the highest number
+    /// still committed, so undo never renumbers survivors and redo restores the
+    /// original number.
+    /// </summary>
+    private int NextMarkerNumber()
+    {
+        int highest = 0;
+        foreach (var stroke in _strokes)
+            if (stroke.MarkerNumber is > 0 and { } number && number > highest)
+                highest = number;
+        return highest + 1;
     }
 
     /// <summary>
@@ -225,6 +257,22 @@ public sealed class AnnotationDocument
         _inProgressState = state;
         _inProgressPoints = new List<AnnotationPoint> { point };
         _inProgressText = string.Empty;
+    }
+
+    /// <summary>
+    /// Places a numbered marker at <paramref name="point"/> snapshotting the shared
+    /// style. The entry previews its assigned number and commits like any other
+    /// annotation.
+    /// </summary>
+    public void BeginMarker(AnnotationPoint point, AnnotationToolState toolState)
+    {
+        ArgumentNullException.ThrowIfNull(toolState);
+        var state = toolState.Normalized();
+
+        _inProgressState = state;
+        _inProgressPoints = new List<AnnotationPoint> { point };
+        _inProgressText = null;
+        _inProgressMarkerNumber = NextMarkerNumber();
     }
 
     /// <summary>Replaces the content of the open text entry; a no-op otherwise.</summary>
@@ -245,7 +293,7 @@ public sealed class AnnotationDocument
 
     public void AppendStrokePoint(AnnotationPoint point)
     {
-        if (_inProgressPoints is null || _inProgressState?.Tool != AnnotationTool.Pen)
+        if (_inProgressPoints is null || _inProgressState?.Tool is not AnnotationTool.Pen)
             return;
 
         _inProgressPoints.Add(point);
@@ -253,11 +301,12 @@ public sealed class AnnotationDocument
 
     /// <summary>
     /// Replaces the current drag point of an in-progress shape. The first point stays
-    /// fixed as the anchor; pen strokes and text entries ignore this.
+    /// fixed as the anchor; pen strokes, text entries, and markers ignore this.
     /// </summary>
     public void UpdateStrokePoint(AnnotationPoint point)
     {
-        if (_inProgressPoints is null || _inProgressState?.Tool is AnnotationTool.Pen or AnnotationTool.Text)
+        if (_inProgressPoints is null
+            || _inProgressState?.Tool is AnnotationTool.Pen or AnnotationTool.Text or AnnotationTool.Marker)
             return;
 
         _inProgressPoints[^1] = point;
@@ -286,6 +335,7 @@ public sealed class AnnotationDocument
         _inProgressPoints = null;
         _inProgressState = null;
         _inProgressText = null;
+        _inProgressMarkerNumber = null;
     }
 
     /// <summary>Undo removes the latest committed stroke and updates the composed Frame on the next render.</summary>
@@ -355,6 +405,7 @@ public sealed class AnnotationSession
     public void AppendStrokePoint(AnnotationPoint point) => Document.AppendStrokePoint(point);
     public void UpdateStrokePoint(AnnotationPoint point) => Document.UpdateStrokePoint(point);
     public void BeginText(AnnotationPoint point) => Document.BeginText(point, ToolState);
+    public void BeginMarker(AnnotationPoint point) => Document.BeginMarker(point, ToolState);
     public void EditInProgressText(string content) => Document.EditInProgressText(content);
     public bool CommitStroke() => Document.CommitStroke();
     public void CancelStroke() => Document.CancelStroke();
@@ -370,6 +421,9 @@ public static class AnnotationRenderer
 {
     /// <summary>Minimum text em size in pixels regardless of shared stroke width.</summary>
     public const float MinimumTextEmSize = 12f;
+
+    /// <summary>Minimum marker disc diameter in pixels regardless of shared stroke width.</summary>
+    public const double MinimumMarkerDiameter = 24.0;
 
     /// <summary>
     /// Maps the shared stroke width onto the text em size (in pixels) so text
@@ -420,6 +474,9 @@ public static class AnnotationRenderer
                 break;
             case AnnotationTool.Text:
                 DrawTextStroke(width, height, stride, pixels, stroke);
+                break;
+            case AnnotationTool.Marker:
+                DrawMarkerStroke(width, height, stride, pixels, stroke);
                 break;
         }
     }
@@ -549,6 +606,115 @@ public static class AnnotationRenderer
         {
             scratch.UnlockBits(data);
         }
+    }
+
+    /// <summary>
+    /// The marker disc diameter mapped from the shared stroke width so markers
+    /// participate in the same width control as the stroke tools while staying
+    /// large enough to hold a readable numeral.
+    /// </summary>
+    public static double MarkerDiameter(int strokeWidth) =>
+        Math.Max(MinimumMarkerDiameter, strokeWidth * 4.0);
+
+    /// <summary>
+    /// Draws one numbered marker: a solid disc in the shared annotation color with
+    /// the sequence numeral rasterized in white at its center, mirroring the GDI+
+    /// glyph path the text tool uses.
+    /// </summary>
+    private static void DrawMarkerStroke(int width, int height, int stride, byte[] pixels, AnnotationStroke stroke)
+    {
+        var anchor = stroke.Points[0];
+        double radius = MarkerDiameter(stroke.StrokeWidth) / 2.0;
+        int minX = Math.Max(0, (int)Math.Floor(anchor.X - radius));
+        int maxX = Math.Min(width - 1, (int)Math.Ceiling(anchor.X + radius));
+        int minY = Math.Max(0, (int)Math.Floor(anchor.Y - radius));
+        int maxY = Math.Min(height - 1, (int)Math.Ceiling(anchor.Y + radius));
+        double radiusSquared = radius * radius;
+
+        for (int y = minY; y <= maxY; y++)
+        {
+            for (int x = minX; x <= maxX; x++)
+            {
+                double distanceX = x - anchor.X;
+                double distanceY = y - anchor.Y;
+                if (distanceX * distanceX + distanceY * distanceY <= radiusSquared)
+                    BlendPixel(pixels, y * stride + x * 4, stroke.Color);
+            }
+        }
+
+        DrawMarkerNumeral(width, height, stride, pixels, anchor, radius, stroke);
+    }
+
+    /// <summary>
+    /// Rasterizes the marker numeral with GDI+ onto a scratch ARGB surface and
+    /// blends the glyph alpha in white over the disc, so anti-aliased edges
+    /// composite readably regardless of the annotation color.
+    /// </summary>
+    private static void DrawMarkerNumeral(
+        int width,
+        int height,
+        int stride,
+        byte[] pixels,
+        AnnotationPoint anchor,
+        double radius,
+        AnnotationStroke stroke)
+    {
+        float emSize = (float)(radius * 1.1);
+        using var font = new Font(FontFamily.GenericSansSerif, emSize, FontStyle.Bold, GraphicsUnit.Pixel);
+        string numeral = stroke.MarkerNumber?.ToString() ?? string.Empty;
+        if (numeral.Length == 0)
+            return;
+
+        using var scratch = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+        var bounds = new Rectangle(0, 0, width, height);
+        using (var graphics = Graphics.FromImage(scratch))
+        {
+            graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            var numeralSize = graphics.MeasureString(numeral, font);
+            // The numeral is centered inside the disc.
+            graphics.DrawString(
+                numeral,
+                font,
+                Brushes.White,
+                new PointF(
+                    (float)(anchor.X - numeralSize.Width / 2),
+                    (float)(anchor.Y - numeralSize.Height / 2)));
+        }
+
+        var data = scratch.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            var scan = new byte[Math.Abs(data.Stride) * height];
+            Marshal.Copy(data.Scan0, scan, 0, scan.Length);
+            for (int y = minY(anchor, radius); y <= maxY(anchor, radius, height); y++)
+            {
+                int scanRow = y * data.Stride;
+                int pixelRow = y * stride;
+                for (int x = minX(anchor, radius); x <= maxX(anchor, radius, width); x++)
+                {
+                    int alpha = scan[scanRow + x * 4 + 3];
+                    if (alpha == 0)
+                        continue;
+                    BlendPixel(
+                        pixels,
+                        pixelRow + x * 4,
+                        new AnnotationColor(255, 255, 255, (byte)Math.Clamp(alpha, 0, 255)));
+                }
+            }
+        }
+        finally
+        {
+            scratch.UnlockBits(data);
+        }
+
+        static int minX(AnnotationPoint anchor, double radius) =>
+            Math.Max(0, (int)Math.Floor(anchor.X - radius));
+        static int maxX(AnnotationPoint anchor, double radius, int width) =>
+            Math.Min(width - 1, (int)Math.Ceiling(anchor.X + radius));
+        static int minY(AnnotationPoint anchor, double radius) =>
+            Math.Max(0, (int)Math.Floor(anchor.Y - radius));
+        static int maxY(AnnotationPoint anchor, double radius, int height) =>
+            Math.Min(height - 1, (int)Math.Ceiling(anchor.Y + radius));
     }
 
     private static void FillBoundsIfFilled(

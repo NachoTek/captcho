@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using captcho.Capture;
 using captcho.UI;
@@ -587,6 +588,85 @@ public class AnnotationGateTests
                 colored++;
         Assert.True(colored > 10, $"Expected restored text pixels, found {colored}.");
         Assert.NotEqual(source.Pixels, result.Frame.Pixels);
+    }
+
+    // spec #41: numbered markers
+
+    [Fact]
+    public async Task Workflow_ConfirmedMarkerFrameCarriesTheComposedPixels()
+    {
+        var source = BitmapBufferConverter.StripPadding(
+            new byte[120 * 48 * 4],
+            120,
+            48,
+            480);
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            script.SetTool(AnnotationTool.Marker);
+            script.BeginMarker(new AnnotationPoint(30, 24));
+            script.CommitStroke();
+            script.BeginMarker(new AnnotationPoint(90, 24));
+            script.CommitStroke();
+        });
+        var session = Session(
+            SuccessfulCapture(source),
+            new FakePreviewAdapter(),
+            annotation,
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Marker, new AnnotationColor(255, 0, 0), 4));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        // Both marker centers are the annotation color on the delivered Frame.
+        Assert.Equal(255, result.Frame!.Pixels[(24 * 120 + 30) * 4 + 2]);
+        Assert.Equal(255, result.Frame.Pixels[(24 * 120 + 90) * 4 + 2]);
+        // The source Frame was never mutated by composition.
+        for (int i = 0; i < source.Pixels.Length; i += 4)
+        {
+            Assert.Equal(0, source.Pixels[i]);
+            Assert.Equal(0, source.Pixels[i + 1]);
+            Assert.Equal(0, source.Pixels[i + 2]);
+        }
+    }
+
+    [Fact]
+    public async Task Workflow_MarkerUndoRedoRoundTrip_ComposesSequentialNumbers()
+    {
+        var source = BitmapBufferConverter.StripPadding(
+            new byte[160 * 48 * 4],
+            160,
+            48,
+            640);
+        var annotation = new ScriptedAnnotationOverlayAdapter(script =>
+        {
+            script.SetTool(AnnotationTool.Marker);
+            script.BeginMarker(new AnnotationPoint(30, 24));
+            script.CommitStroke();
+            script.BeginMarker(new AnnotationPoint(70, 24));
+            script.CommitStroke();
+            // Undo the second marker; the third commit numbers past the highest remaining.
+            script.Undo();
+            script.BeginMarker(new AnnotationPoint(110, 24));
+            script.CommitStroke();
+            Assert.Equal(new int?[] { 1, 2 }, script.Document.Strokes.Select(s => s.MarkerNumber).ToArray());
+        });
+        var session = Session(
+            SuccessfulCapture(source),
+            new FakePreviewAdapter(),
+            annotation,
+            annotationEnabled: true,
+            toolState: new AnnotationToolState(AnnotationTool.Marker, new AnnotationColor(255, 0, 0), 4));
+
+        var result = await session.CaptureFullDesktopAsync();
+
+        Assert.Equal(WorkflowStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Frame);
+        Assert.Equal(255, result.Frame!.Pixels[(24 * 160 + 30) * 4 + 2]);
+        Assert.Equal(255, result.Frame.Pixels[(24 * 160 + 110) * 4 + 2]);
+        // The undone marker at (70,24) leaves no residue.
+        Assert.Equal(0, result.Frame.Pixels[(24 * 160 + 70) * 4 + 2]);
     }
 
     private static ContiguousBitmap Frame6x1() =>
