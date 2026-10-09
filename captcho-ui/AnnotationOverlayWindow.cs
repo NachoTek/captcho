@@ -671,7 +671,7 @@ public sealed class AnnotationOverlayWindow : IDisposable
         int character = wParam.ToInt32();
         if (character == VK_BACK || character == VK_RETURN || character == VK_ESCAPE)
             return IntPtr.Zero;
-        if (char.IsControl((char)character) || char.IsWhiteSpace((char)character) && character != ' ')
+        if (char.IsControl((char)character) || (char.IsWhiteSpace((char)character) && character != ' '))
             return IntPtr.Zero;
 
         _annotationSession.EditInProgressText(

@@ -61,6 +61,25 @@ public class AnnotationSettingsTests : IDisposable
         Assert.Equal(AnnotationTool.Ellipse, loaded.EffectiveAnnotationSettings.DefaultTool);
     }
 
+    // spec #40: the text tool is a valid persisted default
+
+    [Fact]
+    public void SaveThenLoad_PreservesTextToolDefault()
+    {
+        var service = new ConfigurationService(_tempDirectory);
+        var original = AppSettings.WithDefaults();
+        original.AnnotationSettings = new AnnotationSettings(
+            AnnotationTool.Text,
+            new AnnotationColor(12, 34, 56),
+            9);
+
+        Assert.True(service.Save(original).Success);
+        var loaded = service.Load().Settings;
+
+        Assert.Empty(loaded.Validate());
+        Assert.Equal(AnnotationTool.Text, loaded.EffectiveAnnotationSettings.DefaultTool);
+    }
+
     [Fact]
     public void Validate_RejectsUnknownToolAndOutOfRangeStrokeWidth()
     {
