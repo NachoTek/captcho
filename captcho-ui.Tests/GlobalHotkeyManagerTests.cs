@@ -398,7 +398,7 @@ public class GlobalHotkeyManagerTests
     public void Reconcile_NullEnabledIds_Throws()
     {
         var manager = new GlobalHotkeyManager(_fake);
-        Assert.Throws<ArgumentNullException>(() => manager.Reconcile(IntPtr.Zero, null!));
+        Assert.Throws<ArgumentNullException>(() => manager.Reconcile(IntPtr.Zero, (IReadOnlySet<int>)null!));
     }
 
     [Fact]

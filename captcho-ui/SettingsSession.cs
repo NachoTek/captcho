@@ -127,6 +127,18 @@ public sealed class SettingsSession
         return ClearTransientStatus();
     }
 
+    /// <summary>
+    /// Records a key combination for one Global Hotkey from inline recorder input and
+    /// returns the refreshed view. Suspected conflicts (the combination already being
+    /// another enabled row's working combination) are surfaced on the row as a warning
+    /// without rejecting the value. Never persists or reconciles runtime registration.
+    /// </summary>
+    public SettingsView RecordGlobalHotkeyBinding(int globalHotkeyId, HotkeyBinding binding)
+    {
+        _globalHotkeyTab.RecordBinding(globalHotkeyId, binding);
+        return ClearTransientStatus();
+    }
+
     // ── Editable Capture-tab edits ──────────────────────────────────────
 
     /// <summary>
@@ -290,12 +302,13 @@ public sealed class SettingsSession
         foreach (var tab in _editableTabs)
             tab.Commit();
 
-        // Reconcile runtime registration to match the persisted enabled states. The
-        // adapter never throws for expected conflicts; failures surface as Failed rows
-        // (read live from the adapter) and are summarized in the status so a failed
+        // Reconcile runtime registration to match the persisted settings (enabled
+        // states and recorded key combinations — the merged settings just saved,
+        // which equal what was written into the runtime above). The adapter never
+        // throws for expected conflicts; failures surface as Failed rows (read
+        // live from the adapter) and are summarized in the status so a failed
         // binding is visible, not overclaimed as active.
-        var registrationResults = _globalHotkeys.ApplyEnabledStates(
-            GlobalHotkeyRouteMap.EnabledGlobalHotkeyIds(merged));
+        var registrationResults = _globalHotkeys.ApplySettings(merged);
         int failedRegistrations = registrationResults.Count(r => !r.Succeeded);
 
         _statusMessage = failedRegistrations > 0

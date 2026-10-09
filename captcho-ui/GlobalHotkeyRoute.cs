@@ -147,6 +147,29 @@ public static class GlobalHotkeyRouteMap
     });
 
     /// <summary>
+    /// The Global Hotkey specs for the given settings: each route's binding
+    /// resolved from Configuration (recorded combination, or the legacy default
+    /// when none is recorded), carried on the same stable ids, routes, and
+    /// binding names as <see cref="AllSpecs"/>. The single translation from
+    /// persisted Global Hotkey bindings to Win32 specs — used by startup
+    /// registration and the Settings reconcile so both agree.
+    /// </summary>
+    public static IReadOnlyList<GlobalHotkeySpec> SpecsFor(AppSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var specs = new GlobalHotkeySpec[AllSpecs.Count];
+        for (int i = 0; i < AllSpecs.Count; i++)
+        {
+            var spec = AllSpecs[i];
+            var binding = settings.EffectiveGlobalHotkeyBinding(spec.Route);
+            specs[i] = binding.Modifiers == spec.Modifiers && binding.VirtualKey == spec.VirtualKey
+                ? spec
+                : spec with { Modifiers = binding.Modifiers, VirtualKey = binding.VirtualKey };
+        }
+        return Array.AsReadOnly(specs);
+    }
+
+    /// <summary>
     /// Looks up the capture route for a given Global Hotkey id (from WM_HOTKEY wParam).
     /// Returns true and sets <paramref name="route"/> for known ids; false for unknown.
     /// </summary>

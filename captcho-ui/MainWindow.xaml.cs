@@ -251,10 +251,11 @@ public sealed partial class MainWindow : Window
             }
 
             _globalHotkeyManager = new GlobalHotkeyManager(new WindowsGlobalHotkeyRegistrar());
-            // Register only the Global Hotkeys the user has enabled, so disabled
-            // Global Hotkeys are not active on launch. Global Hotkeys disabled in settings are
-            // skipped; the rest register just like RegisterAll would.
-            var results = _globalHotkeyManager.Reconcile(_hwnd, GlobalHotkeyRouteMap.EnabledGlobalHotkeyIds(_settings));
+            // Register only the Global Hotkeys the user has enabled, each with its
+            // effective binding from Configuration (recorded combination or legacy
+            // default), so disabled Global Hotkeys are not active on launch and a
+            // remapped combination registers without waiting for Settings.
+            var results = _globalHotkeyManager.Reconcile(_hwnd, _settings);
 
             // Install WndProc subclass to intercept WM_HOTKEY messages.
             // Keep the delegate alive to prevent GC collection while subclassed.
