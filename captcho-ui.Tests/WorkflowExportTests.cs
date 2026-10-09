@@ -111,7 +111,8 @@ internal static class WorkflowExportTestHarness
     /// <summary>
     /// Creates a session wired for Export tests: fake Export/Save-As adapters,
     /// annotation disabled (that gate has its own coverage), and default
-    /// success for the Full Desktop Capture route.
+    /// success for the Full Desktop Capture route. Delivery (Open With /
+    /// Share, issue #46) stays unwired — covered by WorkflowDeliveryTests.
     /// </summary>
     public static CaptureWorkflowSession<object> CreateSession(
         FakeWorkflowExportAdapter export,
