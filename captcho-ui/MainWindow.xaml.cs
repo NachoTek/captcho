@@ -187,7 +187,8 @@ public sealed partial class MainWindow : Window
         // adapters: native pixel acquisition, the Selection overlay, the
         // Selected Monitor picker overlay, the Selected Window picker overlay,
         // the preview transition, the Export actions (Save, Save As,
-        // Copy Frame, Copy Path), and Windows OCR for Recognize Text. The
+        // Copy Frame, Copy Path), and the Windows-first OCR chain with the
+        // packaged Tesseract fallback for Recognize Text (issue #50). The
         // session owns Capture Mode routing and the post-capture workflow —
         // including the one default saved-file identity per Capture — from
         // here. The SessionCaptureOptions is bound to the live runtime
@@ -220,7 +221,7 @@ public sealed partial class MainWindow : Window
             new AnnotationOverlayAdapter(),
             () => _settings.AnnotationEnabled,
             () => _settings.EffectiveAnnotationSettings.ToToolState(),
-            new WindowsOcrEngine(),
+            FallbackOcrEngine.WindowsWithTesseract(),
             () => _settings.OcrLanguageTag,
             new ZxingQrScanner(),
             new WorkflowExportAdapter(_settings, new WindowsClipboardAdapter()),
