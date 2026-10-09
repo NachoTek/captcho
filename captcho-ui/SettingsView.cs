@@ -62,12 +62,16 @@ public sealed record AnnotationTabContent(
 /// <summary>
 /// Editable content for the Behavior tab, sourced from
 /// <see cref="BehaviorTabSettings"/>. Carries the three independent automatic
-/// delivery toggles that run after Annotation confirmation (issue #47).
+/// delivery toggles that run after Annotation confirmation (issue #47) and
+/// the configured launch behavior (issue #53). The configured Capture Mode is
+/// null unless the launch action is Configured Capture Mode.
 /// </summary>
 public sealed record BehaviorTabContent(
     bool AutoSave,
     bool AutoCopyFrame,
-    bool AutoCopyPath);
+    bool AutoCopyPath,
+    LaunchAction LaunchAction,
+    CaptureMode? LaunchConfiguredMode);
 
 /// <summary>
 /// Immutable snapshot of everything the Settings window code-behind binds. Produced
