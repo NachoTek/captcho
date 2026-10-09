@@ -332,6 +332,160 @@ public sealed class MonitorPickerOverlayAdapter : IMonitorPickerOverlayAdapter
 }
 
 /// <summary>
+/// Production <see cref="IWorkflowExportAdapter"/>. Owns no workflow state:
+/// PNG encoding and file writing delegate to <see cref="PngExportService"/>,
+/// clipboard placement to the injected <see cref="IClipboardAdapter"/>. The
+/// configured destination and Filename Template are read from the live
+/// runtime <see cref="AppSettings"/> the adapter was constructed from, so
+/// committed Configuration changes are observable without reconstructing it.
+/// Never throws for expected failures — every method returns the structured
+/// result the session maps into a retryable <see cref="WorkflowExportResult"/>.
+/// </summary>
+public sealed class WorkflowExportAdapter : IWorkflowExportAdapter
+{
+    private readonly AppSettings _settings;
+    private readonly IClipboardAdapter _clipboard;
+
+    /// <summary>
+    /// Creates the production Export adapter over the live runtime settings
+    /// and clipboard boundary.
+    /// </summary>
+    /// <param name="settings">
+    /// Live runtime settings supplying the committed Save Location and
+    /// Filename Template. Retained by reference — never written back to.
+    /// </param>
+    /// <param name="clipboard">Platform clipboard boundary.</param>
+    public WorkflowExportAdapter(AppSettings settings, IClipboardAdapter clipboard)
+    {
+        _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        _clipboard = clipboard ?? throw new ArgumentNullException(nameof(clipboard));
+    }
+
+    /// <summary>
+    /// Writes the Frame as a PNG to the configured Save Location using the
+    /// configured Filename Template, resolving filename collisions so an
+    /// existing file is never silently overwritten.
+    /// </summary>
+    public ExportResult SaveDefault(ContiguousBitmap frame, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        string path = ExportFilenameTemplate.GetExportPath(_settings, DateTime.Now);
+        path = ExportFilenameTemplate.ResolveCollision(path);
+        return PngExportService.SaveAsPng(frame, path, cancellationToken);
+    }
+
+    /// <summary>
+    /// Writes the Frame as a PNG to the explicitly supplied full path — the
+    /// confirmed Save As choice or the already-recorded default saved-file
+    /// identity on a repeated Save. Creates the destination directory when
+    /// missing; performs no collision resolution because the caller chose
+    /// the path.
+    /// </summary>
+    public ExportResult SaveTo(ContiguousBitmap frame, string destinationPath, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        if (string.IsNullOrWhiteSpace(destinationPath))
+            return ExportResult.Fail(ExportPhase.Validation, "No destination path provided", TimeSpan.Zero);
+        return PngExportService.SaveAsPng(frame, destinationPath, cancellationToken);
+    }
+
+    /// <summary>
+    /// Encodes the Frame as PNG image content and places it on the clipboard.
+    /// Creates no file.
+    /// </summary>
+    public ClipboardExportResult CopyImage(ContiguousBitmap frame)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+
+        if (frame.Width <= 0 || frame.Height <= 0)
+            return ClipboardExportResult.Fail(
+                $"Invalid capture dimensions: {frame.Width}x{frame.Height}", TimeSpan.Zero);
+
+        byte[]? pngBytes = PngExportService.EncodeToPngBytes(frame);
+        if (pngBytes is null || pngBytes.Length == 0)
+            return ClipboardExportResult.Fail("Failed to encode image for clipboard", TimeSpan.Zero);
+
+        if (!_clipboard.SetPngImage(pngBytes))
+            return ClipboardExportResult.Fail("Failed to set clipboard content", TimeSpan.Zero);
+
+        return ClipboardExportResult.Ok(frame.Width, frame.Height, pngBytes.Length, TimeSpan.Zero);
+    }
+
+    /// <summary>
+    /// Places the supplied text (a saved file's path) on the clipboard.
+    /// </summary>
+    public ClipboardExportResult CopyText(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return ClipboardExportResult.Fail("No text to copy", TimeSpan.Zero);
+
+        if (!_clipboard.SetText(text))
+            return ClipboardExportResult.Fail("Failed to set clipboard content", TimeSpan.Zero);
+
+        return ClipboardExportResult.TextOk(text.Length, TimeSpan.Zero);
+    }
+}
+
+/// <summary>
+/// Production <see cref="ISaveAsDialogAdapter"/>. Shows a WinUI
+/// FileSavePicker initialized from the configured Filename Template and the
+/// Pictures library, scoped to PNG. Must be shown on the UI thread; the
+/// parent HWND is resolved from the supplied provider at ShowAsync time.
+/// Translates picker failures into a null (cancelled) result so the workflow
+/// reports cancellation rather than crashing.
+/// </summary>
+public sealed class FileSavePickerDialogAdapter : ISaveAsDialogAdapter
+{
+    private readonly Func<IntPtr> _hwndProvider;
+    private readonly Func<AppSettings> _settingsProvider;
+
+    /// <summary>
+    /// Creates the dialog adapter over the main window's HWND and the live
+    /// runtime settings. Both are deferred so the handle and the committed
+    /// Filename Template are resolved at ShowAsync time.
+    /// </summary>
+    public FileSavePickerDialogAdapter(Func<IntPtr> hwndProvider, Func<AppSettings> settingsProvider)
+    {
+        _hwndProvider = hwndProvider ?? throw new ArgumentNullException(nameof(hwndProvider));
+        _settingsProvider = settingsProvider ?? throw new ArgumentNullException(nameof(settingsProvider));
+    }
+
+    /// <summary>
+    /// Shows the Save As picker and returns the chosen full path, or null if
+    /// the user cancelled (or the picker could not be shown).
+    /// </summary>
+    public async Task<string?> ShowAsync()
+    {
+        try
+        {
+            var picker = new Windows.Storage.Pickers.FileSavePicker();
+
+            var hwnd = _hwndProvider();
+            if (hwnd != IntPtr.Zero)
+            {
+                WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+            }
+
+            picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.PicturesLibrary;
+            picker.FileTypeChoices.Add("PNG Image", new List<string> { ".png" });
+            picker.DefaultFileExtension = ".png";
+            picker.SuggestedFileName = ExportFilenameTemplate.Expand(
+                _settingsProvider().EffectiveFilenameTemplate, DateTime.Now);
+
+            var file = await picker.PickSaveFileAsync();
+            return file?.Path;
+        }
+        catch
+        {
+            // Surface unexpected picker failures as cancellation so the
+            // workflow reports a user-visible "Save cancelled." outcome
+            // instead of crashing the application.
+            return null;
+        }
+    }
+}
+
+/// <summary>
 /// Production <see cref="IWindowPickerOverlayAdapter"/>. Wraps the Win32 layered
 /// <see cref="WindowPickerOverlayWindow"/>: shows the scrimmed picker over the
 /// live desktop, highlights the hovered window's full bounds and title, and

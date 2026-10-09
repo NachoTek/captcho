@@ -176,8 +176,11 @@ public sealed partial class MainWindow : Window
         // Construct the runtime workflow session with all production
         // adapters: native pixel acquisition, the Selection overlay, the
         // Selected Monitor picker overlay, the Selected Window picker overlay,
-        // and the preview transition. The session owns Capture Mode routing
-        // from here. The SessionCaptureOptions is bound to the live runtime
+        // the preview transition, the Export actions (Save, Save As,
+        // Copy Frame, Copy Path), and Windows OCR for Recognize Text. The
+        // session owns Capture Mode routing and the post-capture workflow —
+        // including the one default saved-file identity per Capture — from
+        // here. The SessionCaptureOptions is bound to the live runtime
         // AppSettings so committed-default changes (applied through Settings)
         // are observable, and so per-Capture-Mode session overrides flow into
         // the effective options each route forwards (spec #34).
@@ -200,7 +203,11 @@ public sealed partial class MainWindow : Window
             () => _settings.AnnotationEnabled,
             () => _settings.EffectiveAnnotationSettings.ToToolState(),
             new WindowsOcrEngine(),
-            () => _settings.OcrLanguageTag);
+            () => _settings.OcrLanguageTag,
+            new WorkflowExportAdapter(_settings, new WindowsClipboardAdapter()),
+            new FileSavePickerDialogAdapter(
+                () => _hwnd != IntPtr.Zero ? _hwnd : WinRT.Interop.WindowNative.GetWindowHandle(this),
+                () => _settings));
 
         // Initialize Global Hotkeys after the window has an HWND.
         // In WinUI 3, the HWND is available immediately after construction.
@@ -452,9 +459,11 @@ public sealed partial class MainWindow : Window
     // ── Export button click handlers ─────────────────────────────────
 
     /// <summary>
-    /// Handles "Save" click — saves to the configured save location using the
-    /// configured filename template. Falls back to defaults if not configured.
-    /// Disables all controls during save.
+    /// Handles "Save" click — routes the Save Export action through the
+    /// workflow session, which writes a PNG to the configured save location
+    /// using the configured Filename Template and keeps the one default
+    /// saved-file identity so repeats never duplicate it. Disables all
+    /// controls during the save.
     /// </summary>
     private async void Save_Click(object sender, RoutedEventArgs e)
     {
@@ -469,10 +478,8 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            var result = await Task.Run(() =>
-                _captureService.SaveLastCaptureWithSettingsAsync(_settings));
-            StatusText.Text = ExportStatusFormatter.FormatStatus(result);
-            TimingText.Text = FormatTimingWithExport(result, null);
+            var result = await _workflowSession.SaveAsync();
+            ApplyWorkflowExportResult(result);
         }
         catch (Exception ex)
         {
@@ -486,11 +493,12 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Handles "Save As…" click — opens a FileSavePicker initialized with
-    /// the configured filename template, then saves to the selected path.
-    /// After successful save, persists the selected directory as the new
-    /// default save location. Does not persist on cancel or failure.
-    /// Uses WinRT.Interop.InitializeWithWindow for desktop HWND initialization.
+    /// Handles "Save As…" click — routes the Save As Export action through
+    /// the workflow session, which shows the file picker (initialized with
+    /// the configured Filename Template) and saves to the chosen path
+    /// without replacing the Capture's default saved-file identity. After a
+    /// successful save, persists the selected directory as the new default
+    /// save location; does not persist on cancel or failure.
     /// </summary>
     private async void SaveAs_Click(object sender, RoutedEventArgs e)
     {
@@ -505,39 +513,13 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            var picker = new Windows.Storage.Pickers.FileSavePicker();
-
-            // Initialize the picker with the window's HWND for WinUI desktop
-            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
-
-            picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.PicturesLibrary;
-            picker.FileTypeChoices.Add("PNG Image", new List<string> { ".png" });
-            picker.DefaultFileExtension = ".png";
-            picker.SuggestedFileName = ExportFilenameTemplate.Expand(
-                _settings.EffectiveFilenameTemplate, DateTime.Now);
-
-            var file = await picker.PickSaveFileAsync();
-
-            if (file == null)
-            {
-                // User cancelled the picker — not an error, do NOT persist settings
-                StatusText.Text = ExportStatusFormatter.FormatPickerCancelled();
-                TimingText.Text = "";
-                return;
-            }
-
-            StatusText.Text = "Saving…";
-            var result = await Task.Run(() =>
-                _captureService.SaveLastCaptureToFileAsync(file.Path));
-
-            StatusText.Text = ExportStatusFormatter.FormatStatus(result);
-            TimingText.Text = FormatTimingWithExport(result, null);
+            var result = await _workflowSession.SaveAsAsync();
+            ApplyWorkflowExportResult(result);
 
             // Persist the selected directory after successful save only
-            if (result.Success && _configurationService != null)
+            if (result.IsSuccess && _configurationService != null)
             {
-                PersistSaveAsDirectory(Path.GetDirectoryName(file.Path));
+                PersistSaveAsDirectory(Path.GetDirectoryName(result.FilePath ?? ""));
             }
         }
         catch (Exception ex)
@@ -586,8 +568,9 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Handles "Copy" click — copies the last capture to the clipboard.
-    /// Uses the ClipboardExportService wired to the capture service cache.
+    /// Handles "Copy" click — routes the Copy Frame Export action through
+    /// the workflow session, which places image content on the clipboard
+    /// without creating a file.
     /// </summary>
     private async void CopyToClipboard_Click(object sender, RoutedEventArgs e)
     {
@@ -602,14 +585,8 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            var clipboardAdapter = new WindowsClipboardAdapter();
-            var exporter = _captureService.CreateClipboardExporter(clipboardAdapter);
-
-            // ClipboardExportService.CopyToClipboard is synchronous — offload to avoid UI jank
-            var result = await Task.Run(() => exporter.CopyToClipboard());
-
-            StatusText.Text = ExportStatusFormatter.FormatStatus(result);
-            TimingText.Text = FormatTimingWithExport(null, result);
+            var result = await _workflowSession.CopyFrameAsync();
+            ApplyWorkflowExportResult(result);
         }
         catch (Exception ex)
         {
@@ -620,6 +597,49 @@ public sealed partial class MainWindow : Window
         {
             ExitExportState();
         }
+    }
+
+    /// <summary>
+    /// Handles "Copy Path" click — routes the Copy Path Export action
+    /// through the workflow session, which copies the saved file's path to
+    /// the clipboard. Unavailable until a valid saved file exists.
+    /// </summary>
+    private async void CopyPath_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isOperationRunning || !_hasCapture)
+        {
+            StatusText.Text = ExportStatusFormatter.FormatNoCapture();
+            return;
+        }
+
+        EnterExportState();
+        StatusText.Text = "Copying path…";
+
+        try
+        {
+            var result = await _workflowSession.CopyPathAsync();
+            ApplyWorkflowExportResult(result);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Copy path failed: {SanitizeException(ex)}";
+            TimingText.Text = "";
+        }
+        finally
+        {
+            ExitExportState();
+        }
+    }
+
+    /// <summary>
+    /// Applies a WorkflowExportResult to the status and timing text and
+    /// refreshes Copy Path availability from the session's saved-file state.
+    /// </summary>
+    private void ApplyWorkflowExportResult(WorkflowExportResult result)
+    {
+        StatusText.Text = ExportStatusFormatter.FormatStatus(result);
+        TimingText.Text = ExportStatusFormatter.FormatTiming(result);
+        CopyPathButton.IsEnabled = _workflowSession.HasSavedFile;
     }
 
     // ── Delayed capture orchestration ────────────────────────────────
@@ -733,9 +753,10 @@ public sealed partial class MainWindow : Window
 
     /// <summary>
     /// Applies a WorkflowResult from the runtime session to the WinUI preview
-    /// image, status, and timing text. On success, syncs the session-owned
-    /// Frame into the export cache so the existing Save/Copy path continues
-    /// to work until Export also migrates behind the session.
+    /// image, status, and timing text. On success the session already owns
+    /// the Frame (its Export actions read it); this binder only renders the
+    /// result. Copy Path availability refreshes from the session's
+    /// saved-file state — a new Capture resets the saved-file identity.
     /// </summary>
     private void ApplyWorkflowResult(WorkflowResult<WriteableBitmap> result)
     {
@@ -747,13 +768,10 @@ public sealed partial class MainWindow : Window
                 {
                     PreviewImage.Source = result.PreviewImage;
                 }
-                if (result.Frame is not null)
-                {
-                    _captureService.SetLastCapture(result.Frame);
-                }
                 StatusText.Text = $"{result.Mode} — {result.Dimensions}";
                 _hasCapture = true;
                 RecognizeTextButton.IsEnabled = true;
+                CopyPathButton.IsEnabled = _workflowSession.HasSavedFile;
                 break;
 
             case WorkflowStatus.OperationInProgress:
@@ -951,18 +969,23 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Enables or disables the export buttons (Save, Save As…, Copy).
+    /// Enables or disables the export buttons (Save, Save As…, Copy, Copy
+    /// Path). Copy Path additionally requires a saved file to exist as
+    /// workflow state for the current Capture.
     /// </summary>
     private void SetExportButtonsEnabled(bool enabled)
     {
         SaveButton.IsEnabled = enabled;
         SaveAsButton.IsEnabled = enabled;
         CopyToClipboardButton.IsEnabled = enabled;
+        CopyPathButton.IsEnabled = enabled && _workflowSession.HasSavedFile;
     }
 
     /// <summary>
     /// Applies a capture result to the UI (preview image, status, timing).
-    /// Enables export buttons on successful capture.
+    /// Enables export buttons on successful capture. The legacy route's
+    /// Frame is adopted by the workflow session so the Export actions own
+    /// it — one saved-file identity per Capture, reset on each adoption.
     /// </summary>
     private void ApplyCaptureResult(CapturePreviewResult result)
     {
@@ -973,6 +996,13 @@ public sealed partial class MainWindow : Window
             StatusText.Text = $"{result.Mode} — {result.Dimensions}";
             _hasCapture = true;
             RecognizeTextButton.IsEnabled = true;
+
+            var frame = _captureService.LastCapturedBitmap;
+            if (frame is not null)
+            {
+                _workflowSession.AdoptFrame(frame);
+            }
+            CopyPathButton.IsEnabled = _workflowSession.HasSavedFile;
         }
         else
         {
@@ -1007,24 +1037,6 @@ public sealed partial class MainWindow : Window
             parts.Add($"display {displayMs:F1}ms");
         if (totalMs > 0)
             parts.Add($"total {totalMs:F1}ms");
-
-        return string.Join(" │ ", parts);
-    }
-
-    /// <summary>
-    /// Formats timing from either an export result or clipboard result.
-    /// Pass null for either one to format only the non-null result.
-    /// </summary>
-    private static string FormatTimingWithExport(ExportResult? exportResult,
-        ClipboardExportResult? clipboardResult)
-    {
-        var parts = new List<string>();
-
-        if (exportResult != null && exportResult.Elapsed > TimeSpan.Zero)
-            parts.Add($"export {exportResult.Elapsed.TotalMilliseconds:F1}ms");
-
-        if (clipboardResult != null && clipboardResult.Elapsed > TimeSpan.Zero)
-            parts.Add($"clipboard {clipboardResult.Elapsed.TotalMilliseconds:F1}ms");
 
         return string.Join(" │ ", parts);
     }
@@ -1290,6 +1302,23 @@ public sealed class WindowsClipboardAdapter : IClipboardAdapter
 
             var content = new Windows.ApplicationModel.DataTransfer.DataPackage();
             content.SetBitmap(Windows.Storage.Streams.RandomAccessStreamReference.CreateFromStream(stream));
+
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(content);
+            Windows.ApplicationModel.DataTransfer.Clipboard.Flush();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public bool SetText(string text)
+    {
+        try
+        {
+            var content = new Windows.ApplicationModel.DataTransfer.DataPackage();
+            content.SetText(text);
 
             Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(content);
             Windows.ApplicationModel.DataTransfer.Clipboard.Flush();

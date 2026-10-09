@@ -189,11 +189,21 @@ Layout:
                     Grid.Column="15"
                     Content="Copy"
                     MinWidth="80" MinHeight="40"
-                    Margin="0,0,8,0"
+                    Margin="0,0,6,0"
                     IsEnabled="False"
                     Click="CopyToClipboard_Click"
                     CornerRadius="6"
                     ToolTipService.ToolTip="Copy screenshot to clipboard"/>
+
+            <Button x:Name="CopyPathButton"
+                    Grid.Column="15"
+                    Content="Copy Path"
+                    MinWidth="90" MinHeight="40"
+                    Margin="0,0,8,0"
+                    IsEnabled="False"
+                    Click="CopyPath_Click"
+                    CornerRadius="6"
+                    ToolTipService.ToolTip="Copy the saved file's path (available after a save)"/>
 
             <!-- Delay input: compact NumberBox for 0–60 second countdown -->
             <NumberBox x:Name="DelaySecondsInput"

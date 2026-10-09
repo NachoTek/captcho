@@ -84,6 +84,73 @@ public static class ExportStatusFormatter
     }
 
     /// <summary>
+    /// Formats a WorkflowExportResult (the Export workflow actions on the
+    /// runtime session) into a status string for the status bar. Shows the
+    /// produced filename and dimensions on Save/Save As success, clipboard
+    /// dimensions on Copy Frame success, and the copied path on Copy Path
+    /// success; sanitized errors on failure; cancellation otherwise.
+    /// </summary>
+    public static string FormatStatus(WorkflowExportResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+
+        if (result.IsSuccess)
+        {
+            return result.Action switch
+            {
+                WorkflowExportAction.Save or WorkflowExportAction.SaveAs =>
+                    $"Saved {Path.GetFileName(result.FilePath ?? "unknown.png")} ({result.Width}×{result.Height})",
+                WorkflowExportAction.CopyFrame =>
+                    $"Copied to clipboard ({result.Width}×{result.Height})",
+                WorkflowExportAction.CopyPath =>
+                    $"Copied path: {result.FilePath}",
+                _ => "Export succeeded.",
+            };
+        }
+
+        if (result.Status == WorkflowExportStatus.NoFrame)
+            return FormatNoCapture();
+
+        if (result.Status == WorkflowExportStatus.Cancelled)
+        {
+            // Save As cancellation means the user dismissed the picker; other
+            // action cancellations come from the export itself.
+            return result.Action == WorkflowExportAction.SaveAs
+                ? FormatPickerCancelled()
+                : "Export cancelled.";
+        }
+
+        if (result.Status == WorkflowExportStatus.OperationInProgress)
+            return result.Error ?? "An operation is already in progress.";
+
+        return result.Action switch
+        {
+            WorkflowExportAction.CopyFrame => $"Clipboard failed: {result.Error}",
+            WorkflowExportAction.CopyPath => $"Copy path failed: {result.Error}",
+            _ => $"Export failed: {result.Error}",
+        };
+    }
+
+    /// <summary>
+    /// Formats a WorkflowExportResult into a timing string for the
+    /// diagnostics bar. Returns empty string if no timing information is
+    /// available.
+    /// </summary>
+    public static string FormatTiming(WorkflowExportResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+
+        if (result.ElapsedMs <= 0)
+            return "";
+
+        return result.Action switch
+        {
+            WorkflowExportAction.CopyFrame => $"clipboard {result.ElapsedMs:F1}ms",
+            _ => $"export {result.ElapsedMs:F1}ms",
+        };
+    }
+
+    /// <summary>
     /// Returns the status text for a cancelled Save As picker.
     /// </summary>
     public static string FormatPickerCancelled() => "Save cancelled.";

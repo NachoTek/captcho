@@ -23,6 +23,12 @@ public interface IClipboardAdapter
     /// Returns true on success, false on failure.
     /// </summary>
     bool SetPngImage(byte[] pngBytes);
+
+    /// <summary>
+    /// Sets the clipboard content to plain text (e.g., a saved file's path
+    /// for Copy Path). Returns true on success, false on failure.
+    /// </summary>
+    bool SetText(string text);
 }
 
 /// <summary>
@@ -53,6 +59,15 @@ public sealed class ClipboardExportResult
         return new ClipboardExportResult(true, "Copied to clipboard", elapsed, width, height, byteCount);
     }
 
+    /// <summary>
+    /// Builds a successful plain-text copy result (Copy Path). Width/height
+    /// stay null — text content has no image dimensions.
+    /// </summary>
+    public static ClipboardExportResult TextOk(long charCount, TimeSpan elapsed)
+    {
+        return new ClipboardExportResult(true, "Copied path to clipboard", elapsed, null, null, charCount);
+    }
+
     public static ClipboardExportResult Fail(string sanitizedMessage, TimeSpan elapsed)
     {
         return new ClipboardExportResult(false, sanitizedMessage, elapsed, null, null, null);
@@ -66,6 +81,8 @@ public sealed class ClipboardExportResult
 public sealed class NullClipboardAdapter : IClipboardAdapter
 {
     public bool SetPngImage(byte[] pngBytes) => false;
+
+    public bool SetText(string text) => false;
 }
 
 /// <summary>
