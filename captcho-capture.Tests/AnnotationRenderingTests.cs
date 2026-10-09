@@ -496,6 +496,7 @@ public class AnnotationRenderingTests
     public void Render_Blur_ClipsTheEffectToTheRegionAndLeavesOutsideIdentical()
     {
         var source = CheckerboardFrame(40, 30);
+        var before = source.Pixels.ToArray();
         var stroke = new AnnotationStroke(
             AnnotationTool.Blur,
             new AnnotationColor(255, 0, 0),
@@ -512,9 +513,9 @@ public class AnnotationRenderingTests
                 if (!inside)
                     Assert.Equal(Pixel(source, x, y), Pixel(rendered, x, y));
             }
-        // The source Frame itself is never mutated.
-        Assert.NotEqual(source.Pixels, rendered.Pixels);
-        Assert.Equal(Pixel(source, 10, 10), Pixel(source, 10, 10));
+        // The source Frame itself is never mutated by composition.
+        Assert.NotEqual(before, rendered.Pixels);
+        Assert.Equal(before, source.Pixels);
     }
 
     [Fact]
