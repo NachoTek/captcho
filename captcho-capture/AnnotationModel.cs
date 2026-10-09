@@ -33,6 +33,19 @@ public enum AnnotationFillStyle
     Solid,
 }
 
+/// <summary>
+/// Shadow treatment for the shadow-capable annotation tools: a translucent black
+/// copy of the entry offset down-right behind it. Blur is geometry-only and never
+/// snapshots a shadow.
+/// </summary>
+public enum AnnotationShadowStyle
+{
+    /// <summary>No shadow; the entry renders alone.</summary>
+    None,
+    /// <summary>A drop shadow renders behind the entry at a fixed offset and opacity.</summary>
+    Drop,
+}
+
 /// <summary>RGBA color used by annotation strokes.</summary>
 public readonly record struct AnnotationColor(
     byte Red,
@@ -56,7 +69,8 @@ public sealed record AnnotationToolState(
     AnnotationTool Tool,
     AnnotationColor PenColor,
     int StrokeWidth,
-    AnnotationFillStyle Fill = AnnotationFillStyle.None)
+    AnnotationFillStyle Fill = AnnotationFillStyle.None,
+    AnnotationShadowStyle Shadow = AnnotationShadowStyle.None)
 {
     public static AnnotationToolState WithDefaults() => AnnotationSettings.WithDefaults().ToToolState();
 
@@ -66,10 +80,14 @@ public sealed record AnnotationToolState(
         StrokeWidth is >= AnnotationSettings.MinimumStrokeWidth and <= AnnotationSettings.MaximumStrokeWidth
             ? StrokeWidth
             : AnnotationSettings.DefaultStrokeWidth,
-        Enum.IsDefined(Fill) ? Fill : AnnotationFillStyle.None);
+        Enum.IsDefined(Fill) ? Fill : AnnotationFillStyle.None,
+        Enum.IsDefined(Shadow) ? Shadow : AnnotationShadowStyle.None);
 
     /// <summary>Whether the tool draws a filled interior under its outline.</summary>
     public bool ToolSupportsFill => Tool is AnnotationTool.Rectangle or AnnotationTool.Ellipse;
+
+    /// <summary>Whether the tool renders a drop shadow behind its entry.</summary>
+    public bool ToolSupportsShadow => Tool != AnnotationTool.Blur;
 }
 
 /// <summary>
@@ -110,6 +128,7 @@ public sealed class AnnotationStroke
     public AnnotationColor Color { get; }
     public int StrokeWidth { get; }
     public AnnotationFillStyle Fill { get; }
+    public AnnotationShadowStyle Shadow { get; }
     public IReadOnlyList<AnnotationPoint> Points { get; }
 
     /// <summary>
@@ -134,7 +153,8 @@ public sealed class AnnotationStroke
         IReadOnlyList<AnnotationPoint> points,
         AnnotationFillStyle fill = AnnotationFillStyle.None,
         string? text = null,
-        int? markerNumber = null)
+        int? markerNumber = null,
+        AnnotationShadowStyle shadow = AnnotationShadowStyle.None)
     {
         if (!Enum.IsDefined(tool))
             throw new ArgumentOutOfRangeException(nameof(tool));
@@ -151,6 +171,7 @@ public sealed class AnnotationStroke
         MarkerNumber = tool == AnnotationTool.Marker
             ? markerNumber is null or < 1 ? 1 : markerNumber
             : null;
+        Shadow = shadow;
     }
 }
 
@@ -194,14 +215,16 @@ public sealed class AnnotationDocument
                         _inProgressState.PenColor,
                         _inProgressState.StrokeWidth,
                         _inProgressPoints,
-                        text: _inProgressText);
+                        text: _inProgressText,
+                        shadow: EffectiveShadow(_inProgressState));
             return new AnnotationStroke(
                 _inProgressState.Tool,
                 _inProgressState.PenColor,
                 _inProgressState.StrokeWidth,
                 _inProgressPoints,
                 EffectiveFill(_inProgressState),
-                markerNumber: _inProgressMarkerNumber);
+                markerNumber: _inProgressMarkerNumber,
+                shadow: EffectiveShadow(_inProgressState));
         }
     }
 
@@ -291,6 +314,14 @@ public sealed class AnnotationDocument
     /// </summary>
     private static AnnotationFillStyle EffectiveFill(AnnotationToolState state) =>
         state.ToolSupportsFill ? state.Fill : AnnotationFillStyle.None;
+
+    /// <summary>
+    /// The shadow style a stroke actually carries: blur is geometry-only and never
+    /// snapshots a lingering toolbar shadow selection, so every stroke records only
+    /// applicable style.
+    /// </summary>
+    private static AnnotationShadowStyle EffectiveShadow(AnnotationToolState state) =>
+        state.ToolSupportsShadow ? state.Shadow : AnnotationShadowStyle.None;
 
     public void AppendStrokePoint(AnnotationPoint point)
     {
@@ -402,6 +433,9 @@ public sealed class AnnotationSession
     public void SetFill(AnnotationFillStyle fill) =>
         SetToolState(ToolState with { Fill = fill });
 
+    public void SetShadow(AnnotationShadowStyle shadow) =>
+        SetToolState(ToolState with { Shadow = shadow });
+
     public void BeginStroke(AnnotationPoint point) => Document.BeginStroke(point, ToolState);
     public void AppendStrokePoint(AnnotationPoint point) => Document.AppendStrokePoint(point);
     public void UpdateStrokePoint(AnnotationPoint point) => Document.UpdateStrokePoint(point);
@@ -455,6 +489,9 @@ public static class AnnotationRenderer
         if (stroke.Points.Count == 0)
             return;
 
+        if (stroke.Shadow == AnnotationShadowStyle.Drop && stroke.Tool != AnnotationTool.Blur)
+            DrawStrokeShadow(width, height, stride, pixels, stroke);
+
         switch (stroke.Tool)
         {
             case AnnotationTool.Pen:
@@ -491,6 +528,17 @@ public static class AnnotationRenderer
     /// deterministic radius keeps the composed Frame reproducible in tests.
     /// </summary>
     public const int BlurKernelRadius = 4;
+
+    /// <summary>Shadow offset in Frame pixels, down and to the right of the entry.</summary>
+    public const int ShadowOffsetX = 1;
+
+    /// <summary>Shadow offset in Frame pixels, down and to the right of the entry.</summary>
+    public const int ShadowOffsetY = 1;
+
+    /// <summary>Alpha of the shadow copy, blended under the entry it belongs to.</summary>
+    public const int ShadowAlpha = 96;
+
+    private static readonly AnnotationColor ShadowColor = new(0, 0, 0, ShadowAlpha);
 
     /// <summary>
     /// Draws one blur region: every pixel inside the committed rectangle is
@@ -572,6 +620,79 @@ public static class AnnotationRenderer
                 pixels[offset + 3] = 255;
             }
         }
+    }
+
+    /// <summary>
+    /// Renders the shadow pass of one entry: the entry's own geometry drawn
+    /// entirely in the translucent shadow color, offset down-right, before the
+    /// entry itself draws over it. Clipping is the ordinary Frame-bounds
+    /// clamping every rasterizer already applies, so edge entries stay inside.
+    /// </summary>
+    private static void DrawStrokeShadow(
+        int width,
+        int height,
+        int stride,
+        byte[] pixels,
+        AnnotationStroke stroke)
+    {
+        var shadowStroke = new AnnotationStroke(
+            stroke.Tool,
+            ShadowColor,
+            stroke.StrokeWidth,
+            stroke.Points,
+            stroke.Fill,
+            stroke.Text,
+            stroke.MarkerNumber,
+            AnnotationShadowStyle.None);
+
+        // Both fill styles render under the offset copy: a shadow of a filled
+        // shape shades its interior too.
+        var shifted = Translate(shadowStroke, ShadowOffsetX, ShadowOffsetY);
+
+        switch (stroke.Tool)
+        {
+            case AnnotationTool.Pen:
+                DrawPenStroke(width, height, stride, pixels, shifted);
+                break;
+            case AnnotationTool.Rectangle:
+                DrawRectangleStroke(width, height, stride, pixels, shifted);
+                break;
+            case AnnotationTool.Ellipse:
+                DrawEllipseStroke(width, height, stride, pixels, shifted);
+                break;
+            case AnnotationTool.Line:
+                Stamp(width, height, stride, pixels, shifted.Points[0], shifted);
+                DrawSegment(width, height, stride, pixels, shifted.Points[0], shifted.Points[^1], shifted);
+                break;
+            case AnnotationTool.Arrow:
+                DrawArrowStroke(width, height, stride, pixels, shifted);
+                break;
+            case AnnotationTool.Text:
+                DrawTextStroke(width, height, stride, pixels, shifted);
+                break;
+            case AnnotationTool.Marker:
+                DrawMarkerStroke(width, height, stride, pixels, shifted);
+                break;
+        }
+    }
+
+    private static AnnotationStroke Translate(AnnotationStroke stroke, int deltaX, int deltaY)
+    {
+        if (deltaX == 0 && deltaY == 0)
+            return stroke;
+
+        var points = new AnnotationPoint[stroke.Points.Count];
+        for (int i = 0; i < points.Length; i++)
+            points[i] = new AnnotationPoint(stroke.Points[i].X + deltaX, stroke.Points[i].Y + deltaY);
+        return new AnnotationStroke(
+            stroke.Tool,
+            stroke.Color,
+            stroke.StrokeWidth,
+            points,
+            stroke.Fill,
+            stroke.Text,
+            stroke.MarkerNumber,
+            stroke.Shadow);
     }
 
     private static void DrawPenStroke(int width, int height, int stride, byte[] pixels, AnnotationStroke stroke)
