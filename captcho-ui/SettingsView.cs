@@ -15,15 +15,18 @@ using captcho.Capture;
 namespace captcho.UI;
 
 /// <summary>
-/// Read-only content for the Export tab, sourced from <see cref="ExportTabSettings"/>.
-/// Carried through the view so the code-behind binds one object.
+/// Editable content for the Export tab, sourced from
+/// <see cref="ExportTabSettings"/>. Carries the working format, JPEG quality,
+/// the format-derived extension (display only), the quality control's
+/// availability (false for PNG), and the inline quality validation error.
+/// The code-behind binds these to the format ComboBox and quality slider.
 /// </summary>
 public sealed record ExportTabContent(
-    string Heading,
-    string FormatName,
+    ExportImageFormat Format,
+    int JpegQuality,
+    bool JpegQualityAvailable,
     string FileExtension,
-    string FormatDescription,
-    string PlannedFormatsNote);
+    string? JpegQualityError);
 
 /// <summary>
 /// Read-only content for the Interface tab, sourced from <see cref="InterfaceTabSettings"/>.
@@ -46,7 +49,8 @@ public sealed record CaptureTabContent(
     bool IncludeDecorations,
     bool IncludeShadow,
     RememberSelectionLifetime RememberSelection,
-    bool AnnotationEnabled);
+    bool AnnotationEnabled,
+    string? OcrLanguageTag);
 
 /// <summary>Editable defaults shown by the Annotation Settings tab.</summary>
 public sealed record AnnotationTabContent(
@@ -54,6 +58,20 @@ public sealed record AnnotationTabContent(
     AnnotationColor PenColor,
     int StrokeWidth,
     string? Error);
+
+/// <summary>
+/// Editable content for the Behavior tab, sourced from
+/// <see cref="BehaviorTabSettings"/>. Carries the three independent automatic
+/// delivery toggles that run after Annotation confirmation (issue #47) and
+/// the configured launch behavior (issue #53). The configured Capture Mode is
+/// null unless the launch action is Configured Capture Mode.
+/// </summary>
+public sealed record BehaviorTabContent(
+    bool AutoSave,
+    bool AutoCopyFrame,
+    bool AutoCopyPath,
+    LaunchAction LaunchAction,
+    CaptureMode? LaunchConfiguredMode);
 
 /// <summary>
 /// Immutable snapshot of everything the Settings window code-behind binds. Produced
@@ -78,8 +96,13 @@ public sealed record SettingsView(
     // ── Annotation tab (editable) ──
     AnnotationTabContent Annotation,
 
-    // ── Read-only tabs ──
+    // ── Behavior tab (editable) ──
+    BehaviorTabContent Behavior,
+
+    // ── Export tab (editable) ──
     ExportTabContent Export,
+
+    // ── Read-only tabs ──
     InterfaceTabContent Interface,
 
     // ── Composed gating across all editable tabs ──

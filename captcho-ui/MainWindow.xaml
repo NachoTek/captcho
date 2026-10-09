@@ -49,6 +49,7 @@ Layout:
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
             <Button x:Name="FullDesktopButton"
@@ -119,15 +120,28 @@ Layout:
                     VerticalAlignment="Stretch"
                     Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
 
-            <!-- Settings button -->
-            <Button x:Name="SettingsButton"
-                    Grid.Column="8"
-                    Content="Settings…"
-                    MinWidth="90" MinHeight="40"
-                    Margin="8,0,8,0"
-                    Click="Settings_Click"
-                    CornerRadius="6"
-                    ToolTipService.ToolTip="Open settings (F4 or Ctrl+,)"/>
+            <!-- Recognize Text + Scan QR: disabled until a capture succeeds -->
+            <StackPanel Grid.Column="8" Orientation="Horizontal">
+                <Button x:Name="RecognizeTextButton"
+                        Content="Recognize Text"
+                        MinWidth="120" MinHeight="40"
+                        Margin="8,0,0,0"
+                        VerticalAlignment="Stretch"
+                        IsEnabled="False"
+                        Click="RecognizeText_Click"
+                        CornerRadius="6"
+                        ToolTipService.ToolTip="Recognize text in the captured Frame with Windows OCR"/>
+
+                <Button x:Name="ScanQrButton"
+                        Content="Scan QR"
+                        MinWidth="90" MinHeight="40"
+                        Margin="8,0,8,0"
+                        VerticalAlignment="Stretch"
+                        IsEnabled="False"
+                        Click="ScanQr_Click"
+                        CornerRadius="6"
+                        ToolTipService.ToolTip="Scan QR codes in the captured Frame"/>
+            </StackPanel>
 
             <!-- Menu separator -->
             <Border x:Name="MenuSeparator"
@@ -136,9 +150,19 @@ Layout:
                     VerticalAlignment="Stretch"
                     Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
 
+            <!-- Settings button -->
+            <Button x:Name="SettingsButton"
+                    Grid.Column="10"
+                    Content="Settings…"
+                    MinWidth="90" MinHeight="40"
+                    Margin="8,0,8,0"
+                    Click="Settings_Click"
+                    CornerRadius="6"
+                    ToolTipService.ToolTip="Open settings (F4 or Ctrl+,)"/>
+
             <!-- About button -->
             <Button x:Name="AboutButton"
-                    Grid.Column="10"
+                    Grid.Column="11"
                     Content="About"
                     MinWidth="80" MinHeight="40"
                     Margin="8,0,8,0"
@@ -147,7 +171,7 @@ Layout:
 
             <!-- Exit button -->
             <Button x:Name="ExitButton"
-                    Grid.Column="11"
+                    Grid.Column="12"
                     Content="Exit"
                     MinWidth="80" MinHeight="40"
                     Margin="8,0,8,0"
@@ -156,7 +180,7 @@ Layout:
 
             <!-- Export buttons: disabled until a capture succeeds -->
             <Button x:Name="SaveButton"
-                    Grid.Column="12"
+                    Grid.Column="13"
                     Content="Save"
                     MinWidth="80" MinHeight="40"
                     Margin="0,0,6,0"
@@ -166,7 +190,7 @@ Layout:
                     ToolTipService.ToolTip="Save to default location"/>
 
             <Button x:Name="SaveAsButton"
-                    Grid.Column="13"
+                    Grid.Column="14"
                     Content="Save As…"
                     MinWidth="90" MinHeight="40"
                     Margin="0,0,6,0"
@@ -176,7 +200,7 @@ Layout:
                     ToolTipService.ToolTip="Choose location and filename"/>
 
             <Button x:Name="CopyToClipboardButton"
-                    Grid.Column="14"
+                    Grid.Column="15"
                     Content="Copy"
                     MinWidth="80" MinHeight="40"
                     Margin="0,0,6,0"
@@ -249,7 +273,7 @@ Layout:
                     CornerRadius="6"/>
 
             <ProgressRing x:Name="CaptureProgress"
-                          Grid.Column="20"
+                          Grid.Column="21"
                           Width="28" Height="28"
                           Margin="4,0,0,0"
                           Visibility="Collapsed"

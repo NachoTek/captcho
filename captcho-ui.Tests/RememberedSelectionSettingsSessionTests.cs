@@ -130,7 +130,7 @@ public sealed class RememberedSelectionSettingsSessionTests
         public IReadOnlyList<GlobalHotkeyRegistrationResult> RegistrationResults =>
             Array.Empty<GlobalHotkeyRegistrationResult>();
 
-        public IReadOnlyList<GlobalHotkeyRegistrationResult> ApplyEnabledStates(IReadOnlySet<int> enabledIds) =>
+        public IReadOnlyList<GlobalHotkeyRegistrationResult> ApplySettings(AppSettings settings) =>
             Array.Empty<GlobalHotkeyRegistrationResult>();
     }
 }

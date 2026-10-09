@@ -17,6 +17,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Foundation;
 using captcho.Capture;
@@ -69,6 +70,14 @@ public sealed partial class MainWindow : Window
     /// Ensures only one settings dialog is open at a time.
     /// </summary>
     private SettingsWindowCoordinator? _settingsCoordinator;
+
+    /// <summary>
+    /// Routes the configured launch behavior at startup: resolves the
+    /// chosen action through the settings and dispatches the resolved
+    /// Capture Mode to the same five production workflow routes the buttons
+    /// and Global Hotkeys use (issue #53). Never bespoke capture code.
+    /// </summary>
+    private readonly LaunchTriggerRouter _launchRouter;
 
     /// <summary>
     /// Tracks whether a capture has succeeded and the cached bitmap is available for export.
@@ -177,14 +186,22 @@ public sealed partial class MainWindow : Window
         // Construct the runtime workflow session with all production
         // adapters: native pixel acquisition, the Selection overlay, the
         // Selected Monitor picker overlay, the Selected Window picker overlay,
-        // the preview transition, and the Export actions (Save, Save As,
-        // Copy Frame, Copy Path). The session owns Capture Mode routing and
-        // the post-capture workflow — including the one default saved-file
-        // identity per Capture — from here. The SessionCaptureOptions is
-        // bound to the live runtime AppSettings so committed-default changes
-        // (applied through Settings) are observable, and so per-Capture-Mode
-        // session overrides flow into the effective options each route
-        // forwards (spec #34).
+        // the preview transition, the Export actions (Save, Save As,
+        // Copy Frame, Copy Path), and Windows OCR for Recognize Text. The
+        // session owns Capture Mode routing and the post-capture workflow —
+        // including the one default saved-file identity per Capture — from
+        // here. The SessionCaptureOptions is bound to the live runtime
+        // AppSettings so committed-default changes (applied through Settings)
+        // are observable, and so per-Capture-Mode session overrides flow into
+        // the effective options each route forwards (spec #34). The
+        // LaunchBehaviorState records the last Capture Mode of every
+        // successful capture — persisting it only while the launch behavior
+        // needs it (issue #53).
+        var launchState = new LaunchBehaviorState(
+            _settings,
+            _configurationService is null
+                ? null
+                : new ConfigurationLaunchBehaviorPersistence(_settings, _configurationService));
         _workflowSession = new CaptureWorkflowSession<WriteableBitmap>(
             new WindowsCaptureAdapter(),
             new WriteableBitmapPreviewAdapter(),
@@ -203,16 +220,34 @@ public sealed partial class MainWindow : Window
             new AnnotationOverlayAdapter(),
             () => _settings.AnnotationEnabled,
             () => _settings.EffectiveAnnotationSettings.ToToolState(),
+            new WindowsOcrEngine(),
+            () => _settings.OcrLanguageTag,
+            new ZxingQrScanner(),
             new WorkflowExportAdapter(_settings, new WindowsClipboardAdapter()),
             new FileSavePickerDialogAdapter(
                 () => _hwnd != IntPtr.Zero ? _hwnd : WinRT.Interop.WindowNative.GetWindowHandle(this),
                 () => _settings),
+            () => _settings.EffectiveAutomaticExport,
+            launchState,
             new WindowsDeliveryAdapter(
                 () => _hwnd != IntPtr.Zero ? _hwnd : WinRT.Interop.WindowNative.GetWindowHandle(this)));
 
         // Initialize Global Hotkeys after the window has an HWND.
         // In WinUI 3, the HWND is available immediately after construction.
         InitializeGlobalHotkeys();
+
+        // Apply the configured launch behavior (issue #53): dispatch the
+        // resolved Capture Mode through the same production workflow routes
+        // the buttons and Global Hotkeys use. Runs asynchronously after the
+        // window is shown (see OnActivated first-run) so the interactive
+        // overlays appear over a fully activated window.
+        _launchRouter = new LaunchTriggerRouter(new ProductionWorkflowRoutes(
+            RunFullDesktopWorkflowAsync,
+            RunActiveWindowWorkflowAsync,
+            RunSelectionWorkflowAsync,
+            RunSelectedMonitorWorkflowAsync,
+            RunSelectedWindowWorkflowAsync));
+        Activated += OnFirstActivatedApplyLaunchBehavior;
 
         // Initialize settings coordinator with production delegates
         if (_configurationService != null)
@@ -229,6 +264,47 @@ public sealed partial class MainWindow : Window
     }
 
     // ── Global Hotkey initialization and cleanup ─────────────────────────────
+
+    /// <summary>
+    /// Whether the configured launch behavior has been applied. The Trigger
+    /// runs once, on the first Activated event, so the interactive overlays
+    /// and the preview window appear over a fully activated window.
+    /// </summary>
+    private bool _hasAppliedLaunchBehavior;
+
+    /// <summary>
+    /// Applies the configured launch behavior on the first activation.
+    /// Failures never crash startup: an unroutable launch behavior leaves the
+    /// window idle with a status message, matching how hotkey registration
+    /// failures surface.
+    /// </summary>
+    private void OnFirstActivatedApplyLaunchBehavior(object sender, WindowActivatedEventArgs args)
+    {
+        if (_hasAppliedLaunchBehavior)
+            return;
+
+        _hasAppliedLaunchBehavior = true;
+        Activated -= OnFirstActivatedApplyLaunchBehavior;
+        _ = RunLaunchBehaviorAsync();
+    }
+
+    /// <summary>
+    /// Runs the configured launch behavior through the production workflow
+    /// routes. Startup stays idle (no dispatch, no status change) for Do
+    /// nothing, a missing last Capture Mode, or invalid persisted values —
+    /// the safe fallbacks resolved in AppSettings.ResolveStartupMode.
+    /// </summary>
+    private async Task RunLaunchBehaviorAsync()
+    {
+        try
+        {
+            await _launchRouter.RunStartupAsync(_settings);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Launch behavior failed: {SanitizeException(ex)}";
+        }
+    }
 
     /// <summary>
     /// Registers all four global hotkeys and installs a WndProc subclass for WM_HOTKEY.
@@ -252,10 +328,11 @@ public sealed partial class MainWindow : Window
             }
 
             _globalHotkeyManager = new GlobalHotkeyManager(new WindowsGlobalHotkeyRegistrar());
-            // Register only the Global Hotkeys the user has enabled, so disabled
-            // Global Hotkeys are not active on launch. Global Hotkeys disabled in settings are
-            // skipped; the rest register just like RegisterAll would.
-            var results = _globalHotkeyManager.Reconcile(_hwnd, GlobalHotkeyRouteMap.EnabledGlobalHotkeyIds(_settings));
+            // Register only the Global Hotkeys the user has enabled, each with its
+            // effective binding from Configuration (recorded combination or legacy
+            // default), so disabled Global Hotkeys are not active on launch and a
+            // remapped combination registers without waiting for Settings.
+            var results = _globalHotkeyManager.Reconcile(_hwnd, _settings);
 
             // Install WndProc subclass to intercept WM_HOTKEY messages.
             // Keep the delegate alive to prevent GC collection while subclassed.
@@ -848,8 +925,10 @@ public sealed partial class MainWindow : Window
                 {
                     PreviewImage.Source = result.PreviewImage;
                 }
-                StatusText.Text = $"{result.Mode} — {result.Dimensions}";
+                StatusText.Text = FormatDeliveredStatus(result);
                 _hasCapture = true;
+                RecognizeTextButton.IsEnabled = true;
+                ScanQrButton.IsEnabled = true;
                 RefreshSavedFileActions();
                 break;
 
@@ -883,6 +962,30 @@ public sealed partial class MainWindow : Window
         }
 
         TimingText.Text = FormatWorkflowTiming(result);
+    }
+
+    /// <summary>
+    /// Formats the status for a succeeded workflow result, appending the
+    /// configured automatic delivery outcomes (issue #47). Successful
+    /// automatic actions append their per-action status; failed ones append
+    /// their retryable error so the user can retry manually — the composed
+    /// Frame and any valid saved-file identity are preserved by the session.
+    /// </summary>
+    private static string FormatDeliveredStatus(WorkflowResult<WriteableBitmap> result)
+    {
+        var status = $"{result.Mode} — {result.Dimensions}";
+        var report = result.AutomaticExport;
+        if (report is null)
+            return status;
+
+        var parts = new List<string>();
+        if (report.Save is not null)
+            parts.Add(ExportStatusFormatter.FormatStatus(report.Save));
+        if (report.CopyFrame is not null)
+            parts.Add(ExportStatusFormatter.FormatStatus(report.CopyFrame));
+        if (report.CopyPath is not null)
+            parts.Add(ExportStatusFormatter.FormatStatus(report.CopyPath));
+        return parts.Count > 0 ? $"{status} │ {string.Join(" │ ", parts)}" : status;
     }
 
     /// <summary>
@@ -1044,6 +1147,8 @@ public sealed partial class MainWindow : Window
         RegionCaptureButton.IsEnabled = enabled;
         SelectedMonitorButton.IsEnabled = enabled;
         SelectedWindowButton.IsEnabled = enabled;
+        RecognizeTextButton.IsEnabled = enabled && _hasCapture;
+        ScanQrButton.IsEnabled = enabled && _hasCapture;
     }
 
     /// <summary>
@@ -1077,6 +1182,8 @@ public sealed partial class MainWindow : Window
             PreviewImage.Source = result.ImageSource;
             StatusText.Text = $"{result.Mode} — {result.Dimensions}";
             _hasCapture = true;
+            RecognizeTextButton.IsEnabled = true;
+            ScanQrButton.IsEnabled = true;
 
             var frame = _captureService.LastCapturedBitmap;
             if (frame is not null)
@@ -1167,6 +1274,238 @@ public sealed partial class MainWindow : Window
     private void About_Click(object sender, RoutedEventArgs e)
     {
         StatusText.Text = "captcho — Screen Capture Tool v1.0";
+    }
+
+    // ── Recognize Text (OCR) ─────────────────────────────────────────
+
+    /// <summary>
+    /// Handles "Recognize Text" click — routes the Recognize Text Trigger
+    /// through the production workflow session. The session resolves the
+    /// persisted language selection against the installed OCR language packs
+    /// and recognizes text on the in-memory Frame it already owns; no file is
+    /// written and every retryable outcome preserves the Frame. The WinUI
+    /// layer stays a thin event/presentation adapter: it disables controls
+    /// during recognition, then presents the distinct outcomes (recognized
+    /// text in a selectable dialog, no-text as status, retryable errors as
+    /// status).
+    /// </summary>
+    private async void RecognizeText_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isOperationRunning)
+        {
+            StatusText.Text = "A capture is already in progress.";
+            return;
+        }
+
+        if (!_hasCapture)
+        {
+            StatusText.Text = OcrStatusFormatter.FormatNoFrame();
+            return;
+        }
+
+        EnterExportState();
+        StatusText.Text = "Recognizing text…";
+
+        try
+        {
+            var result = await _workflowSession.RecognizeTextAsync();
+            ApplyOcrResult(result);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Text recognition failed: {SanitizeException(ex)}";
+        }
+        finally
+        {
+            ExitExportState();
+        }
+    }
+
+    /// <summary>
+    /// Presents a distinct OCR outcome: Recognized-text opens a selectable
+    /// text dialog (and stages the text on the clipboard-adjacent preview
+    /// path), no-text is a user-visible status, and every retryable condition
+    /// surfaces its error without clearing the captured Frame.
+    /// </summary>
+    private void ApplyOcrResult(OcrResult result)
+    {
+        switch (result.Outcome)
+        {
+            case OcrOutcome.RecognizedText:
+                StatusText.Text = OcrStatusFormatter.FormatRecognized(result);
+                ShowRecognizedTextDialog(result.Text, result.LanguageTag);
+                break;
+
+            case OcrOutcome.NoText:
+                StatusText.Text = OcrStatusFormatter.FormatNoText(result);
+                break;
+
+            case OcrOutcome.NoFrame:
+                // The session owns no Frame (e.g., the only capture so far
+                // ran through a legacy route). Status-only: the legacy
+                // capture cache and its export buttons stay untouched.
+                StatusText.Text = result.Error ?? OcrStatusFormatter.FormatNoFrame();
+                break;
+
+            case OcrOutcome.UnsupportedLanguage:
+            case OcrOutcome.Failed:
+            case OcrOutcome.OperationInProgress:
+            default:
+                StatusText.Text = result.Error ?? "Text recognition failed. Try again.";
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Shows the recognized text in a small selectable dialog so the user can
+    /// read and copy it. Presentation-only — the workflow owns the outcome.
+    /// </summary>
+    private void ShowRecognizedTextDialog(string text, string languageTag)
+    {
+        try
+        {
+            var dialog = new ContentDialog
+            {
+                Title = string.IsNullOrEmpty(languageTag)
+                    ? "Recognized Text"
+                    : $"Recognized Text ({languageTag})",
+                Content = new ScrollViewer
+                {
+                    Content = new TextBlock
+                    {
+                        Text = text,
+                        IsTextSelectionEnabled = true,
+                        TextWrapping = TextWrapping.Wrap,
+                        MaxWidth = 560,
+                        MaxHeight = 360,
+                    },
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                },
+                CloseButtonText = "Close",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = Content.XamlRoot,
+            };
+            _ = dialog.ShowAsync();
+        }
+        catch
+        {
+            // Dialog presentation failure is non-fatal; the status bar still
+            // carries the recognition summary.
+        }
+    }
+
+    // ── Scan QR ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Handles "Scan QR" click — routes the Scan QR Trigger through the
+    /// production workflow session. The session scans the in-memory Frame it
+    /// already owns; no file is written and every retryable outcome preserves
+    /// the Frame. The WinUI layer stays a thin event/presentation adapter: it
+    /// disables controls during the scan, then presents the distinct outcomes
+    /// (decoded values in a selectable dialog, no-code as status, retryable
+    /// errors as status).
+    /// </summary>
+    private async void ScanQr_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isOperationRunning)
+        {
+            StatusText.Text = "A capture is already in progress.";
+            return;
+        }
+
+        if (!_hasCapture)
+        {
+            StatusText.Text = QrStatusFormatter.FormatNoFrame();
+            return;
+        }
+
+        EnterExportState();
+        StatusText.Text = "Scanning for QR codes…";
+
+        try
+        {
+            var result = await _workflowSession.ScanQrAsync();
+            ApplyQrResult(result);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"QR scanning failed: {SanitizeException(ex)}";
+        }
+        finally
+        {
+            ExitExportState();
+        }
+    }
+
+    /// <summary>
+    /// Presents a distinct QR outcome: found opens a selectable values dialog
+    /// (every decoded value included), no-code is a user-visible status, and
+    /// every retryable condition surfaces its error without clearing the
+    /// captured Frame.
+    /// </summary>
+    private void ApplyQrResult(QrScanResult result)
+    {
+        switch (result.Outcome)
+        {
+            case QrOutcome.Found:
+                StatusText.Text = QrStatusFormatter.FormatFound(result);
+                ShowQrValuesDialog(result.Values);
+                break;
+
+            case QrOutcome.NotFound:
+                StatusText.Text = QrStatusFormatter.FormatNotFound();
+                break;
+
+            case QrOutcome.NoFrame:
+                // The session owns no Frame (e.g., the only capture so far
+                // ran through a legacy route). Status-only: the legacy
+                // capture cache and its export buttons stay untouched.
+                StatusText.Text = result.Error ?? QrStatusFormatter.FormatNoFrame();
+                break;
+
+            case QrOutcome.Failed:
+            case QrOutcome.OperationInProgress:
+            default:
+                StatusText.Text = result.Error ?? "QR scanning failed. Try again.";
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Shows the decoded QR values in a small selectable dialog so the user
+    /// can read and copy them. Presentation-only — the workflow owns the
+    /// outcome.
+    /// </summary>
+    private void ShowQrValuesDialog(IReadOnlyList<string> values)
+    {
+        try
+        {
+            var dialog = new ContentDialog
+            {
+                Title = values.Count == 1 ? "QR Code" : $"QR Codes ({values.Count})",
+                Content = new ScrollViewer
+                {
+                    Content = new TextBlock
+                    {
+                        Text = string.Join(Environment.NewLine, values),
+                        IsTextSelectionEnabled = true,
+                        TextWrapping = TextWrapping.Wrap,
+                        MaxWidth = 560,
+                        MaxHeight = 360,
+                    },
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                },
+                CloseButtonText = "Close",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = Content.XamlRoot,
+            };
+            _ = dialog.ShowAsync();
+        }
+        catch
+        {
+            // Dialog presentation failure is non-fatal; the status bar still
+            // carries the scan summary.
+        }
     }
 
     // ── Settings window coordinator delegates ─────────────────────────

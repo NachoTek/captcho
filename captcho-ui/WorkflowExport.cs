@@ -14,6 +14,7 @@
 // stay headless-testable, mirroring the capture/overlay adapter seams.
 
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using captcho.Capture;
@@ -139,6 +140,45 @@ public sealed class WorkflowExportResult
 
     /// <summary>True only when the action reached the Succeeded status.</summary>
     public bool IsSuccess => Status == WorkflowExportStatus.Succeeded;
+}
+
+/// <summary>
+/// Outcome of the configured automatic delivery actions that ran after
+/// Annotation confirmation (issue #47). One entry per enabled action, in the
+/// run order save → Copy Frame → Copy Path; a null entry means the action was
+/// not enabled (or was skipped because it had no valid input, e.g. Copy Path
+/// without a saved file). The composed Frame and any valid saved-file
+/// identity survive failures so the user can retry manually.
+/// </summary>
+public sealed class AutomaticExportReport
+{
+    /// <summary>Automatic Save outcome, when enabled.</summary>
+    public WorkflowExportResult? Save { get; init; }
+
+    /// <summary>Automatic Copy Frame outcome, when enabled.</summary>
+    public WorkflowExportResult? CopyFrame { get; init; }
+
+    /// <summary>Automatic Copy Path outcome, when enabled and a valid saved file exists.</summary>
+    public WorkflowExportResult? CopyPath { get; init; }
+
+    /// <summary>
+    /// The enabled actions that did not reach the Succeeded status, in run
+    /// order — the failures the WinUI layer must report for manual retry.
+    /// </summary>
+    public IReadOnlyList<WorkflowExportResult> Failures
+    {
+        get
+        {
+            var failures = new List<WorkflowExportResult>();
+            if (Save is { IsSuccess: false }) failures.Add(Save);
+            if (CopyFrame is { IsSuccess: false }) failures.Add(CopyFrame);
+            if (CopyPath is { IsSuccess: false }) failures.Add(CopyPath);
+            return failures;
+        }
+    }
+
+    /// <summary>True when any enabled automatic action failed.</summary>
+    public bool HasFailures => Failures.Count > 0;
 }
 
 /// <summary>

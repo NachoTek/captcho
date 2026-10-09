@@ -545,7 +545,7 @@ public class GlobalHotkeyTabSettingsTests
             _results.AddRange(results);
         }
 
-        public IReadOnlyList<GlobalHotkeyRegistrationResult> ApplyEnabledStates(IReadOnlySet<int> enabledIds)
+        public IReadOnlyList<GlobalHotkeyRegistrationResult> ApplySettings(AppSettings settings)
             => RegistrationResults;
     }
 }

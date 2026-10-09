@@ -246,6 +246,7 @@ public class AnnotationDocumentTests
     [InlineData(AnnotationTool.Ellipse)]
     [InlineData(AnnotationTool.Line)]
     [InlineData(AnnotationTool.Arrow)]
+    [InlineData(AnnotationTool.Blur)]
     public void Shape_UpdateStrokePointKeepsAnchorAndMovesOnlyTheDragPoint(AnnotationTool tool)
     {
         var session = new AnnotationSession(SolidFrame(8, 6, new AnnotationColor(0, 0, 0)), new AnnotationToolState(
@@ -369,6 +370,7 @@ public class AnnotationDocumentTests
     [InlineData(AnnotationTool.Pen)]
     [InlineData(AnnotationTool.Line)]
     [InlineData(AnnotationTool.Arrow)]
+    [InlineData(AnnotationTool.Blur)]
     public void NonFillTools_NeverSnapshotALingeringFillSelection(AnnotationTool tool)
     {
         var session = new AnnotationSession(SolidFrame(8, 6, new AnnotationColor(20, 30, 40)), new AnnotationToolState(
@@ -704,6 +706,79 @@ public class AnnotationDocumentTests
         Assert.Equal(AnnotationTool.Marker, stroke.Tool);
         Assert.Equal(new AnnotationColor(0, 255, 0), stroke.Color);
         Assert.Equal(7, stroke.StrokeWidth);
+    }
+
+    // spec #42: blur regions
+
+    [Fact]
+    public void Blur_CommitsRegionAsReversibleDocumentEntryWithoutMutatingTheSource()
+    {
+        // Checkerboard source so the blur region has detail to obscure.
+        var source = CheckerboardFrame(40, 30);
+        var session = new AnnotationSession(source, new AnnotationToolState(
+            AnnotationTool.Blur,
+            new AnnotationColor(255, 0, 0),
+            4));
+
+        session.BeginStroke(new AnnotationPoint(2, 2));
+        session.UpdateStrokePoint(new AnnotationPoint(20, 12));
+        Assert.NotNull(session.Document.InProgressStroke);
+        Assert.NotEqual(source.Pixels, session.Render().Pixels);
+
+        session.CommitStroke();
+
+        var stroke = Assert.Single(session.Document.Strokes);
+        Assert.Equal(AnnotationTool.Blur, stroke.Tool);
+        Assert.Equal(new AnnotationPoint(2, 2), stroke.Points[0]);
+        Assert.Equal(new AnnotationPoint(20, 12), stroke.Points[^1]);
+        // Applicable shared style only: blur ignores color and width like the
+        // other non-stroke tools ignore fill; it never snapshots a fill.
+        Assert.Equal(AnnotationFillStyle.None, stroke.Fill);
+        Assert.Null(stroke.Text);
+        Assert.Null(stroke.MarkerNumber);
+
+        // Undo removes the effect and reveals the unchanged source.
+        Assert.True(session.Undo());
+        Assert.Empty(session.Document.Strokes);
+        Assert.Equal(source.Pixels, session.Render().Pixels);
+        Assert.True(session.Redo());
+        Assert.Single(session.Document.Strokes);
+    }
+
+    [Fact]
+    public void Blur_SnapshotsSharedStyleAtBeginLikeEveryTool()
+    {
+        var session = new AnnotationSession(SolidFrame(40, 30, new AnnotationColor(20, 30, 40)));
+
+        session.SetPenColor(new AnnotationColor(0, 255, 0));
+        session.SetStrokeWidth(9);
+        session.SetTool(AnnotationTool.Blur);
+        session.BeginStroke(new AnnotationPoint(2, 2));
+        session.UpdateStrokePoint(new AnnotationPoint(20, 12));
+        session.SetPenColor(new AnnotationColor(255, 0, 0));
+        session.SetStrokeWidth(2);
+        session.CommitStroke();
+
+        var stroke = Assert.Single(session.Document.Strokes);
+        Assert.Equal(new AnnotationColor(0, 255, 0), stroke.Color);
+        Assert.Equal(9, stroke.StrokeWidth);
+    }
+
+    private static ContiguousBitmap CheckerboardFrame(int width, int height)
+    {
+        var pixels = new byte[width * height * 4];
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+            {
+                byte value = (x + y) % 2 == 0 ? (byte)255 : (byte)0;
+                int offset = (y * width + x) * 4;
+                pixels[offset] = value;
+                pixels[offset + 1] = value;
+                pixels[offset + 2] = value;
+                pixels[offset + 3] = 255;
+            }
+
+        return BitmapBufferConverter.StripPadding(pixels, width, height, width * 4);
     }
 
     private static ContiguousBitmap SolidFrame(int width, int height, AnnotationColor color)

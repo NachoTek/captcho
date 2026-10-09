@@ -296,6 +296,38 @@ public sealed class ConfigurationRememberedSelectionPersistence : IRememberedSel
 }
 
 /// <summary>
+/// Atomically writes the recorded last Capture Mode to Configuration. Only
+/// the <see cref="AppSettings.LastCaptureMode"/> slice moves: the candidate is
+/// a normalized copy of the live runtime settings, so every other field —
+/// including the launch behavior itself — persists exactly as it stands. The
+/// runtime settings object advances only on a successful save.
+/// </summary>
+public sealed class ConfigurationLaunchBehaviorPersistence : ILaunchBehaviorPersistence
+{
+    private readonly AppSettings _settings;
+    private readonly ConfigurationService _configuration;
+
+    public ConfigurationLaunchBehaviorPersistence(
+        AppSettings settings,
+        ConfigurationService configuration)
+    {
+        _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+    }
+
+    public bool Save(CaptureMode? mode)
+    {
+        var candidate = _settings.Normalized();
+        candidate.LastCaptureMode = mode;
+        if (!_configuration.Save(candidate).Success)
+            return false;
+
+        _settings.LastCaptureMode = candidate.LastCaptureMode;
+        return true;
+    }
+}
+
+/// <summary>
 /// Production <see cref="IMonitorPickerOverlayAdapter"/>. Wraps the Win32
 /// layered <see cref="MonitorPickerOverlayWindow"/>: shows the scrimmed picker
 /// over the live desktop, highlights the hovered monitor and its label, and
@@ -539,13 +571,18 @@ public sealed class WindowsDeliveryAdapter : IWorkflowDeliveryAdapter
 
 /// <summary>
 /// Production <see cref="IWorkflowExportAdapter"/>. Owns no workflow state:
-/// PNG encoding and file writing delegate to <see cref="PngExportService"/>,
-/// clipboard placement to the injected <see cref="IClipboardAdapter"/>. The
-/// configured destination and Filename Template are read from the live
-/// runtime <see cref="AppSettings"/> the adapter was constructed from, so
-/// committed Configuration changes are observable without reconstructing it.
-/// Never throws for expected failures — every method returns the structured
-/// result the session maps into a retryable <see cref="WorkflowExportResult"/>.
+/// image encoding and file writing delegate to <see cref="PngExportService"/>
+/// and <see cref="JpegExportService"/>, clipboard placement to the injected
+/// <see cref="IClipboardAdapter"/>. The configured destination, Filename
+/// Template, and export format (issue #45) are read from the live runtime
+/// <see cref="AppSettings"/> the adapter was constructed from, so committed
+/// Configuration changes are observable without reconstructing it. Save
+/// encodes the configured format (PNG preserves alpha; JPEG flattens
+/// transparent pixels onto white at the configured quality); Save As encodes
+/// what the chosen file's extension says so the written bytes always match
+/// the name. Never throws for expected failures — every method returns the
+/// structured result the session maps into a retryable
+/// <see cref="WorkflowExportResult"/>.
 /// </summary>
 public sealed class WorkflowExportAdapter : IWorkflowExportAdapter
 {
@@ -557,8 +594,9 @@ public sealed class WorkflowExportAdapter : IWorkflowExportAdapter
     /// and clipboard boundary.
     /// </summary>
     /// <param name="settings">
-    /// Live runtime settings supplying the committed Save Location and
-    /// Filename Template. Retained by reference — never written back to.
+    /// Live runtime settings supplying the committed Save Location,
+    /// Filename Template, and export format/quality. Retained by reference —
+    /// never written back to.
     /// </param>
     /// <param name="clipboard">Platform clipboard boundary.</param>
     public WorkflowExportAdapter(AppSettings settings, IClipboardAdapter clipboard)
@@ -568,31 +606,62 @@ public sealed class WorkflowExportAdapter : IWorkflowExportAdapter
     }
 
     /// <summary>
-    /// Writes the Frame as a PNG to the configured Save Location using the
-    /// configured Filename Template, resolving filename collisions so an
-    /// existing file is never silently overwritten.
+    /// Writes the Frame to the configured Save Location using the configured
+    /// Filename Template and export format — PNG or JPEG (with the configured
+    /// quality) — deriving the output extension from the format, resolving
+    /// filename collisions so an existing file is never silently overwritten.
     /// </summary>
     public ExportResult SaveDefault(ContiguousBitmap frame, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(frame);
         string path = ExportFilenameTemplate.GetExportPath(_settings, DateTime.Now);
         path = ExportFilenameTemplate.ResolveCollision(path);
-        return PngExportService.SaveAsPng(frame, path, cancellationToken);
+        return SaveInConfiguredFormat(frame, path, cancellationToken);
     }
 
     /// <summary>
-    /// Writes the Frame as a PNG to the explicitly supplied full path — the
-    /// confirmed Save As choice or the already-recorded default saved-file
-    /// identity on a repeated Save. Creates the destination directory when
-    /// missing; performs no collision resolution because the caller chose
-    /// the path.
+    /// Writes the Frame to the explicitly supplied full path — the confirmed
+    /// Save As choice or the already-recorded default saved-file identity on
+    /// a repeated Save. The encoded format follows the destination's
+    /// extension (.jpg encodes JPEG with the configured quality, anything
+    /// else encodes PNG) so the written bytes always match the chosen name.
+    /// Creates the destination directory when missing; performs no collision
+    /// resolution because the caller chose the path.
     /// </summary>
     public ExportResult SaveTo(ContiguousBitmap frame, string destinationPath, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(frame);
         if (string.IsNullOrWhiteSpace(destinationPath))
             return ExportResult.Fail(ExportPhase.Validation, "No destination path provided", TimeSpan.Zero);
-        return PngExportService.SaveAsPng(frame, destinationPath, cancellationToken);
+        return SaveByPathExtension(frame, destinationPath, cancellationToken);
+    }
+
+    /// <summary>
+    /// Encodes the Frame according to the configured format and writes it to
+    /// <paramref name="path"/>. PNG preserves the Frame's alpha; JPEG uses
+    /// the configured quality and flattens transparent pixels onto white.
+    /// </summary>
+    private ExportResult SaveInConfiguredFormat(ContiguousBitmap frame, string path, CancellationToken cancellationToken)
+    {
+        var export = _settings.EffectiveExportSettings;
+        return export.Format == ExportImageFormat.Jpeg
+            ? JpegExportService.SaveAsJpeg(frame, path, export.JpegQuality, cancellationToken)
+            : PngExportService.SaveAsPng(frame, path, cancellationToken);
+    }
+
+    /// <summary>
+    /// Encodes the Frame by the destination path's extension so a Save As
+    /// choice (or a recorded identity) never carries bytes that disagree
+    /// with its name. A .jpg/.jpeg path encodes JPEG with the configured
+    /// quality; every other extension encodes PNG.
+    /// </summary>
+    private ExportResult SaveByPathExtension(ContiguousBitmap frame, string path, CancellationToken cancellationToken)
+    {
+        string extension = Path.GetExtension(path);
+        return string.Equals(extension, ".jpg", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".jpeg", StringComparison.OrdinalIgnoreCase)
+            ? JpegExportService.SaveAsJpeg(frame, path, _settings.EffectiveExportSettings.JpegQuality, cancellationToken)
+            : PngExportService.SaveAsPng(frame, path, cancellationToken);
     }
 
     /// <summary>
@@ -635,10 +704,11 @@ public sealed class WorkflowExportAdapter : IWorkflowExportAdapter
 /// <summary>
 /// Production <see cref="ISaveAsDialogAdapter"/>. Shows a WinUI
 /// FileSavePicker initialized from the configured Filename Template and the
-/// Pictures library, scoped to PNG. Must be shown on the UI thread; the
-/// parent HWND is resolved from the supplied provider at ShowAsync time.
-/// Translates picker failures into a null (cancelled) result so the workflow
-/// reports cancellation rather than crashing.
+/// Pictures library, offering PNG and JPEG with the configured format
+/// preselected (issue #45). Must be shown on the UI thread; the parent HWND
+/// is resolved from the supplied provider at ShowAsync time. Translates
+/// picker failures into a null (cancelled) result so the workflow reports
+/// cancellation rather than crashing.
 /// </summary>
 public sealed class FileSavePickerDialogAdapter : ISaveAsDialogAdapter
 {
@@ -647,8 +717,9 @@ public sealed class FileSavePickerDialogAdapter : ISaveAsDialogAdapter
 
     /// <summary>
     /// Creates the dialog adapter over the main window's HWND and the live
-    /// runtime settings. Both are deferred so the handle and the committed
-    /// Filename Template are resolved at ShowAsync time.
+    /// runtime settings. Both are deferred so the handle, the committed
+    /// Filename Template, and the committed export format are resolved at
+    /// ShowAsync time.
     /// </summary>
     public FileSavePickerDialogAdapter(Func<IntPtr> hwndProvider, Func<AppSettings> settingsProvider)
     {
@@ -672,9 +743,12 @@ public sealed class FileSavePickerDialogAdapter : ISaveAsDialogAdapter
                 WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
             }
 
+            var export = _settingsProvider().EffectiveExportSettings;
+
             picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.PicturesLibrary;
             picker.FileTypeChoices.Add("PNG Image", new List<string> { ".png" });
-            picker.DefaultFileExtension = ".png";
+            picker.FileTypeChoices.Add("JPEG Image", new List<string> { ".jpg" });
+            picker.DefaultFileExtension = "." + export.Format.Extension();
             picker.SuggestedFileName = ExportFilenameTemplate.Expand(
                 _settingsProvider().EffectiveFilenameTemplate, DateTime.Now);
 
