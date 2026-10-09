@@ -364,6 +364,212 @@ public sealed class MonitorPickerOverlayAdapter : IMonitorPickerOverlayAdapter
 }
 
 /// <summary>
+/// Production <see cref="IWorkflowDeliveryAdapter"/> over Windows
+/// application association and the Windows share interface (issue #46).
+/// Open With resolves the file, discovers the applications Windows registers
+/// for its type via Launcher.FindFileHandlersAsync, and launches through
+/// Launcher.LaunchFileAsync with the picker shown when no single default is
+/// registered. Share delivers the file through
+/// DataTransferManager.ShowShareUIForWindow as a storage item plus a bitmap
+/// stream. Owns no workflow state; never throws for expected failures —
+/// every method returns a structured <see cref="DeliveryResult"/>.
+/// </summary>
+public sealed class WindowsDeliveryAdapter : IWorkflowDeliveryAdapter
+{
+    private readonly Func<IntPtr> _hwndProvider;
+
+    // Per-window share wiring. ShowShareUIForWindow returns before the share
+    // sheet raises DataRequested, so the handler must outlive the ShareAsync
+    // call: it is subscribed once per resolved window handle and stays
+    // attached, reading the pending path at event time.
+    private Windows.ApplicationModel.DataTransfer.DataTransferManager? _shareManager;
+    private IntPtr _shareManagerHwnd;
+    private string? _pendingSharePath;
+
+    /// <summary>
+    /// Creates the delivery adapter over the main window's HWND, deferred so
+    /// the handle is resolved at delivery time (the share interface needs the
+    /// calling window; Open With does not).
+    /// </summary>
+    public WindowsDeliveryAdapter(Func<IntPtr> hwndProvider)
+    {
+        _hwndProvider = hwndProvider ?? throw new ArgumentNullException(nameof(hwndProvider));
+    }
+
+    /// <summary>
+    /// Opens the saved file through Windows application association.
+    /// Validates the file's existence and discovers registered handlers
+    /// before launching; shows Windows' application picker when more than
+    /// one handler exists and no single default is registered. Returns
+    /// failed results for missing files, extension-less paths, no registered
+    /// handlers, and Windows API failures; cancelled when the token fires.
+    /// </summary>
+    public async Task<DeliveryResult> OpenWithAsync(string filePath, CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+            return DeliveryResult.Cancelled(0);
+
+        if (string.IsNullOrWhiteSpace(filePath))
+            return DeliveryResult.Fail("No saved file to open.", 0);
+
+        var extension = Path.GetExtension(filePath);
+        if (string.IsNullOrEmpty(extension))
+            return DeliveryResult.Fail("The saved file has no file type for Windows to associate.", 0);
+
+        if (!File.Exists(filePath))
+            return DeliveryResult.Fail("The saved file no longer exists on disk.", 0);
+
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            // Application-association discovery: which Windows applications
+            // are registered for this file type.
+            var handlers = await Windows.System.Launcher.FindFileHandlersAsync(extension);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (handlers is null || handlers.Count == 0)
+            {
+                return DeliveryResult.Fail(
+                    $"No Windows application is registered to open {extension} files.",
+                    sw.Elapsed.TotalMilliseconds);
+            }
+
+            var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(filePath);
+            var options = new Windows.System.LauncherOptions
+            {
+                // Multiple registered handlers and no single default: let
+                // Windows show its application picker instead of guessing.
+                DisplayApplicationPicker = handlers.Count > 1,
+            };
+
+            var launched = await Windows.System.Launcher.LaunchFileAsync(file, options);
+            if (!launched)
+            {
+                return DeliveryResult.Fail(
+                    "Windows declined to launch an application for the saved file.",
+                    sw.Elapsed.TotalMilliseconds);
+            }
+
+            return DeliveryResult.Ok(handlers.Count, sw.Elapsed.TotalMilliseconds);
+        }
+        catch (OperationCanceledException)
+        {
+            return DeliveryResult.Cancelled(sw.Elapsed.TotalMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            return DeliveryResult.Fail($"Open With failed: {ex.Message}", sw.Elapsed.TotalMilliseconds);
+        }
+    }
+
+    /// <summary>
+    /// Invokes the Windows share interface with the delivered Capture file.
+    /// Delivers the file as a storage item plus a bitmap stream so share
+    /// targets can consume either representation, and requires the main
+    /// window's handle (desktop apps share through the window, not a
+    /// CoreWindow). Returns failed results when sharing is unsupported or
+    /// the handle is unavailable; cancelled when the token fires.
+    /// </summary>
+    public async Task<DeliveryResult> ShareAsync(string filePath, CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+            return DeliveryResult.Cancelled(0);
+
+        if (string.IsNullOrWhiteSpace(filePath))
+            return DeliveryResult.Fail("No saved file to share.", 0);
+
+        if (!File.Exists(filePath))
+            return DeliveryResult.Fail("The saved file no longer exists on disk.", 0);
+
+        if (!Windows.ApplicationModel.DataTransfer.DataTransferManager.IsSupported())
+            return DeliveryResult.Fail("Windows sharing is not supported on this system.", 0);
+
+        var hwnd = _hwndProvider();
+        if (hwnd == IntPtr.Zero)
+            return DeliveryResult.Fail("The main window is not available for sharing.", 0);
+
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(filePath);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var manager = GetOrWireShareManager(hwnd);
+            _pendingSharePath = filePath;
+
+            Windows.ApplicationModel.DataTransfer.DataTransferManagerInterop.ShowShareUIForWindow(hwnd);
+            return DeliveryResult.Ok(null, sw.Elapsed.TotalMilliseconds);
+        }
+        catch (OperationCanceledException)
+        {
+            return DeliveryResult.Cancelled(sw.Elapsed.TotalMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            return DeliveryResult.Fail($"Share failed: {ex.Message}", sw.Elapsed.TotalMilliseconds);
+        }
+    }
+
+    /// <summary>
+    /// Resolves the window's DataTransferManager once per handle and attaches
+    /// the share payload handler, so the wiring outlives the fire-and-forget
+    /// ShowShareUIForWindow call.
+    /// </summary>
+    private Windows.ApplicationModel.DataTransfer.DataTransferManager GetOrWireShareManager(IntPtr hwnd)
+    {
+        if (_shareManager is not null && _shareManagerHwnd == hwnd)
+            return _shareManager;
+
+        var manager = Windows.ApplicationModel.DataTransfer.DataTransferManagerInterop.GetForWindow(hwnd);
+        manager.DataRequested += ShareDataRequested;
+        _shareManager = manager;
+        _shareManagerHwnd = hwnd;
+        return manager;
+    }
+
+    /// <summary>
+    /// Fills the share payload for the delivered Capture: title, the file as
+    /// a storage item, and the same file as a bitmap stream. Failures inside
+    /// the platform callback must not throw into the platform — the share
+    /// sheet reports its own error state.
+    /// </summary>
+    private void ShareDataRequested(
+        Windows.ApplicationModel.DataTransfer.DataTransferManager sender,
+        Windows.ApplicationModel.DataTransfer.DataRequestedEventArgs args)
+    {
+        try
+        {
+            var deferral = args.Request.GetDeferral();
+            try
+            {
+                var path = _pendingSharePath;
+                if (string.IsNullOrEmpty(path))
+                {
+                    args.Request.FailWithDisplayText("No saved Capture to share.");
+                    return;
+                }
+
+                var file = Windows.Storage.StorageFile.GetFileFromPathAsync(path!).GetAwaiter().GetResult();
+                var request = args.Request;
+                request.Data.Properties.Title = "captcho Capture";
+                request.Data.Properties.Description = Path.GetFileName(path);
+                request.Data.SetStorageItems(new[] { file });
+                request.Data.SetBitmap(Windows.Storage.Streams.RandomAccessStreamReference.CreateFromFile(file));
+            }
+            finally
+            {
+                deferral.Complete();
+            }
+        }
+        catch
+        {
+            // Swallow callback failures; the share sheet reports its own
+            // errors and the session's Share result already succeeded.
+        }
+    }
+}
+
+/// <summary>
 /// Production <see cref="IWorkflowExportAdapter"/>. Owns no workflow state:
 /// image encoding and file writing delegate to <see cref="PngExportService"/>
 /// and <see cref="JpegExportService"/>, clipboard placement to the injected
