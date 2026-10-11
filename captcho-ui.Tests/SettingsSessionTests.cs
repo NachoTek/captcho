@@ -824,6 +824,38 @@ public class SettingsSessionTests
         Assert.Equal(1, adapter.ApplyCallsCount);
     }
 
+    // ── Transient failure reporting (issue #80) ────────────────────────
+
+    [Fact]
+    public void ReportTransientFailure_SetsErrorStatus_WithoutPersisting()
+    {
+        var runtime = new AppSettings { FilenameTemplate = "original" };
+        var configuration = new FakeConfiguration();
+        var session = new SettingsSession(runtime, configuration, new RecordingGlobalHotkeyAdapter());
+
+        var view = session.ReportTransientFailure("Folder picker failed to open.");
+
+        Assert.Equal("Folder picker failed to open.", view.StatusMessage);
+        Assert.True(view.StatusIsError);
+        Assert.False(view.ShouldClose);
+        // Failure reporting is presentation-only: nothing persists and the
+        // working values are untouched.
+        Assert.Equal(0, configuration.CallCount);
+        Assert.Equal("original", view.FilenameTemplate);
+    }
+
+    [Fact]
+    public void ReportTransientFailure_IsClearedByTheNextEdit()
+    {
+        var session = NewSession(AppSettings.WithDefaults());
+
+        session.ReportTransientFailure("Folder picker failed to open.");
+        var view = session.EditFilenameTemplate("next");
+
+        Assert.Null(view.StatusMessage);
+        Assert.False(view.StatusIsError);
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────
 
     private static SettingsSession NewSession(AppSettings runtime)

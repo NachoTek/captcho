@@ -149,17 +149,30 @@ public sealed partial class SettingsWindow : Window
     /// <summary>
     /// Opens the Windows folder picker and routes its outcome through the session. A
     /// cancelled picker (null result) is a no-op; a selection replaces the working Save
-    /// Location and is reflected back into the input.
+    /// Location and is reflected back into the input. A failing picker (issue #80)
+    /// surfaces as an error status through the session instead of an unobserved
+    /// async-void fault that would crash as a stowed exception.
     /// </summary>
     private async void BrowseSaveLocationButton_Click(object sender, RoutedEventArgs e)
     {
-        var picker = new Windows.Storage.Pickers.FolderPicker();
-        // FolderPicker requires an owner window handle in a WinUI 3 desktop app.
-        WinRT.Interop.InitializeWithWindow.Initialize(
-            picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-        picker.FileTypeFilter.Add("*");
+        Windows.Storage.StorageFolder? folder;
+        try
+        {
+            var picker = new Windows.Storage.Pickers.FolderPicker();
+            // FolderPicker requires an owner window handle in a WinUI 3 desktop app.
+            WinRT.Interop.InitializeWithWindow.Initialize(
+                picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            picker.FileTypeFilter.Add("*");
 
-        var folder = await picker.PickSingleFolderAsync();
+            folder = await picker.PickSingleFolderAsync();
+        }
+        catch (Exception ex)
+        {
+            var failureView = _session.ReportTransientFailure(
+                $"Folder picker failed: {ex.Message}");
+            ApplyView(failureView);
+            return;
+        }
 
         // Route the picker outcome through the session so cancellation is a no-op and the
         // resulting working value is reflected back into the input.

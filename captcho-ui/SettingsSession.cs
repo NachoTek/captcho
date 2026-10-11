@@ -118,6 +118,23 @@ public sealed class SettingsSession
         return ClearTransientStatus();
     }
 
+    /// <summary>
+    /// Surfaces a transient, non-persisting failure (e.g. the folder picker
+    /// failing to open) as an error status on the view (issue #80). The next
+    /// edit, verb, or reset clears it. Presentation-only: nothing persists
+    /// and no working value changes.
+    /// </summary>
+    public SettingsView ReportTransientFailure(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            throw new ArgumentException("A failure message is required.", nameof(message));
+
+        _statusMessage = message;
+        _statusIsError = true;
+        _shouldClose = false;
+        return BuildView();
+    }
+
     // ── Editable Global Hotkeys-tab edits ───────────────────────────────
 
     /// <summary>
