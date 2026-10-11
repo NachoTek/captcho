@@ -327,7 +327,7 @@ public sealed partial class MainWindow : Window
 
         _hasAppliedLaunchBehavior = true;
         Activated -= OnFirstActivatedApplyLaunchBehavior;
-        _ = RunLaunchBehaviorAsync();
+        SafeDispatch.Run(RunLaunchBehaviorAsync, OnDispatchFailure);
     }
 
     /// <summary>
@@ -445,6 +445,10 @@ public sealed partial class MainWindow : Window
     /// <summary>
     /// Dispatches a Global Hotkey route to the appropriate capture workflow.
     /// Respects the _isOperationRunning guard to prevent overlapping captures.
+    /// Every dispatch is observed (issue #80): a fault escaping a Trigger-routed
+    /// workflow — including one thrown by the state restore in a finally block —
+    /// surfaces as user-visible status text instead of an unobserved task fault
+    /// that would crash as a stowed exception (0xc000027b).
     /// </summary>
     private void DispatchGlobalHotkeyRoute(GlobalHotkeyRoute route)
     {
@@ -458,25 +462,37 @@ public sealed partial class MainWindow : Window
         switch (route)
         {
             case GlobalHotkeyRoute.CurrentMonitor:
-                _ = RunDelayedCaptureAsync(_captureService.CaptureCurrentMonitorAsync);
+                SafeDispatch.Run(
+                    () => RunDelayedCaptureAsync(_captureService.CaptureCurrentMonitorAsync),
+                    OnDispatchFailure);
                 break;
             case GlobalHotkeyRoute.ActiveWindow:
-                _ = RunActiveWindowWorkflowAsync();
+                SafeDispatch.Run(RunActiveWindowWorkflowAsync, OnDispatchFailure);
                 break;
             case GlobalHotkeyRoute.FullDesktop:
-                _ = RunFullDesktopWorkflowAsync();
+                SafeDispatch.Run(RunFullDesktopWorkflowAsync, OnDispatchFailure);
                 break;
             case GlobalHotkeyRoute.RectangularRegion:
-                _ = RunSelectionWorkflowAsync();
+                SafeDispatch.Run(RunSelectionWorkflowAsync, OnDispatchFailure);
                 break;
             case GlobalHotkeyRoute.SelectedWindow:
-                _ = RunSelectedWindowWorkflowAsync();
+                SafeDispatch.Run(RunSelectedWindowWorkflowAsync, OnDispatchFailure);
                 break;
             case GlobalHotkeyRoute.SelectedMonitor:
-                _ = RunSelectedMonitorWorkflowAsync();
+                SafeDispatch.Run(RunSelectedMonitorWorkflowAsync, OnDispatchFailure);
                 break;
         }
     }
+
+    /// <summary>
+    /// Failure sink for observed fire-and-forget dispatches (issue #80): a
+    /// fault escaping a Trigger-routed workflow task surfaces as user-visible,
+    /// retryable status text instead of an unobserved fault that would crash
+    /// the process as a stowed exception. SafeDispatch swallows a sink that
+    /// itself throws (e.g. status text on an already-closed window).
+    /// </summary>
+    private void OnDispatchFailure(Exception ex) =>
+        StatusText.Text = $"Capture dispatch failed: {SanitizeException(ex)}";
 
     /// <summary>
     /// Cleans up Global Hotkey registrations and removes the WndProc subclass.
@@ -1440,7 +1456,10 @@ public sealed partial class MainWindow : Window
                 DefaultButton = ContentDialogButton.Close,
                 XamlRoot = Content.XamlRoot,
             };
-            _ = dialog.ShowAsync();
+            // The WinRT operation is observed (issue #80): a faulted
+            // ShowAsync (e.g. a second dialog racing the first) would
+            // otherwise become an unobserved stowed exception.
+            SafeDispatch.Run(() => dialog.ShowAsync().AsTask(), _ => { });
         }
         catch
         {
@@ -1554,7 +1573,10 @@ public sealed partial class MainWindow : Window
                 DefaultButton = ContentDialogButton.Close,
                 XamlRoot = Content.XamlRoot,
             };
-            _ = dialog.ShowAsync();
+            // The WinRT operation is observed (issue #80): a faulted
+            // ShowAsync (e.g. a second dialog racing the first) would
+            // otherwise become an unobserved stowed exception.
+            SafeDispatch.Run(() => dialog.ShowAsync().AsTask(), _ => { });
         }
         catch
         {

@@ -35,6 +35,33 @@ public class GlobalHotkeyDispatchMediator
     public List<int> IgnoredIds { get; } = new();
     public string? StatusText { get; private set; }
 
+    /// <summary>
+    /// Route-handler failures observed through the safe dispatch mirror
+    /// (issue #80). Empty when every dispatched handler completed.
+    /// </summary>
+    public List<RouteHandlerFailure> ObservedFailures { get; } = new();
+
+    /// <summary>Awaits the next observed route-handler failure, or times out.</summary>
+    public async Task<RouteHandlerFailure> NextObservedFailureAsync()
+    {
+        using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            while (true)
+            {
+                lock (ObservedFailures)
+                {
+                    if (ObservedFailures.Count > 0)
+                        return ObservedFailures[0];
+                }
+                await Task.Delay(10, cts.Token);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw new TimeoutException("No route-handler failure was observed within 5s.");
+        }
+    }
     public GlobalHotkeyDispatchMediator(
         GlobalHotkeyManager globalHotkeyManager,
         Dictionary<GlobalHotkeyRoute, Func<Task>>? routeHandlers = null)
@@ -70,7 +97,10 @@ public class GlobalHotkeyDispatchMediator
 
     /// <summary>
     /// Mirrors MainWindow.DispatchGlobalHotkeyRoute:
-    /// checks the operation guard, then invokes the route handler.
+    /// checks the operation guard, then invokes the route handler through the
+    /// observed fire-and-forget dispatch (issue #80) — a faulting (or
+    /// synchronously throwing) handler routes its exception to the failure
+    /// sink instead of escaping unobserved.
     /// </summary>
     public void DispatchRoute(GlobalHotkeyRoute route)
     {
@@ -84,7 +114,13 @@ public class GlobalHotkeyDispatchMediator
 
         if (_routeHandlers.TryGetValue(route, out var handler))
         {
-            _ = handler();
+            SafeDispatch.Run(handler, ex =>
+            {
+                lock (ObservedFailures)
+                {
+                    ObservedFailures.Add(new RouteHandlerFailure(route, ex));
+                }
+            });
         }
     }
 
@@ -106,6 +142,12 @@ public class GlobalHotkeyDispatchMediator
         StatusText = _globalHotkeyManager.GetRegistrationSummary();
     }
 }
+
+/// <summary>
+/// A route-handler failure observed through safe dispatch: which route
+/// faulted and the exception it faulted with (issue #80).
+/// </summary>
+public sealed record RouteHandlerFailure(GlobalHotkeyRoute Route, Exception Exception);
 
 /// <summary>
 /// Fake registrar for headless UI wiring tests.
@@ -542,5 +584,75 @@ public class GlobalHotkeyUiWiringTests
         Assert.Equal(2, mediator.TriggeredRoutes.Count);
         Assert.Equal(GlobalHotkeyRoute.CurrentMonitor, mediator.TriggeredRoutes[0]);
         Assert.Equal(GlobalHotkeyRoute.FullDesktop, mediator.TriggeredRoutes[1]);
+    }
+
+    // ── Faulting route handlers are observed, never unobserved (issue #80) ──
+
+    [Fact]
+    public async Task FaultingRouteHandler_FailureIsObservedNotUnobserved()
+    {
+        var handlers = new Dictionary<GlobalHotkeyRoute, Func<Task>>
+        {
+            [GlobalHotkeyRoute.FullDesktop] = () => Task.FromException(
+                new InvalidOperationException("route fault")),
+        };
+
+        var registrar = new UiWiringFakeRegistrar();
+        var manager = new GlobalHotkeyManager(registrar);
+        manager.RegisterAll(IntPtr.Zero);
+
+        var mediator = new GlobalHotkeyDispatchMediator(manager, handlers);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdShiftPrintScreen);
+
+        var failure = await mediator.NextObservedFailureAsync();
+        Assert.Equal(GlobalHotkeyRoute.FullDesktop, failure.Route);
+        Assert.Equal("route fault", failure.Exception.Message);
+    }
+
+    [Fact]
+    public async Task SynchronouslyThrowingRouteHandler_FailureIsObserved()
+    {
+        var handlers = new Dictionary<GlobalHotkeyRoute, Func<Task>>
+        {
+            [GlobalHotkeyRoute.ActiveWindow] = (Func<Task>)(() =>
+                throw new InvalidOperationException("sync route fault")),
+        };
+
+        var registrar = new UiWiringFakeRegistrar();
+        var manager = new GlobalHotkeyManager(registrar);
+        manager.RegisterAll(IntPtr.Zero);
+
+        var mediator = new GlobalHotkeyDispatchMediator(manager, handlers);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdWinPrintScreen);
+
+        var failure = await mediator.NextObservedFailureAsync();
+        Assert.Equal(GlobalHotkeyRoute.ActiveWindow, failure.Route);
+        Assert.Equal("sync route fault", failure.Exception.Message);
+    }
+
+    [Fact]
+    public async Task CompletingRouteHandler_NoFailureObserved()
+    {
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handlers = new Dictionary<GlobalHotkeyRoute, Func<Task>>
+        {
+            [GlobalHotkeyRoute.FullDesktop] = () =>
+            {
+                completed.SetResult();
+                return Task.CompletedTask;
+            },
+        };
+
+        var registrar = new UiWiringFakeRegistrar();
+        var manager = new GlobalHotkeyManager(registrar);
+        manager.RegisterAll(IntPtr.Zero);
+
+        var mediator = new GlobalHotkeyDispatchMediator(manager, handlers);
+        mediator.OnWmGlobalHotkey(GlobalHotkeyRouteMap.IdShiftPrintScreen);
+
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        // Give a wrong implementation time to record a failure.
+        await Task.Delay(50);
+        Assert.Empty(mediator.ObservedFailures);
     }
 }
