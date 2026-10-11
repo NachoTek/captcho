@@ -3,9 +3,10 @@
 // A stowed exception (0xc000027b) is an unobserved async failure rethrown on
 // the XAML dispatcher: the WER record names Microsoft.UI.Xaml.dll as the
 // crash site, but the faulting async operation is lost. Every fire-and-forget
-// dispatch — hotkey-triggered and launch-behavior-triggered workflow tasks,
-// fire-and-forget dialog presentation — must run through this seam so a
-// fault is observed and routed to a failure sink instead of escaping.
+// dispatch — Global Hotkey-triggered and launch-behavior-triggered Workflow
+// Session tasks, fire-and-forget dialog presentation — must run through this
+// seam so a fault is observed and routed to a failure sink instead of
+// escaping.
 //
 // This is observability, not logging: the global UnhandledException /
 // UnobservedTaskException disk handlers are tracked separately (issue #81).

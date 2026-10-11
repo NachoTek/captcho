@@ -462,27 +462,42 @@ public sealed partial class MainWindow : Window
         switch (route)
         {
             case GlobalHotkeyRoute.CurrentMonitor:
-                SafeDispatch.Run(
-                    () => RunDelayedCaptureAsync(_captureService.CaptureCurrentMonitorAsync),
-                    OnDispatchFailure);
+                Observed(() => RunDelayedCaptureAsync(_captureService.CaptureCurrentMonitorAsync));
                 break;
             case GlobalHotkeyRoute.ActiveWindow:
-                SafeDispatch.Run(RunActiveWindowWorkflowAsync, OnDispatchFailure);
+                Observed(RunActiveWindowWorkflowAsync);
                 break;
             case GlobalHotkeyRoute.FullDesktop:
-                SafeDispatch.Run(RunFullDesktopWorkflowAsync, OnDispatchFailure);
+                Observed(RunFullDesktopWorkflowAsync);
                 break;
             case GlobalHotkeyRoute.RectangularRegion:
-                SafeDispatch.Run(RunSelectionWorkflowAsync, OnDispatchFailure);
+                Observed(RunSelectionWorkflowAsync);
                 break;
             case GlobalHotkeyRoute.SelectedWindow:
-                SafeDispatch.Run(RunSelectedWindowWorkflowAsync, OnDispatchFailure);
+                Observed(RunSelectedWindowWorkflowAsync);
                 break;
             case GlobalHotkeyRoute.SelectedMonitor:
-                SafeDispatch.Run(RunSelectedMonitorWorkflowAsync, OnDispatchFailure);
+                Observed(RunSelectedMonitorWorkflowAsync);
                 break;
         }
     }
+
+    /// <summary>
+    /// Runs a fire-and-forget workflow dispatch through SafeDispatch with the
+    /// shared failure sink (issue #80).
+    /// </summary>
+    private void Observed(Func<Task> operation) =>
+        SafeDispatch.Run(operation, OnDispatchFailure);
+
+    /// <summary>
+    /// Shows a fire-and-forget dialog with its WinRT operation observed
+    /// (issue #80): a faulted ShowAsync (e.g. a second dialog racing the
+    /// first) would otherwise become an unobserved stowed exception. The
+    /// fault is deliberately dropped — dialog presentation is
+    /// non-critical and the status bar already carries the summary.
+    /// </summary>
+    private static void ShowDialogObserved(ContentDialog dialog) =>
+        SafeDispatch.Run(() => dialog.ShowAsync().AsTask(), _ => { });
 
     /// <summary>
     /// Failure sink for observed fire-and-forget dispatches (issue #80): a
@@ -869,17 +884,19 @@ public sealed partial class MainWindow : Window
     /// Runs a standard capture with optional delay countdown.
     /// Delay 0 bypasses countdown UI and calls capture immediately.
     /// Delay > 0 shows countdown, then calls capture after completion.
-    /// All paths restore controls in finally.
+    /// All paths restore controls in finally, and the state entry itself is
+    /// inside the try so a throwing restore surfaces as status text instead
+    /// of escaping the caller (issue #80).
     /// </summary>
     private async Task RunDelayedCaptureAsync(Func<Task<CapturePreviewResult>> captureFunc)
     {
         int delaySeconds = GetNormalizedDelaySeconds();
 
-        EnterCaptureState();
-        _activeCts = new CancellationTokenSource();
-
         try
         {
+            EnterCaptureState();
+            _activeCts = new CancellationTokenSource();
+
             // Countdown phase
             if (delaySeconds > 0)
             {
@@ -932,8 +949,10 @@ public sealed partial class MainWindow : Window
     /// Shared orchestration scaffold for any production workflow route: drives
     /// the optional delay countdown, runs the supplied workflow, and applies
     /// the returned WorkflowResult through the supplied binder. All paths
-    /// restore controls in finally. Extracted so the WinUI code-behind does
-    /// not duplicate the countdown/state scaffold per route.
+    /// restore controls in finally, and the state entry itself is inside the
+    /// try so a throwing restore surfaces as status text instead of escaping
+    /// the caller (issue #80). Extracted so the WinUI code-behind does not
+    /// duplicate the countdown/state scaffold per route.
     /// </summary>
     private async Task RunWorkflowWithCountdownAsync(
         Func<Task<WorkflowResult<WriteableBitmap>>> workflowFunc,
@@ -941,11 +960,11 @@ public sealed partial class MainWindow : Window
     {
         int delaySeconds = GetNormalizedDelaySeconds();
 
-        EnterCaptureState();
-        _activeCts = new CancellationTokenSource();
-
         try
         {
+            EnterCaptureState();
+            _activeCts = new CancellationTokenSource();
+
             if (delaySeconds > 0)
             {
                 await RunCountdownPhaseAsync(delaySeconds, _activeCts.Token);
@@ -1456,10 +1475,7 @@ public sealed partial class MainWindow : Window
                 DefaultButton = ContentDialogButton.Close,
                 XamlRoot = Content.XamlRoot,
             };
-            // The WinRT operation is observed (issue #80): a faulted
-            // ShowAsync (e.g. a second dialog racing the first) would
-            // otherwise become an unobserved stowed exception.
-            SafeDispatch.Run(() => dialog.ShowAsync().AsTask(), _ => { });
+            ShowDialogObserved(dialog);
         }
         catch
         {
@@ -1573,10 +1589,7 @@ public sealed partial class MainWindow : Window
                 DefaultButton = ContentDialogButton.Close,
                 XamlRoot = Content.XamlRoot,
             };
-            // The WinRT operation is observed (issue #80): a faulted
-            // ShowAsync (e.g. a second dialog racing the first) would
-            // otherwise become an unobserved stowed exception.
-            SafeDispatch.Run(() => dialog.ShowAsync().AsTask(), _ => { });
+            ShowDialogObserved(dialog);
         }
         catch
         {

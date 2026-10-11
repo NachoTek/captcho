@@ -3,11 +3,11 @@
 //
 // A stowed exception (0xc000027b) is an unobserved async WinRT failure
 // rethrown on the XAML dispatcher. The discards MainWindow uses for
-// hotkey-triggered and launch-behavior-triggered workflow tasks, and for
-// fire-and-forget dialog presentation, must never leave a fault unobserved.
-// SafeDispatch is the seam that observes those dispatches: a faulting (or
-// synchronously throwing) operation routes its exception to a failure sink
-// instead of escaping unobserved.
+// Global Hotkey-triggered and launch-behavior-triggered Workflow Session
+// tasks, and for fire-and-forget dialog presentation, must never leave a
+// fault unobserved. SafeDispatch is the seam that observes those dispatches:
+// a faulting (or synchronously throwing) operation routes its exception to a
+// failure sink instead of escaping unobserved.
 
 using System;
 using System.Threading;
