@@ -3,6 +3,7 @@
 
 using Microsoft.UI.Xaml;
 using Microsoft.Windows.ApplicationModel.DynamicDependency;
+using System.Threading.Tasks;
 
 namespace captcho.UI;
 
@@ -16,6 +17,15 @@ public static class Program
     [System.STAThreadAttribute]
     static void Main(string[] args)
     {
+        // Crash logging first (issue #81): every later failure — bootstrap,
+        // XAML startup, an async void continuation, an unobserved background
+        // task — must reach disk before the process can die as a stowed
+        // exception. Initializes the log (writes "Logging to: <path>" once)
+        // and observes finalizer-time unobserved-task faults.
+        CrashLog.Initialize();
+        TaskScheduler.UnobservedTaskException += (sender, eventArgs) =>
+            CrashLog.Write("UnobservedTaskException", eventArgs.Exception);
+
         // Initialize Windows App SDK bootstrap for unpackaged apps
         // This is required for Windows App SDK 2.0
         Bootstrap.Initialize(0x00020001); // Version 2.0.1.0 = 0x00020001

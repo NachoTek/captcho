@@ -29,6 +29,14 @@ public partial class App : Application
     public App()
     {
         InitializeComponent();
+
+        // Crash logging (issue #81): XAML-unhandled exceptions (async void
+        // continuations, stowed exceptions rethrown on the dispatcher) land
+        // here. e.Exception carries the full detail the truncated WER record
+        // lacks; record it and let the default teardown proceed. The handler
+        // itself never throws (CrashLog swallows everything).
+        UnhandledException += (sender, eventArgs) =>
+            CrashLog.Write("UnhandledException", eventArgs.Exception);
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
