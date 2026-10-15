@@ -18,16 +18,35 @@ using Xunit;
 
 namespace captcho.UI.Tests;
 
+internal static class CrashLogTestHelpers
+{
+    internal static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        for (var i = 0; (i = text.IndexOf(value, i, StringComparison.Ordinal)) >= 0; i += value.Length)
+        {
+            count++;
+        }
+        return count;
+    }
+
+    internal static string CreateTempDirectory(string prefix)
+    {
+        var path = Path.Combine(
+            Path.GetTempPath(),
+            prefix + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        return path;
+    }
+}
+
 public sealed class CrashLogWriterTests : IDisposable
 {
     private readonly string _tempDirectory;
 
     public CrashLogWriterTests()
     {
-        _tempDirectory = Path.Combine(
-            Path.GetTempPath(),
-            "captcho-crashlog-tests-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tempDirectory);
+        _tempDirectory = CrashLogTestHelpers.CreateTempDirectory("captcho-crashlog-tests-");
     }
 
     public void Dispose()
@@ -118,6 +137,18 @@ public sealed class CrashLogWriterTests : IDisposable
     }
 
     [Fact]
+    public void Write_WithNote_RecordsNoteBesideDetail()
+    {
+        var writer = new CrashLogWriter(_tempDirectory, "9.9.9", maxLogBytes: 1_000_000);
+
+        writer.Write("UnhandledException", CaptureException(), note: "XAML event message");
+
+        var log = File.ReadAllText(LogPath);
+        Assert.Contains("Note: XAML event message", log);
+        Assert.Contains("System.InvalidOperationException: outer failure", log);
+    }
+
+    [Fact]
     public void Write_BlockedLogDirectory_NeverThrows()
     {
         // A file occupies the name where the log directory should be — every
@@ -145,7 +176,7 @@ public sealed class CrashLogWriterTests : IDisposable
 
         var log = File.ReadAllText(LogPath);
         Assert.Contains("Logging to: " + LogPath, log);
-        Assert.Equal(1, CountOccurrences(log, "Logging to:"));
+        Assert.Equal(1, CrashLogTestHelpers.CountOccurrences(log, "Logging to:"));
     }
 
     [Fact]
@@ -170,84 +201,62 @@ public sealed class CrashLogWriterTests : IDisposable
         Assert.Contains("Source: Third", currentLog);
         Assert.DoesNotContain("Source: First", currentLog);
     }
-
-    private static int CountOccurrences(string text, string value)
-    {
-        var count = 0;
-        for (var i = 0; (i = text.IndexOf(value, i, StringComparison.Ordinal)) >= 0; i += value.Length)
-        {
-            count++;
-        }
-        return count;
-    }
 }
 
-public sealed class CrashLogFacadeTests : IDisposable
-{
-    private readonly string _firstDirectory;
-    private readonly string _secondDirectory;
-
-    public CrashLogFacadeTests()
+    public sealed class CrashLogFacadeTests : IDisposable
     {
-        var root = Path.Combine(
-            Path.GetTempPath(),
-            "captcho-crashlog-facade-" + Guid.NewGuid().ToString("N"));
-        _firstDirectory = Path.Combine(root, "first");
-        _secondDirectory = Path.Combine(root, "second");
-        Directory.CreateDirectory(_firstDirectory);
-        Directory.CreateDirectory(_secondDirectory);
-    }
+        private readonly string _firstDirectory;
+        private readonly string _secondDirectory;
 
-    public void Dispose()
-    {
-        try
+        public CrashLogFacadeTests()
         {
-            Directory.Delete(_firstDirectory, recursive: true);
-            Directory.Delete(_secondDirectory, recursive: true);
+            var root = CrashLogTestHelpers.CreateTempDirectory("captcho-crashlog-facade-");
+            _firstDirectory = Path.Combine(root, "first");
+            _secondDirectory = Path.Combine(root, "second");
+            Directory.CreateDirectory(_firstDirectory);
+            Directory.CreateDirectory(_secondDirectory);
         }
-        catch
+
+        public void Dispose()
         {
-            // Test cleanup is best-effort.
+            try
+            {
+                Directory.Delete(_firstDirectory, recursive: true);
+                Directory.Delete(_secondDirectory, recursive: true);
+            }
+            catch
+            {
+                // Test cleanup is best-effort.
+            }
         }
-    }
 
-    [Fact]
-    public void Initialize_OnceThenWrite_RoutesAllEntriesToFirstLog()
-    {
-        CrashLog.Initialize(_firstDirectory, maxLogBytes: 1_000_000);
-
-        CrashLog.Write("Test", new InvalidOperationException("facade failure"));
-
-        var firstLogPath = Path.Combine(_firstDirectory, "crash.log");
-        Assert.True(File.Exists(firstLogPath), "log file was not created");
-        var log = File.ReadAllText(firstLogPath);
-        Assert.Contains("Logging to: " + firstLogPath, log);
-        Assert.Equal(1, CountOccurrences(log, "Logging to:"));
-        Assert.Contains("Source: Test", log);
-        Assert.Contains("facade failure", log);
-
-        // A second Initialize must not move the log or re-announce it.
-        CrashLog.Initialize(_secondDirectory, maxLogBytes: 1_000_000);
-        CrashLog.Write("Test2", new InvalidOperationException("still first"));
-
-        log = File.ReadAllText(firstLogPath);
-        Assert.Contains("Source: Test2", log);
-        Assert.Equal(1, CountOccurrences(log, "Logging to:"));
-        Assert.False(
-            File.Exists(Path.Combine(_secondDirectory, "crash.log")),
-            "second Initialize must not install a second log");
-    }
-
-    private static int CountOccurrences(string text, string value)
-    {
-        var count = 0;
-        for (var i = 0; (i = text.IndexOf(value, i, StringComparison.Ordinal)) >= 0; i += value.Length)
+        [Fact]
+        public void Initialize_OnceThenWrite_RoutesAllEntriesToFirstLog()
         {
-            count++;
+            CrashLog.Initialize(_firstDirectory, maxLogBytes: 1_000_000);
+
+            CrashLog.Write("Test", new InvalidOperationException("facade failure"));
+
+            var firstLogPath = Path.Combine(_firstDirectory, "crash.log");
+            Assert.True(File.Exists(firstLogPath), "log file was not created");
+            var log = File.ReadAllText(firstLogPath);
+            Assert.Contains("Logging to: " + firstLogPath, log);
+            Assert.Equal(1, CrashLogTestHelpers.CountOccurrences(log, "Logging to:"));
+            Assert.Contains("Source: Test", log);
+            Assert.Contains("facade failure", log);
+
+            // A second Initialize must not move the log or re-announce it.
+            CrashLog.Initialize(_secondDirectory, maxLogBytes: 1_000_000);
+            CrashLog.Write("Test2", new InvalidOperationException("still first"));
+
+            log = File.ReadAllText(firstLogPath);
+            Assert.Contains("Source: Test2", log);
+            Assert.Equal(1, CrashLogTestHelpers.CountOccurrences(log, "Logging to:"));
+            Assert.False(
+                File.Exists(Path.Combine(_secondDirectory, "crash.log")),
+                "second Initialize must not install a second log");
         }
-        return count;
     }
-}
 
 public sealed class UnobservedTaskExceptionDeliveryTests : IDisposable
 {
@@ -255,10 +264,7 @@ public sealed class UnobservedTaskExceptionDeliveryTests : IDisposable
 
     public UnobservedTaskExceptionDeliveryTests()
     {
-        _tempDirectory = Path.Combine(
-            Path.GetTempPath(),
-            "captcho-crashlog-delivery-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tempDirectory);
+        _tempDirectory = CrashLogTestHelpers.CreateTempDirectory("captcho-crashlog-delivery-");
     }
 
     public void Dispose()

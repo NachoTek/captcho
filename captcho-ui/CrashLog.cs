@@ -60,7 +60,17 @@ internal sealed class CrashLogWriter
     /// </summary>
     public void Write(string source, Exception? exception)
     {
-        Write(ComposeEntry(source, exception, headline: null));
+        Write(ComposeEntry(source, exception, headline: null, note: null));
+    }
+
+    /// <summary>
+    /// Appends one crash entry carrying an extra diagnostic note — e.g. the
+    /// WinUI UnhandledException event's own message, which sometimes holds
+    /// detail the truncated <paramref name="exception"/> lacks. Never throws.
+    /// </summary>
+    public void Write(string source, Exception? exception, string? note)
+    {
+        Write(ComposeEntry(source, exception, headline: null, note: note));
     }
 
     /// <summary>
@@ -69,7 +79,11 @@ internal sealed class CrashLogWriter
     /// </summary>
     public void WriteStartupNotice()
     {
-        Write(ComposeEntry("Startup", exception: null, headline: $"Logging to: {LogPath}"));
+        Write(ComposeEntry(
+            "Startup",
+            exception: null,
+            headline: $"Logging to: {LogPath}",
+            note: null));
     }
 
     private void Write(string entry)
@@ -79,7 +93,7 @@ internal sealed class CrashLogWriter
             lock (_gate)
             {
                 EnsureDirectory();
-                RotateIfNeeded(entry.Length);
+                RotateIfNeeded(Encoding.UTF8.GetByteCount(entry));
                 File.AppendAllText(LogPath, entry);
             }
         }
@@ -89,7 +103,7 @@ internal sealed class CrashLogWriter
         }
     }
 
-    private string ComposeEntry(string source, Exception? exception, string? headline)
+    private string ComposeEntry(string source, Exception? exception, string? headline, string? note)
     {
         var timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
         var detail = exception?.ToString().Replace("\r\n", "\n").TrimEnd()
@@ -101,6 +115,10 @@ internal sealed class CrashLogWriter
         if (headline is not null)
         {
             lines.Append(headline).Append('\n');
+        }
+        if (note is not null)
+        {
+            lines.Append("Note: ").Append(note.Replace("\r\n", "\n")).Append('\n');
         }
         if (exception is not null)
         {
@@ -158,6 +176,8 @@ public static class CrashLog
 {
     private const long DefaultMaxLogBytes = 5 * 1024 * 1024; // 5 MB
 
+    private static readonly object InitializeGate = new();
+
     private static CrashLogWriter? _writer;
     private static bool _initialized;
 
@@ -183,12 +203,16 @@ public static class CrashLog
     {
         try
         {
-            if (_initialized)
+            lock (InitializeGate)
             {
-                return;
+                if (_initialized)
+                {
+                    return;
+                }
+                _initialized = true;
+                _writer = new CrashLogWriter(directory, ResolveAppVersion(), maxLogBytes);
             }
-            _initialized = true;
-            _writer = new CrashLogWriter(directory, ResolveAppVersion(), maxLogBytes);
+
             _writer.WriteStartupNotice();
         }
         catch
@@ -206,7 +230,24 @@ public static class CrashLog
     {
         try
         {
-            _writer?.Write(source, exception);
+            Volatile.Read(ref _writer)?.Write(source, exception);
+        }
+        catch
+        {
+            // The crash logger must never raise.
+        }
+    }
+
+    /// <summary>
+    /// Appends a crash entry with an extra diagnostic note (e.g. the WinUI
+    /// UnhandledException event's own message). Safe to call before
+    /// Initialize and from any thread; never throws.
+    /// </summary>
+    public static void Write(string source, Exception? exception, string? note)
+    {
+        try
+        {
+            Volatile.Read(ref _writer)?.Write(source, exception, note);
         }
         catch
         {

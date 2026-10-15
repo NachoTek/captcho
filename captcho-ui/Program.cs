@@ -22,6 +22,13 @@ public static class Program
         // task — must reach disk before the process can die as a stowed
         // exception. Initializes the log (writes "Logging to: <path>" once)
         // and observes finalizer-time unobserved-task faults.
+        //
+        // Deliberate crash semantics: the fault is logged but NOT marked
+        // observed. With ThrowUnobservedTaskExceptions enabled, an unobserved
+        // fault still fails the process after being logged — every
+        // fire-and-forget dispatch in this app already routes through
+        // SafeDispatch (issue #80), so any fault reaching here is by
+        // definition an unlogged escape and should fail loudly, not vanish.
         CrashLog.Initialize();
         TaskScheduler.UnobservedTaskException += (sender, eventArgs) =>
             CrashLog.Write("UnobservedTaskException", eventArgs.Exception);
