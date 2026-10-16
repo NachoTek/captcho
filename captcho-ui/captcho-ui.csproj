@@ -10,6 +10,14 @@
     <UseWinUI>true</UseWinUI>
     <DefineConstants>DISABLE_XAML_GENERATED_MAIN</DefineConstants>
   </PropertyGroup>
+  <!--
+    Crash logging (issue #81): route unobserved task faults to
+    TaskScheduler.UnobservedTaskException at finalizer time instead of
+    silently dropping them on .NET 8, so CrashLog can record them.
+  -->
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.Threading.ThrowUnobservedTaskExceptions" Value="true" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.0.1" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
