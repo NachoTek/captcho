@@ -50,10 +50,41 @@ jobs:
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
           restore-keys: ${{ runner.os }}-nuget-
 
-      - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
+      # actions/setup-dotnet installs into C:\Program Files\dotnet, which
+      # the self-hosted runner's account cannot write to. Provision the SDK
+      # with a powershell-only step instead: reuse a preinstalled 8.x SDK
+      # (PATH or Program Files) or install a user-local one via the official
+      # dotnet-install script, then expose it through GITHUB_PATH.
+      - name: Ensure .NET 8 SDK
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          function Test-Sdk8([string]$dotnetExe) {
+            if (-not (Test-Path $dotnetExe)) { return $false }
+            $version = (& $dotnetExe --version) 2>$null
+            return ($LASTEXITCODE -eq 0 -and $version -match '^8\.')
+          }
+          $existing = Get-Command dotnet -ErrorAction SilentlyContinue
+          if ($existing -and (Test-Sdk8 $existing.Source)) {
+            Write-Host "Using preinstalled SDK: $($existing.Source)"
+            $dotnetDir = Split-Path $existing.Source
+          }
+          else {
+            $dotnetDir = Join-Path $env:RUNNER_TEMP 'dotnet'
+            $dotnetExe = Join-Path $dotnetDir 'dotnet.exe'
+            if (-not (Test-Sdk8 $dotnetExe)) {
+              Write-Host "Installing user-local .NET 8 SDK to $dotnetDir"
+              New-Item -ItemType Directory -Path $dotnetDir -Force | Out-Null
+              $script = Join-Path $env:RUNNER_TEMP 'dotnet-install.ps1'
+              Invoke-WebRequest -Uri 'https://dot.net/v1/dotnet-install.ps1' -OutFile $script -UseBasicParsing
+              & $script -Channel 8.0 -InstallDir $dotnetDir | Out-Host
+              if ($LASTEXITCODE -ne 0) { throw "dotnet-install exited with $LASTEXITCODE" }
+            }
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $dotnetDir
+          $env:Path = "$dotnetDir;$env:Path"
+          dotnet --version
 
       # ── Rust: build + test ──────────────────────────────────────────
       - name: Build Rust DLL
