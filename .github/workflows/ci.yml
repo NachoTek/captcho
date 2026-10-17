@@ -16,9 +16,10 @@ jobs:
 
       # dtolnay/rust-toolchain shells its steps with bash, which the
       # self-hosted runner does not have on PATH. Provision Rust with a
-      # PowerShell-only step instead: reuse the preinstalled rustup/cargo
-      # when present, otherwise bootstrap a minimal stable toolchain via
-      # rustup-init.exe.
+      # PowerShell-only step instead. The runner has no MSVC tools (no
+      # link.exe), so install the self-contained GNU toolchain, which
+      # bundles its own linker — the cdylib's C ABI is identical for the
+      # .NET DllImport consumer.
       - name: Ensure Rust toolchain
         shell: powershell
         run: |
@@ -30,13 +31,15 @@ jobs:
             Write-Host 'cargo not found; installing minimal stable toolchain via rustup'
             $installer = Join-Path $env:RUNNER_TEMP 'rustup-init.exe'
             Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile $installer -UseBasicParsing
-            & $installer -y --default-toolchain stable --profile minimal | Out-Host
+            & $installer -y --default-toolchain stable-x86_64-pc-windows-gnu --profile minimal | Out-Host
             if ($LASTEXITCODE -ne 0) { throw "rustup-init exited with $LASTEXITCODE" }
           }
           Add-Content -Path $env:GITHUB_PATH -Value $cargoBin
           $env:Path = "$cargoBin;$env:Path"
-          & (Join-Path $cargoBin 'rustc.exe') --version
-          & $cargo --version
+          rustup target add x86_64-pc-windows-gnu
+          rustup component add rust-mingw --toolchain stable-x86_64-pc-windows-gnu
+          rustc --version --target x86_64-pc-windows-gnu
+          cargo --version
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -66,19 +69,29 @@ jobs:
       - name: Build Rust DLL
         working-directory: rust-dll
         shell: powershell
-        run: cargo build --release
+        run: cargo build --release --target x86_64-pc-windows-gnu
 
       - name: Run Rust tests
         working-directory: rust-dll
         shell: powershell
-        run: cargo test
+        run: cargo test --target x86_64-pc-windows-gnu
 
       # ── Copy native DLL for .NET resolution ─────────────────────────
       - name: Copy native DLL
         shell: powershell
         run: |
           New-Item -Path captcho-capture/runtimes/win-x64/native -ItemType Directory -Force
-          Copy-Item rust-dll/target/release/captcho_capture.dll captcho-capture/runtimes/win-x64/native/
+          Copy-Item rust-dll/target/x86_64-pc-windows-gnu/release/captcho_capture.dll captcho-capture/runtimes/win-x64/native/
+          # GNU builds link against the MinGW runtime (libgcc/libstdc++/
+          # libwinpthread); ship them beside the capture DLL so the .NET
+          # host can load it.
+          $gccLibs = @('libgcc_s_seh-1.dll','libstdc++-6.dll','libwinpthread-1.dll')
+          $rustcSysroot = (& rustc --print sysroot)
+          foreach ($lib in $gccLibs) {
+            $found = Get-ChildItem -Path $rustcSysroot -Filter $lib -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { Copy-Item $found.FullName captcho-capture/runtimes/win-x64/native/ }
+            else { Write-Host "WARN: $lib not found under $rustcSysroot" }
+          }
 
       # ── .NET: build + test ──────────────────────────────────────────
       - name: Restore .NET dependencies
