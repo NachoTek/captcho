@@ -9,7 +9,12 @@ on:
     - cron: '0 6 * * *'  # 06:00 UTC daily
 
 jobs:
-  build-and-test:
+  # ── Rust: build + test on a GitHub-hosted runner ─────────────────
+  # The self-hosted CI runner has no MSVC toolchain (no link.exe) and no
+  # bash, so neither the msvc nor the gnu target can link there. Compile
+  # and test the Rust engine on windows-latest, which carries VS Build
+  # Tools; produce the native DLL as a workflow artifact for the .NET job.
+  rust:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,19 +27,6 @@ jobs:
         with:
           workspaces: rust-dll
 
-      - name: Cache NuGet packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-          restore-keys: ${{ runner.os }}-nuget-
-
-      - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-
-      # ── Rust: build + test ──────────────────────────────────────────
       - name: Build Rust DLL
         working-directory: rust-dll
         run: cargo build --release
@@ -43,19 +35,66 @@ jobs:
         working-directory: rust-dll
         run: cargo test
 
-      # ── Copy native DLL for .NET resolution ─────────────────────────
-      - name: Copy native DLL
-        run: |
-          New-Item -Path captcho-capture/runtimes/win-x64/native -ItemType Directory -Force
-          Copy-Item rust-dll/target/release/captcho_capture.dll captcho-capture/runtimes/win-x64/native/
-        shell: pwsh
+      - name: Upload native DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-capture-dll
+          path: rust-dll/target/release/captcho_capture.dll
+          if-no-files-found: error
+
+  # ── .NET: build + test on the self-hosted runner ─────────────────
+  dotnet:
+    runs-on: [self-hosted, Windows, X64]
+    needs: rust
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download native DLL
+        uses: actions/download-artifact@v4
+        with:
+          name: native-capture-dll
+          path: captcho-capture/runtimes/win-x64/native
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      # actions/setup-dotnet defaults to C:\Program Files\dotnet on
+      # Windows, which the self-hosted runner's account cannot write to.
+      # The action honors DOTNET_INSTALL_DIR: point it at a writable
+      # persistent location so the SDK is installed once and reused by
+      # later runs.
+      - name: Ensure .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}\dotnet
+        with:
+          dotnet-version: '8.0.x'
 
       # ── .NET: build + test ──────────────────────────────────────────
       - name: Restore .NET dependencies
+        shell: powershell
         run: dotnet restore captcho.sln
 
       - name: Build .NET solution
+        shell: powershell
         run: dotnet build captcho.sln --configuration Release --no-restore
 
       - name: Run .NET tests
+        shell: powershell
         run: dotnet test captcho.sln --configuration Release --no-build --verbosity normal
+
+  # ── Gate: aggregate both jobs under the legacy check name ────────
+  # Branch protection on main requires a status check named
+  # "build-and-test" (the pre-split job name). This no-op gate reports
+  # that name green only when both the rust and dotnet jobs succeed,
+  # keeping the protection rule satisfied without an admin changing it.
+  build-and-test:
+    runs-on: ubuntu-latest
+    needs: [rust, dotnet]
+    steps:
+      - name: All checks passed
+        run: echo "rust and dotnet jobs both succeeded"
