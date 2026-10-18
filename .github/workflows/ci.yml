@@ -86,3 +86,15 @@ jobs:
       - name: Run .NET tests
         shell: powershell
         run: dotnet test captcho.sln --configuration Release --no-build --verbosity normal
+
+  # ── Gate: aggregate both jobs under the legacy check name ────────
+  # Branch protection on main requires a status check named
+  # "build-and-test" (the pre-split job name). This no-op gate reports
+  # that name green only when both the rust and dotnet jobs succeed,
+  # keeping the protection rule satisfied without an admin changing it.
+  build-and-test:
+    runs-on: ubuntu-latest
+    needs: [rust, dotnet]
+    steps:
+      - name: All checks passed
+        run: echo "rust and dotnet jobs both succeeded"
